@@ -1,7 +1,6 @@
 import { z } from "zod";
 import {
   DEFAULT_HARNESS_ID,
-  HARNESS_IDS,
   type HarnessId,
 } from "../harness/ids.js";
 
@@ -90,7 +89,15 @@ export type Channels = z.infer<typeof ChannelsSchema>;
 export const ThinkingLevelSchema = z.enum(["off", "low", "medium", "high", "xhigh"]);
 export type ThinkingLevel = z.infer<typeof ThinkingLevelSchema>;
 
-export const HarnessIdSchema = z.enum(HARNESS_IDS);
+export const HarnessIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(
+    /^[a-z0-9][a-z0-9._-]*$/,
+    "harnessId must be a lowercase identifier using letters, numbers, dot, underscore, or hyphen",
+  );
 
 export const CreateAgentRequestSchema = z.object({
   harnessId: HarnessIdSchema.default(DEFAULT_HARNESS_ID),

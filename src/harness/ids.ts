@@ -1,4 +1,5 @@
 export const HARNESS_IDS = ["openclaw", "hermes"] as const;
-export type HarnessId = (typeof HARNESS_IDS)[number];
+export type BuiltinHarnessId = (typeof HARNESS_IDS)[number];
+export type HarnessId = string;
 
 export const DEFAULT_HARNESS_ID: HarnessId = "openclaw";

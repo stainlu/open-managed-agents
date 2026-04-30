@@ -554,7 +554,8 @@ components:
       enum: [off, low, medium, high, xhigh]
     HarnessId:
       type: string
-      enum: [openclaw, hermes]
+      pattern: "^[a-z0-9][a-z0-9._-]*$"
+      examples: [openclaw, hermes]
     HarnessCapability:
       type: object
       required: [support, detail]

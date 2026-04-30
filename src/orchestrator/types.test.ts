@@ -13,6 +13,23 @@ describe("CreateAgentRequestSchema", () => {
     });
     expect(parsed.harnessId).toBe("openclaw");
   });
+
+  it("accepts future registered harness ids at schema level", () => {
+    const parsed = CreateAgentRequestSchema.parse({
+      harnessId: "codex-app-server",
+      model: "openai/gpt-5.5",
+    });
+    expect(parsed.harnessId).toBe("codex-app-server");
+  });
+
+  it("rejects malformed harness ids before registry lookup", () => {
+    expect(() =>
+      CreateAgentRequestSchema.parse({
+        harnessId: "Codex App Server",
+        model: "openai/gpt-5.5",
+      }),
+    ).toThrow(/harnessId/);
+  });
 });
 
 describe("NetworkingSchema", () => {
