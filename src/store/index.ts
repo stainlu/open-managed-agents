@@ -40,7 +40,7 @@ export function buildStore(opts: BuildStoreOptions): Store {
 }
 
 export { InMemoryStore } from "./memory.js";
-export { PiJsonlEventReader } from "./pi-jsonl.js";
+export { OpenClawJsonlEventLog, PiJsonlEventReader } from "./pi-jsonl.js";
 export { SqliteStore } from "./sqlite.js";
 export type {
   AgentStore,

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Event } from "../orchestrator/types.js";
-import { PiJsonlEventReader } from "./pi-jsonl.js";
+import { OpenClawJsonlEventLog } from "./openclaw-events.js";
 
 // Pi's JSONL uses a canonical session-key scheme in sessions.json:
 //   key = "agent:main:<our_session_id>"
@@ -40,7 +40,7 @@ function makeFixture(lines: Array<Record<string, unknown>> | undefined): Fixture
   return { root, agentId, sessionId, piSessionId };
 }
 
-describe("PiJsonlEventReader", () => {
+describe("OpenClawJsonlEventLog", () => {
   let fixtures: Fixture[] = [];
   beforeEach(() => {
     fixtures = [];
@@ -52,7 +52,7 @@ describe("PiJsonlEventReader", () => {
   it("returns [] when sessions.json is missing", () => {
     const root = mkdtempSync(join(tmpdir(), "pi-jsonl-test-"));
     fixtures.push({ root, agentId: "x", sessionId: "y", piSessionId: "z" });
-    const reader = new PiJsonlEventReader(root);
+    const reader = new OpenClawJsonlEventLog(root);
     expect(reader.listBySession("no-agent", "no-session")).toEqual([]);
     expect(reader.latestAgentMessage("no-agent", "no-session")).toBeUndefined();
     expect(reader.latestAgentOutcome("no-agent", "no-session")).toBeUndefined();
@@ -61,7 +61,7 @@ describe("PiJsonlEventReader", () => {
   it("returns [] when the JSONL file is missing but sessions.json maps the key", () => {
     const f = makeFixture(undefined);
     fixtures.push(f);
-    const reader = new PiJsonlEventReader(f.root);
+    const reader = new OpenClawJsonlEventLog(f.root);
     expect(reader.listBySession(f.agentId, f.sessionId)).toEqual([]);
   });
 
@@ -87,7 +87,7 @@ describe("PiJsonlEventReader", () => {
       },
     ]);
     fixtures.push(f);
-    const reader = new PiJsonlEventReader(f.root);
+    const reader = new OpenClawJsonlEventLog(f.root);
     const events = reader.listBySession(f.agentId, f.sessionId);
     expect(events).toHaveLength(2);
     expect(events[0]).toMatchObject({
@@ -126,7 +126,7 @@ describe("PiJsonlEventReader", () => {
       },
     ]);
     fixtures.push(f);
-    const reader = new PiJsonlEventReader(f.root);
+    const reader = new OpenClawJsonlEventLog(f.root);
     const events = reader.listBySession(f.agentId, f.sessionId);
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
@@ -177,7 +177,7 @@ describe("PiJsonlEventReader", () => {
       },
     ]);
     fixtures.push(f);
-    const reader = new PiJsonlEventReader(f.root);
+    const reader = new OpenClawJsonlEventLog(f.root);
     const events = reader.listBySession(f.agentId, f.sessionId);
     expect(events.map((e) => e.content)).toEqual([
       "string content",
@@ -201,7 +201,7 @@ describe("PiJsonlEventReader", () => {
       },
     ]);
     fixtures.push(f);
-    const reader = new PiJsonlEventReader(f.root);
+    const reader = new OpenClawJsonlEventLog(f.root);
     const events = reader.listBySession(f.agentId, f.sessionId);
     expect(events.map((e) => e.type)).toEqual(["agent.thinking", "agent.message"]);
     expect(events[0]).toMatchObject({
@@ -234,7 +234,7 @@ describe("PiJsonlEventReader", () => {
       },
     ]);
     fixtures.push(f);
-    const reader = new PiJsonlEventReader(f.root);
+    const reader = new OpenClawJsonlEventLog(f.root);
     const events = reader.listBySession(f.agentId, f.sessionId);
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
@@ -279,7 +279,7 @@ describe("PiJsonlEventReader", () => {
     it("skips events up to and including the cursor", async () => {
       const f = threeEventFixture();
       fixtures.push(f);
-      const reader = new PiJsonlEventReader(f.root);
+      const reader = new OpenClawJsonlEventLog(f.root);
       const events = await drain(
         reader.follow(f.agentId, f.sessionId, {
           afterEventId: "evt-2",
@@ -294,7 +294,7 @@ describe("PiJsonlEventReader", () => {
     it("replays everything when the cursor isn't found (cursor stale / unknown)", async () => {
       const f = threeEventFixture();
       fixtures.push(f);
-      const reader = new PiJsonlEventReader(f.root);
+      const reader = new OpenClawJsonlEventLog(f.root);
       const events = await drain(
         reader.follow(f.agentId, f.sessionId, {
           afterEventId: "evt-does-not-exist",
@@ -334,7 +334,7 @@ describe("PiJsonlEventReader", () => {
       },
     ]);
     fixtures.push(f);
-    const reader = new PiJsonlEventReader(f.root);
+    const reader = new OpenClawJsonlEventLog(f.root);
     const latest = reader.latestAgentMessage(f.agentId, f.sessionId);
     expect(latest?.content).toBe("second");
     expect(latest?.eventId).toBe("evt-c");
@@ -374,7 +374,7 @@ describe("PiJsonlEventReader", () => {
       },
     ]);
     fixtures.push(f);
-    const reader = new PiJsonlEventReader(f.root);
+    const reader = new OpenClawJsonlEventLog(f.root);
     const latest = reader.latestAgentOutcome(f.agentId, f.sessionId);
     expect(latest?.type).toBe("agent.tool_result");
     expect(latest?.eventId).toBe("evt-c");
@@ -402,7 +402,7 @@ describe("PiJsonlEventReader", () => {
       },
     ]);
     fixtures.push(f);
-    const reader = new PiJsonlEventReader(f.root);
+    const reader = new OpenClawJsonlEventLog(f.root);
     const events = reader.listBySession(f.agentId, f.sessionId);
     expect(events).toHaveLength(1);
     expect(events[0]?.eventId).toBe("evt-real");
@@ -437,7 +437,7 @@ describe("PiJsonlEventReader", () => {
       },
     ]);
     fixtures.push(f);
-    const reader = new PiJsonlEventReader(f.root);
+    const reader = new OpenClawJsonlEventLog(f.root);
     const events = reader.listBySession(f.agentId, f.sessionId);
     expect(events).toHaveLength(2);
     expect(events[0]).toMatchObject({
@@ -466,7 +466,7 @@ describe("PiJsonlEventReader", () => {
       { type: "compaction", id: "evt-c", summary: "compacted turns 1-5" },
     ]);
     fixtures.push(f);
-    const reader = new PiJsonlEventReader(f.root);
+    const reader = new OpenClawJsonlEventLog(f.root);
     const events = reader.listBySession(f.agentId, f.sessionId);
     expect(events.map((e) => e.type)).toEqual([
       "session.model_change",
@@ -504,7 +504,7 @@ describe("PiJsonlEventReader", () => {
       },
     ]);
     fixtures.push(f);
-    const reader = new PiJsonlEventReader(f.root);
+    const reader = new OpenClawJsonlEventLog(f.root);
     const events = reader.listBySession(f.agentId, f.sessionId);
     expect(events).toHaveLength(2);
     expect(events[0]).toMatchObject({
@@ -540,7 +540,7 @@ describe("PiJsonlEventReader", () => {
       }) +
       "\n";
     writeFileSync(join(sessionsDir, `${f.piSessionId}.jsonl`), mixed, "utf8");
-    const reader = new PiJsonlEventReader(f.root);
+    const reader = new OpenClawJsonlEventLog(f.root);
     const events = reader.listBySession(f.agentId, f.sessionId);
     expect(events).toHaveLength(2);
     expect(events.map((e) => e.eventId)).toEqual(["evt-good", "evt-good-2"]);
@@ -555,7 +555,7 @@ describe("PiJsonlEventReader", () => {
       },
     ]);
     fixtures.push(f);
-    const reader = new PiJsonlEventReader(f.root);
+    const reader = new OpenClawJsonlEventLog(f.root);
     expect(reader.listBySession(f.agentId, f.sessionId)).toHaveLength(1);
 
     reader.deleteBySession(f.agentId, f.sessionId);
@@ -573,7 +573,7 @@ describe("PiJsonlEventReader", () => {
   it("deleteBySession is a no-op when the session is unknown", () => {
     const f = makeFixture(undefined);
     fixtures.push(f);
-    const reader = new PiJsonlEventReader(f.root);
+    const reader = new OpenClawJsonlEventLog(f.root);
     expect(() => reader.deleteBySession("no-agent", "no-session")).not.toThrow();
   });
 });

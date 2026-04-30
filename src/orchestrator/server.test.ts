@@ -64,7 +64,7 @@ function makeApp(opts: {
     countUserTurns(_agentId: string, sessionId: string) {
       return (eventsBySession.get(sessionId) ?? []).filter((event) => event.type === "user.message").length;
     },
-    statJsonl() {
+    statSessionLog() {
       return undefined;
     },
     async *follow() {

@@ -2,11 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ManagedEventLog } from "../events/types.js";
 import { normalizeModelForRuntime } from "../harness/openclaw.js";
+import { OpenClawJsonlEventLog } from "../harness/openclaw-events.js";
 import type { GatewayWebSocketClient } from "../runtime/gateway-ws.js";
 import { ParentTokenMinter } from "../runtime/parent-token.js";
 import type { SessionContainerPool } from "../runtime/pool.js";
 import { InMemoryStore } from "../store/memory.js";
-import { PiJsonlEventReader } from "../store/pi-jsonl.js";
 import type { QueueStore } from "../store/types.js";
 import { clearZenMuxCatalogCache } from "./zenmux-pricing.js";
 import {
@@ -38,7 +38,7 @@ function makeRouter(opts: {
   // their own shaped stub.
   const pool = (opts.poolStub ?? {}) as SessionContainerPool;
   const eventReader = (opts.eventReaderStub ??
-    new PiJsonlEventReader("/tmp/does-not-exist")) as ManagedEventLog;
+    new OpenClawJsonlEventLog("/tmp/does-not-exist")) as ManagedEventLog;
   const cfg: RouterConfig = {
     runtimeImage: "test-image",
     hostStateRoot: "/tmp/test-state",

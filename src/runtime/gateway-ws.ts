@@ -328,7 +328,7 @@ export class GatewayWebSocketClient {
   /**
    * Ask openclaw to compact the session's accumulated event log into a
    * summary, freeing context-window budget. Openclaw writes the resulting
-   * summary as a `compaction` JSONL entry which `PiJsonlEventReader`
+   * summary as a `compaction` JSONL entry which the OpenClaw event log
    * surfaces as a `session.compaction` event in our public stream.
    *
    * Compaction does an LLM call to produce the summary, so the default

@@ -209,8 +209,8 @@ CREATE TABLE ${tableName} (
 //
 // Events are intentionally NOT a SQLite table. The source of truth for events
 // is OpenClaw's per-session JSONL on the host mount, written by the pi-ai
-// SessionManager. PiJsonlEventReader (src/store/pi-jsonl.ts) reads them at
-// query time. If you find an `events` table in an older SQLite file, it is
+// SessionManager. The OpenClaw harness event log reads them at query time.
+// If you find an `events` table in an older SQLite file, it is
 // a vestigial Item 3 artifact that this file no longer touches.
 //
 // Cascade choice:

@@ -16,7 +16,7 @@ import type {
 //
 // Events are NOT part of the store. They live in OpenClaw's per-session
 // JSONL on the host mount, written by OpenClaw's SessionManager. The
-// orchestrator reads them via PiJsonlEventReader (src/store/pi-jsonl.ts) at
+// orchestrator reads them via the harness-owned ManagedEventLog at
 // query time; there is no orchestrator-side event log to keep in sync.
 
 /**

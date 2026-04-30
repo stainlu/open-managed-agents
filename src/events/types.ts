@@ -18,7 +18,7 @@ export type ManagedEventLog = {
   latestAgentMessage(agentId: string, sessionId: string): Event | undefined;
   latestAgentOutcome(agentId: string, sessionId: string): Event | undefined;
   countUserTurns(agentId: string, sessionId: string): number;
-  statJsonl(agentId: string, sessionId: string): { bytes: number } | undefined;
+  statSessionLog(agentId: string, sessionId: string): { bytes: number } | undefined;
   deleteBySession(agentId: string, sessionId: string): void;
   follow(
     agentId: string,

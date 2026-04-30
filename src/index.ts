@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { OpenClawJsonlEventLog } from "./harness/openclaw-events.js";
 import { OpenClawHarnessAdapter } from "./harness/openclaw.js";
 import { getLogger, rootLogger } from "./log.js";
 import {
@@ -24,7 +25,6 @@ import {
 } from "./runtime/pool.js";
 import {
   buildStore,
-  PiJsonlEventReader,
   type StoreBackend,
 } from "./store/index.js";
 
@@ -262,7 +262,7 @@ async function main(): Promise<void> {
 
   // Event reader. Parses OpenClaw's per-session JSONL on the mounted state
   // directory at query time; the orchestrator never writes to those files.
-  const eventReader = new PiJsonlEventReader(stateRoot);
+  const eventReader = new OpenClawJsonlEventLog(stateRoot);
 
   // Per-session container pool. isBusy closes over the session store so the
   // sweeper can skip containers whose session currently has a run in flight
@@ -834,7 +834,7 @@ async function main(): Promise<void> {
     let max = 0;
     let overThreshold = 0;
     for (const session of store.sessions.list()) {
-      const stat = eventReader.statJsonl(session.agentId, session.sessionId);
+      const stat = eventReader.statSessionLog(session.agentId, session.sessionId);
       if (!stat) continue;
       total += stat.bytes;
       if (stat.bytes > max) max = stat.bytes;
