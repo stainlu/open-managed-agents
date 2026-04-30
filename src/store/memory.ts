@@ -175,6 +175,10 @@ class InMemorySessionStore implements SessionStore {
 
   create(args: {
     agentId: string;
+    harnessId?: Session["harnessId"];
+    nativeSessionId?: string | null;
+    nativeThreadId?: string | null;
+    nativeMetadata?: Session["nativeMetadata"];
     sessionId?: string;
     environmentId?: string;
     ephemeral?: boolean;
@@ -187,6 +191,10 @@ class InMemorySessionStore implements SessionStore {
     const session: Session = {
       sessionId,
       agentId: args.agentId,
+      harnessId: args.harnessId ?? DEFAULT_HARNESS_ID,
+      nativeSessionId: args.nativeSessionId ?? sessionId,
+      nativeThreadId: args.nativeThreadId ?? null,
+      nativeMetadata: args.nativeMetadata ?? null,
       environmentId: args.environmentId ?? null,
       status: "idle",
       ephemeral: args.ephemeral ?? false,
@@ -204,6 +212,25 @@ class InMemorySessionStore implements SessionStore {
     };
     this.sessions.set(sessionId, session);
     return session;
+  }
+
+  updateNativeMetadata(sessionId: string, metadata: {
+    nativeSessionId?: string | null;
+    nativeThreadId?: string | null;
+    nativeMetadata?: Session["nativeMetadata"];
+  }): Session | undefined {
+    const s = this.sessions.get(sessionId);
+    if (!s) return undefined;
+    if (metadata.nativeSessionId !== undefined) {
+      s.nativeSessionId = metadata.nativeSessionId;
+    }
+    if (metadata.nativeThreadId !== undefined) {
+      s.nativeThreadId = metadata.nativeThreadId;
+    }
+    if (metadata.nativeMetadata !== undefined) {
+      s.nativeMetadata = metadata.nativeMetadata;
+    }
+    return s;
   }
 
   get(sessionId: string): Session | undefined {

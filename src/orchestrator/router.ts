@@ -183,12 +183,7 @@ export class AgentRouter {
   }
 
   private harnessForSession(session: Session): HarnessAdapter {
-    const agent = this.agents.get(session.agentId);
-    if (agent) return this.harnessForAgent(agent);
-    // Legacy/deleted-agent sessions predate session-level harness metadata.
-    // With only OpenClaw registered this preserves existing control-plane
-    // behavior for active sessions whose template was deleted.
-    return this.harnessForId(this.cfg.harnesses.defaultId);
+    return this.harnessForId(session.harnessId ?? this.cfg.harnesses.defaultId);
   }
 
   private harnessForSessionId(sessionId: string): HarnessAdapter {
@@ -379,7 +374,7 @@ export class AgentRouter {
     if (agent.archivedAt) {
       throw new RouterError("agent_archived", `agent ${agentId} is archived`);
     }
-    this.harnessForAgent(agent);
+    const harness = this.harnessForAgent(agent);
     if (opts?.vaultId && !this.vaults.getVault(opts.vaultId)) {
       throw new RouterError(
         "vault_not_found",
@@ -390,6 +385,7 @@ export class AgentRouter {
       opts?.remainingSubagentDepth ?? agent.maxSubagentDepth;
     return this.sessions.create({
       agentId,
+      harnessId: harness.id,
       environmentId: opts?.environmentId,
       remainingSubagentDepth,
       vaultId: opts?.vaultId,
@@ -532,7 +528,7 @@ export class AgentRouter {
         `agent ${session.agentId} does not exist`,
       );
     }
-    this.harnessForAgent(agent);
+    this.harnessForSession(session);
 
     // Quotas are checked BEFORE the busy-session queue path: we refuse
     // to even enqueue a run for a session that's already out of budget.
@@ -613,7 +609,7 @@ export class AgentRouter {
         `session ${args.sessionId} is busy; wait for the current run to complete before streaming`,
       );
     }
-    const harness = this.harnessForAgent(agent);
+    const harness = this.harnessForSession(session);
     this.assertQuota(session, agent);
 
     const running = this.sessions.beginRun(args.sessionId) ?? session;
@@ -712,6 +708,8 @@ export class AgentRouter {
             agent.agentId,
             args.sessionId,
             beforeTurn,
+            undefined,
+            harness,
           );
           const tokensIn = latest?.tokensIn ?? 0;
           const tokensOut = latest?.tokensOut ?? 0;
@@ -1208,10 +1206,10 @@ export class AgentRouter {
     session: Session | undefined,
     agent?: AgentConfig,
   ): boolean {
-    const harness = agent
-      ? this.harnessForAgent(agent)
-      : session
-        ? this.harnessForSession(session)
+    const harness = session
+      ? this.harnessForSession(session)
+      : agent
+        ? this.harnessForAgent(agent)
         : this.harnessForId(this.cfg.harnesses.defaultId);
     return harness.shouldBypassWarmPool(session);
   }
@@ -1225,7 +1223,9 @@ export class AgentRouter {
       thinkingLevel?: string;
     },
   ): SpawnOptions {
-    const harness = this.harnessForAgent(agent);
+    const harness = "harnessId" in session
+      ? this.harnessForSession(session)
+      : this.harnessForAgent(agent);
     return harness.buildSpawnOptions({
       sessionId,
       agent,
@@ -1246,7 +1246,9 @@ export class AgentRouter {
     const tick = (label: string, from: number) => ({ [label + "_ms"]: Date.now() - from });
     let cursor = t0;
     const currentSession = this.sessions.get(sessionId);
-    const harness = this.harnessForAgent(agent);
+    const harness = currentSession
+      ? this.harnessForSession(currentSession)
+      : this.harnessForAgent(agent);
     await this.refreshExpiringOAuthCredentials(agent, currentSession?.vaultId ?? null);
     const timings: Record<string, number> = { ...tick("oauth_refresh", cursor) };
     cursor = Date.now();
@@ -1390,7 +1392,7 @@ export class AgentRouter {
     if (!session) return;
     const agent = this.agents.get(session.agentId);
     if (!agent) return;
-    const harness = this.harnessForAgent(agent);
+    const harness = this.harnessForSession(session);
 
     let finalized = false;
     let unsubscribe: (() => void) | undefined;
@@ -1452,14 +1454,14 @@ export class AgentRouter {
     // session out of running (e.g., a client posted a cancel during
     // startup), don't overwrite.
     const current = this.sessions.get(sessionId);
-    if (!isSessionInflight(current)) return;
+    if (!current || !isSessionInflight(current)) return;
 
     if (outcome.ok) {
       const latest = this.events.latestAgentMessage(agent.agentId, sessionId);
       const tokensIn = latest?.tokensIn ?? 0;
       const tokensOut = latest?.tokensOut ?? 0;
       const costUsd = await this.resolveRunCostUsd(
-        latest?.model ?? this.harnessForAgent(agent).modelForUsage(agent.model),
+        latest?.model ?? this.harnessForSession(current).modelForUsage(agent.model),
         tokensIn,
         tokensOut,
         latest?.costUsd,
@@ -1674,7 +1676,9 @@ export class AgentRouter {
   ): Promise<Container> {
     const MAX_INFRA_RETRIES = 2;
     let lastError: unknown;
-    const harness = this.harnessForAgent(agent);
+    const harness = currentSession
+      ? this.harnessForSession(currentSession)
+      : this.harnessForAgent(agent);
 
     for (let attempt = 0; attempt < MAX_INFRA_RETRIES; attempt++) {
       try {

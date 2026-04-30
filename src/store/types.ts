@@ -1,9 +1,11 @@
+import type { HarnessId } from "../harness/ids.js";
 import type {
   AgentConfig,
   CreateAgentRequest,
   CreateEnvironmentRequest,
   EnvironmentConfig,
   Session,
+  SessionNativeMetadata,
   UpdateAgentRequest,
   User,
   UserTier,
@@ -261,9 +263,18 @@ export interface SessionStore {
    *   (created with X-OpenClaw-Parent-Token), initialized from
    *   `parent.remaining_depth - 1`. Persisted so container
    *   respawn mints tokens with the correct scope.
+   * - `harnessId` (optional, default openclaw): captured from the agent
+   *   template at session creation time. Existing sessions keep this value
+   *   even if their agent template later changes harness.
+   * - native ids/metadata are adapter-owned. They let a managed session point
+   *   at a native thread/session allocated by Codex, Hermes, Claude SDK, etc.
    */
   create(args: {
     agentId: string;
+    harnessId?: HarnessId;
+    nativeSessionId?: string | null;
+    nativeThreadId?: string | null;
+    nativeMetadata?: SessionNativeMetadata | null;
     sessionId?: string;
     environmentId?: string;
     ephemeral?: boolean;
@@ -272,6 +283,11 @@ export interface SessionStore {
     parentSessionId?: string;
     userId?: string;
   }): Session;
+  updateNativeMetadata(sessionId: string, metadata: {
+    nativeSessionId?: string | null;
+    nativeThreadId?: string | null;
+    nativeMetadata?: SessionNativeMetadata | null;
+  }): Session | undefined;
   get(sessionId: string): Session | undefined;
   list(): Session[];
   listByParent(parentSessionId: string): Session[];

@@ -433,6 +433,7 @@ async function sessionResponse(
   return {
     session_id: session.sessionId,
     agent_id: session.agentId,
+    harness_id: session.harnessId,
     environment_id: session.environmentId,
     status: session.status,
     output: latestAgent?.content ?? null,
@@ -1894,6 +1895,7 @@ export function buildApp(deps: ServerDeps): Hono {
         // its max delegation depth from its agent template.
         session = deps.sessions.create({
           agentId,
+          harnessId: agent.harnessId,
           sessionId: sessionKey,
           ephemeral: false,
           remainingSubagentDepth: agent.maxSubagentDepth,
@@ -1903,6 +1905,7 @@ export function buildApp(deps: ServerDeps): Hono {
     } else {
       session = deps.sessions.create({
         agentId,
+        harnessId: agent.harnessId,
         ephemeral: true,
         remainingSubagentDepth: agent.maxSubagentDepth,
         userId: callerUserId,

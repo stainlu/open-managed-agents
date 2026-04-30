@@ -41,6 +41,7 @@ class Environment:
 class Session:
     session_id: str
     agent_id: str
+    harness_id: str
     status: str
     tokens: Dict[str, int]
     cost_usd: float

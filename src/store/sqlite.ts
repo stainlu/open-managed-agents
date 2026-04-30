@@ -77,6 +77,10 @@ type EnvironmentRow = {
 type SessionRow = {
   session_id: string;
   agent_id: string;
+  harness_id: string | null;
+  native_session_id: string | null;
+  native_thread_id: string | null;
+  native_metadata_json: string | null;
   environment_id: string | null;
   status: string;
   ephemeral: number;
@@ -145,6 +149,12 @@ function rowToSession(r: SessionRow): Session {
   return {
     sessionId: r.session_id,
     agentId: r.agent_id,
+    harnessId: (r.harness_id as HarnessId | null) ?? DEFAULT_HARNESS_ID,
+    nativeSessionId: r.native_session_id ?? r.session_id,
+    nativeThreadId: r.native_thread_id ?? null,
+    nativeMetadata: r.native_metadata_json
+      ? (JSON.parse(r.native_metadata_json) as Session["nativeMetadata"])
+      : null,
     environmentId: r.environment_id,
     status: r.status as SessionStatus,
     ephemeral: r.ephemeral === 1,
@@ -167,6 +177,10 @@ function createSessionsTableSql(tableName: string): string {
 CREATE TABLE ${tableName} (
   session_id TEXT PRIMARY KEY,
   agent_id TEXT NOT NULL,
+  harness_id TEXT NOT NULL DEFAULT 'openclaw',
+  native_session_id TEXT,
+  native_thread_id TEXT,
+  native_metadata_json TEXT,
   environment_id TEXT,
   status TEXT NOT NULL CHECK (status IN (${SESSION_STATUS_VALUES_SQL})),
   ephemeral INTEGER NOT NULL DEFAULT 0,
@@ -274,6 +288,10 @@ CREATE TABLE IF NOT EXISTS environments (
 CREATE TABLE IF NOT EXISTS sessions (
   session_id TEXT PRIMARY KEY,
   agent_id TEXT NOT NULL,
+  harness_id TEXT NOT NULL DEFAULT 'openclaw',
+  native_session_id TEXT,
+  native_thread_id TEXT,
+  native_metadata_json TEXT,
   environment_id TEXT,
   status TEXT NOT NULL CHECK (status IN (${SESSION_STATUS_VALUES_SQL})),
   ephemeral INTEGER NOT NULL DEFAULT 0,
@@ -701,16 +719,19 @@ class SqliteSessionStore implements SessionStore {
   private readonly bumpTurnsStmt: Database.Statement;
   private readonly listByParentStmt: Database.Statement;
   private readonly failRunningStmt: Database.Statement;
+  private readonly updateNativeMetadataStmt: Database.Statement;
 
   constructor(private readonly db: Database.Database) {
     this.insertStmt = db.prepare(
       `INSERT INTO sessions (
-        session_id, agent_id, environment_id, status, ephemeral,
+        session_id, agent_id, harness_id, native_session_id,
+        native_thread_id, native_metadata_json, environment_id, status, ephemeral,
         remaining_subagent_depth,
         tokens_in, tokens_out, cost_usd,
         error, created_at, last_event_at, vault_id, parent_session_id, user_id
        ) VALUES (
-        @session_id, @agent_id, @environment_id, 'idle', @ephemeral,
+        @session_id, @agent_id, @harness_id, @native_session_id,
+        @native_thread_id, @native_metadata_json, @environment_id, 'idle', @ephemeral,
         @remaining_subagent_depth,
         0, 0, 0, NULL, @created_at, NULL, @vault_id, @parent_session_id, @user_id
        )`,
@@ -766,10 +787,21 @@ class SqliteSessionStore implements SessionStore {
        SET status = 'failed', error = @reason, last_event_at = @now
        WHERE status IN ('starting', 'running')`,
     );
+    this.updateNativeMetadataStmt = db.prepare(
+      `UPDATE sessions
+       SET native_session_id = @native_session_id,
+           native_thread_id = @native_thread_id,
+           native_metadata_json = @native_metadata_json
+       WHERE session_id = @session_id`,
+    );
   }
 
   create(args: {
     agentId: string;
+    harnessId?: HarnessId;
+    nativeSessionId?: string | null;
+    nativeThreadId?: string | null;
+    nativeMetadata?: Session["nativeMetadata"];
     sessionId?: string;
     environmentId?: string;
     ephemeral?: boolean;
@@ -779,6 +811,10 @@ class SqliteSessionStore implements SessionStore {
     userId?: string;
   }): Session {
     const sessionId = args.sessionId ?? `ses_${nanoid()}`;
+    const harnessId = args.harnessId ?? DEFAULT_HARNESS_ID;
+    const nativeSessionId = args.nativeSessionId ?? sessionId;
+    const nativeThreadId = args.nativeThreadId ?? null;
+    const nativeMetadata = args.nativeMetadata ?? null;
     const environmentId = args.environmentId ?? null;
     const ephemeral = args.ephemeral ?? false;
     const remainingSubagentDepth = args.remainingSubagentDepth ?? 0;
@@ -789,6 +825,10 @@ class SqliteSessionStore implements SessionStore {
     this.insertStmt.run({
       session_id: sessionId,
       agent_id: args.agentId,
+      harness_id: harnessId,
+      native_session_id: nativeSessionId,
+      native_thread_id: nativeThreadId,
+      native_metadata_json: nativeMetadata ? JSON.stringify(nativeMetadata) : null,
       environment_id: environmentId,
       ephemeral: ephemeral ? 1 : 0,
       remaining_subagent_depth: remainingSubagentDepth,
@@ -800,6 +840,10 @@ class SqliteSessionStore implements SessionStore {
     return {
       sessionId,
       agentId: args.agentId,
+      harnessId,
+      nativeSessionId,
+      nativeThreadId,
+      nativeMetadata,
       environmentId,
       status: "idle",
       ephemeral,
@@ -815,6 +859,32 @@ class SqliteSessionStore implements SessionStore {
       parentSessionId,
       userId,
     };
+  }
+
+  updateNativeMetadata(sessionId: string, metadata: {
+    nativeSessionId?: string | null;
+    nativeThreadId?: string | null;
+    nativeMetadata?: Session["nativeMetadata"];
+  }): Session | undefined {
+    const current = this.get(sessionId);
+    if (!current) return undefined;
+    const nativeSessionId = metadata.nativeSessionId === undefined
+      ? current.nativeSessionId
+      : metadata.nativeSessionId;
+    const nativeThreadId = metadata.nativeThreadId === undefined
+      ? current.nativeThreadId
+      : metadata.nativeThreadId;
+    const nativeMetadata = metadata.nativeMetadata === undefined
+      ? current.nativeMetadata
+      : metadata.nativeMetadata;
+    const info = this.updateNativeMetadataStmt.run({
+      session_id: sessionId,
+      native_session_id: nativeSessionId,
+      native_thread_id: nativeThreadId,
+      native_metadata_json: nativeMetadata ? JSON.stringify(nativeMetadata) : null,
+    });
+    if (info.changes === 0) return undefined;
+    return this.get(sessionId);
   }
 
   get(sessionId: string): Session | undefined {
@@ -1791,6 +1861,23 @@ export class SqliteStore implements Store {
     if (!sessionsCols.some((c) => c.name === "user_id")) {
       this.db.exec("ALTER TABLE sessions ADD COLUMN user_id TEXT");
     }
+    if (!sessionsCols.some((c) => c.name === "harness_id")) {
+      this.db.exec(
+        "ALTER TABLE sessions ADD COLUMN harness_id TEXT NOT NULL DEFAULT 'openclaw'",
+      );
+    }
+    if (!sessionsCols.some((c) => c.name === "native_session_id")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN native_session_id TEXT");
+    }
+    if (!sessionsCols.some((c) => c.name === "native_thread_id")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN native_thread_id TEXT");
+    }
+    if (!sessionsCols.some((c) => c.name === "native_metadata_json")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN native_metadata_json TEXT");
+    }
+    this.db.exec(
+      "UPDATE sessions SET native_session_id = session_id WHERE harness_id = 'openclaw' AND native_session_id IS NULL",
+    );
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id)",
     );
@@ -1985,12 +2072,14 @@ export class SqliteStore implements Store {
         this.db.exec(createSessionsTableSql("sessions_new"));
         this.db.exec(`
           INSERT INTO sessions_new (
-            session_id, agent_id, environment_id, status, ephemeral,
+            session_id, agent_id, harness_id, native_session_id,
+            native_thread_id, native_metadata_json, environment_id, status, ephemeral,
             remaining_subagent_depth, turns, tokens_in, tokens_out, cost_usd,
             error, created_at, last_event_at, vault_id, parent_session_id, user_id
           )
           SELECT
-            session_id, agent_id, environment_id, status, ephemeral,
+            session_id, agent_id, harness_id, native_session_id,
+            native_thread_id, native_metadata_json, environment_id, status, ephemeral,
             remaining_subagent_depth, turns, tokens_in, tokens_out, cost_usd,
             error, created_at, last_event_at, vault_id, parent_session_id, user_id
           FROM sessions

@@ -123,6 +123,8 @@ describe("AgentRouter.createSession", () => {
     });
     const session = router.createSession(agent.agentId);
     expect(session.agentId).toBe(agent.agentId);
+    expect(session.harnessId).toBe("openclaw");
+    expect(session.nativeSessionId).toBe(session.sessionId);
     expect(session.status).toBe("idle");
     expect(store.sessions.get(session.sessionId)).toBeDefined();
   });
@@ -1499,5 +1501,36 @@ describe("AgentRouter approval flow", () => {
 
     fakeWs.emit("plugin.approval.resolved", { id: "ap_1", decision: "allow-once" });
     expect(router.getPendingApprovals(sessionId)).toEqual([]);
+  });
+
+  it("uses the session harness for control even if the agent template changes", async () => {
+    const fakeWs = new FakeApprovalWs();
+    const { router, store } = makeRouter({
+      poolStub: {
+        getWsClient: () => fakeWs as unknown as GatewayWebSocketClient,
+      },
+    });
+    const agent = store.agents.create({
+      model: "m",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_ask" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+    });
+    const session = router.createSession(agent.agentId);
+    (agent as { harnessId: string }).harnessId = "missing";
+    (router as any).pendingApprovals.set(session.sessionId, [{
+      approvalId: "ap_1",
+      sessionId: session.sessionId,
+      toolName: "write",
+      toolCallId: "call_1",
+      description: "write file?",
+      arrivedAt: 1,
+    }]);
+
+    await router.confirmTool(session.sessionId, "ap_1", "allow");
+
+    expect(router.getPendingApprovals(session.sessionId)).toEqual([]);
   });
 });

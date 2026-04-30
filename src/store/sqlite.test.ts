@@ -88,6 +88,10 @@ describe("SqliteStore — fresh-DB schema", () => {
     for (const col of [
       "session_id",
       "agent_id",
+      "harness_id",
+      "native_session_id",
+      "native_thread_id",
+      "native_metadata_json",
       "status",
       "ephemeral",
       "remaining_subagent_depth",
@@ -110,7 +114,7 @@ describe("SqliteStore — fresh-DB schema", () => {
 });
 
 describe("SqliteStore — additive migrations on pre-existing DBs", () => {
-  it("adds sessions columns (environment_id, ephemeral, remaining_subagent_depth) when opening a legacy DB", () => {
+  it("adds sessions columns and harness metadata when opening a legacy DB", () => {
     const path = newDbPath();
     // Pre-migration shape of the sessions table — no environment_id,
     // no ephemeral, no remaining_subagent_depth.
@@ -143,23 +147,36 @@ describe("SqliteStore — additive migrations on pre-existing DBs", () => {
     expect(cols).toContain("environment_id");
     expect(cols).toContain("ephemeral");
     expect(cols).toContain("remaining_subagent_depth");
+    expect(cols).toContain("harness_id");
+    expect(cols).toContain("native_session_id");
+    expect(cols).toContain("native_thread_id");
+    expect(cols).toContain("native_metadata_json");
 
     // Pre-existing row survived the migration and got the NOT-NULL
     // defaults for the new integer columns.
     const row = probe.prepare(
-      `SELECT session_id, ephemeral, remaining_subagent_depth, environment_id
+      `SELECT session_id, ephemeral, remaining_subagent_depth, environment_id,
+              harness_id, native_session_id, native_thread_id, native_metadata_json
        FROM sessions WHERE session_id = 'ses_old'`,
     ).get() as {
       session_id: string;
       ephemeral: number;
       remaining_subagent_depth: number;
       environment_id: string | null;
+      harness_id: string;
+      native_session_id: string | null;
+      native_thread_id: string | null;
+      native_metadata_json: string | null;
     };
     probe.close();
     expect(row.session_id).toBe("ses_old");
     expect(row.ephemeral).toBe(0); // safe default (not ephemeral)
     expect(row.remaining_subagent_depth).toBe(0); // safe default (no subagents)
     expect(row.environment_id).toBeNull(); // nullable column
+    expect(row.harness_id).toBe("openclaw");
+    expect(row.native_session_id).toBe("ses_old");
+    expect(row.native_thread_id).toBeNull();
+    expect(row.native_metadata_json).toBeNull();
   });
 
   it("upgrades the sessions status constraint in place and preserves session_container foreign keys", () => {
@@ -379,10 +396,47 @@ describe("SqliteStore — additive migrations on pre-existing DBs", () => {
     store = new SqliteStore(path);
     const loaded = store.sessions.get(session.sessionId);
     expect(loaded?.sessionId).toBe(session.sessionId);
+    expect(loaded?.harnessId).toBe("openclaw");
+    expect(loaded?.nativeSessionId).toBe(session.sessionId);
     expect(loaded?.status).toBe("idle");
     const loadedAgent = store.agents.get(agent.agentId);
     expect(loadedAgent?.version).toBe(1);
     expect(loadedAgent?.callableAgents).toEqual([]);
+    store.close();
+  });
+
+  it("persists adapter-owned native session metadata", () => {
+    const path = newDbPath();
+    let store = new SqliteStore(path);
+    const agent = store.agents.create({
+      model: "m",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+    });
+    const session = store.sessions.create({
+      agentId: agent.agentId,
+      harnessId: "openclaw",
+      nativeMetadata: { source: "initial" },
+    });
+    const updated = store.sessions.updateNativeMetadata(session.sessionId, {
+      nativeSessionId: "native_ses",
+      nativeThreadId: "native_thread",
+      nativeMetadata: { checkpoint: 3, resumable: true },
+    });
+    expect(updated?.nativeSessionId).toBe("native_ses");
+    expect(updated?.nativeThreadId).toBe("native_thread");
+    expect(updated?.nativeMetadata).toEqual({ checkpoint: 3, resumable: true });
+    store.close();
+
+    store = new SqliteStore(path);
+    const loaded = store.sessions.get(session.sessionId);
+    expect(loaded?.harnessId).toBe("openclaw");
+    expect(loaded?.nativeSessionId).toBe("native_ses");
+    expect(loaded?.nativeThreadId).toBe("native_thread");
+    expect(loaded?.nativeMetadata).toEqual({ checkpoint: 3, resumable: true });
     store.close();
   });
 });

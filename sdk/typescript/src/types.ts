@@ -79,6 +79,7 @@ export interface EnvironmentPackages {
 export interface Session {
   session_id: string;
   agent_id: string;
+  harness_id: HarnessId;
   status: "idle" | "starting" | "running" | "failed";
   tokens: { input: number; output: number };
   cost_usd: number;

@@ -291,10 +291,25 @@ export type EnvironmentConfig = {
 // never enters a terminal "completed" state; individual events can complete,
 // the session stays open.
 export type SessionStatus = "idle" | "starting" | "running" | "failed";
+export type SessionNativeMetadata = Record<string, unknown>;
 
 export type Session = {
   sessionId: string;
   agentId: string;
+  /**
+   * Harness identity is captured at session creation time. Agent templates
+   * can be edited later; existing sessions must keep using the harness that
+   * created their native state.
+   */
+  harnessId: HarnessId;
+  /**
+   * Adapter-owned native ids. For OpenClaw today, nativeSessionId defaults
+   * to the managed session id. Other adapters can set thread/session ids
+   * after their native runtime allocates them.
+   */
+  nativeSessionId: string | null;
+  nativeThreadId: string | null;
+  nativeMetadata: SessionNativeMetadata | null;
   environmentId: string | null;
   status: SessionStatus;
   /**

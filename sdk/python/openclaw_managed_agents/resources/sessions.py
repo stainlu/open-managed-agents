@@ -15,6 +15,7 @@ def _parse_session(data: Dict[str, Any]) -> Session:
     return Session(
         session_id=data["session_id"],
         agent_id=data["agent_id"],
+        harness_id=data.get("harness_id", "openclaw"),
         status=data["status"],
         tokens=data.get("tokens", {"input": 0, "output": 0}),
         cost_usd=data.get("cost_usd", 0),
