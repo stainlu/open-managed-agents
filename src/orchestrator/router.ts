@@ -1,9 +1,5 @@
 import { join } from "node:path";
-import {
-  OpenClawHarnessAdapter,
-  isOpenClawFailureContent,
-  normalizeModelForRuntime,
-} from "../harness/openclaw.js";
+import { OpenClawHarnessAdapter } from "../harness/openclaw.js";
 import {
   HarnessControlError,
   HarnessInvocationError,
@@ -39,7 +35,6 @@ import type { AgentConfig, Event, Session } from "./types.js";
 import { estimateZenMuxTurnCostUsd } from "./zenmux-pricing.js";
 
 const log = getLogger("router");
-export { normalizeModelForRuntime };
 
 function isSessionInflight(session: Session | undefined): boolean {
   return session?.status === "starting" || session?.status === "running";
@@ -719,7 +714,7 @@ export class AgentRouter {
           const tokensIn = latest?.tokensIn ?? 0;
           const tokensOut = latest?.tokensOut ?? 0;
           const costUsd = await router.resolveRunCostUsd(
-            latest?.model ?? normalizeModelForRuntime(agent.model, router.cfg.passthroughEnv),
+            latest?.model ?? router.harness.modelForUsage(agent.model),
             tokensIn,
             tokensOut,
             latest?.costUsd,
@@ -1313,13 +1308,13 @@ export class AgentRouter {
       beforeTurn,
       {
         ...completion,
-        model: normalizeModelForRuntime(agent.model, this.cfg.passthroughEnv),
+        model: this.harness.modelForUsage(agent.model),
       },
     );
     const tokensIn = latestAgent?.tokensIn ?? completion.tokensIn;
     const tokensOut = latestAgent?.tokensOut ?? completion.tokensOut;
     const costUsd = await this.resolveRunCostUsd(
-      latestAgent?.model ?? normalizeModelForRuntime(agent.model, this.cfg.passthroughEnv),
+      latestAgent?.model ?? this.harness.modelForUsage(agent.model),
       tokensIn,
       tokensOut,
       latestAgent?.costUsd,
@@ -1446,7 +1441,7 @@ export class AgentRouter {
       const tokensIn = latest?.tokensIn ?? 0;
       const tokensOut = latest?.tokensOut ?? 0;
       const costUsd = await this.resolveRunCostUsd(
-        latest?.model ?? normalizeModelForRuntime(agent.model, this.cfg.passthroughEnv),
+        latest?.model ?? this.harness.modelForUsage(agent.model),
         tokensIn,
         tokensOut,
         latest?.costUsd,
@@ -1581,7 +1576,7 @@ export class AgentRouter {
     const afterUserTurns = this.events.countUserTurns(agentId, sessionId);
     const userTurnIsDurable =
       Number.isFinite(afterUserTurns) && afterUserTurns > before.userTurns;
-    if (completion && userTurnIsDurable && !isOpenClawFailureContent(completion.output)) {
+    if (completion && userTurnIsDurable && !this.harness.isFailureOutput(completion.output)) {
       log.warn(
         {
           session_id: sessionId,

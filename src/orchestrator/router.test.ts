@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ManagedEventLog } from "../events/types.js";
+import { normalizeModelForRuntime } from "../harness/openclaw.js";
 import type { GatewayWebSocketClient } from "../runtime/gateway-ws.js";
 import { ParentTokenMinter } from "../runtime/parent-token.js";
 import type { SessionContainerPool } from "../runtime/pool.js";
@@ -11,7 +12,6 @@ import { clearZenMuxCatalogCache } from "./zenmux-pricing.js";
 import {
   AgentRouter,
   RouterError,
-  normalizeModelForRuntime,
   type RouterConfig,
 } from "./router.js";
 

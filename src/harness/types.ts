@@ -81,6 +81,8 @@ export type HarnessAdapter = {
   readonly displayName: string;
   buildSpawnOptions(args: HarnessSpawnOptionsArgs): SpawnOptions;
   shouldBypassWarmPool(session: Pick<Session, "environmentId" | "vaultId"> | undefined): boolean;
+  modelForUsage(model: string): string;
+  isFailureOutput(output: string): boolean;
   invokeTurn(args: HarnessTurnInvocationArgs): Promise<HarnessTurnResult>;
   invokeStreamingTurn(args: HarnessStreamingTurnInvocationArgs): Promise<HarnessStreamingTurn>;
   patchSession(

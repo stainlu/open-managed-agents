@@ -67,6 +67,14 @@ export class OpenClawHarnessAdapter implements HarnessAdapter {
 
   constructor(private readonly cfg: OpenClawHarnessAdapterConfig) {}
 
+  modelForUsage(model: string): string {
+    return normalizeModelForRuntime(model, this.cfg.passthroughEnv);
+  }
+
+  isFailureOutput(output: string): boolean {
+    return isOpenClawFailureContent(output);
+  }
+
   shouldBypassWarmPool(
     session: Pick<Session, "environmentId" | "vaultId"> | undefined,
   ): boolean {
