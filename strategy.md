@@ -1,377 +1,555 @@
-# Open Managed Agents Strategy
+# Strategy - open-managed-agents
 
-## Thesis
+Working strategy notes for the new repo.
 
-Open Managed Agents is the open managed-agent runtime layer.
+Last substantive rewrite: 2026-04-30.
 
-Short version:
+## Executive Thesis
 
-> OpenRouter for managed agents. Android for agent runtimes.
+Open Managed Agents is the agent-agnostic generalization of
+`openclaw-managed-agents`.
 
-OpenRouter made model routing open, interchangeable, and price-competitive.
-Open Managed Agents should do the same for managed agent execution: session lifecycle, sandboxing, tool policy, credentials, memory, event logs, delegation, observability, and runtime control.
+It is not a fresh project starting from blank abstractions. It should inherit the
+core product target, API shape, lifecycle model, and operational philosophy of
+`openclaw-managed-agents`, then replace the hard OpenClaw/Pi assumption with a
+harness adapter contract.
 
-The product is not "another agent framework." It is the managed layer above agent frameworks.
+Sharp version:
 
-## Core Positioning
+> Open Managed Agents is the open version of Claude Managed Agents for any agent
+> harness.
 
-Managed-agent products are arriving from every major AI platform:
+Shorter:
 
-- Anthropic Claude Managed Agents
-- Amazon Bedrock AgentCore / Managed Agents
-- OpenAI Symphony / Codex orchestration
-- Multica-style workspace agents
-- proprietary vertical agent clouds
+> OpenRouter for managed agents.
 
-Their direction is correct: developers do not want to manually build secure agent hosting, persistent sessions, tool approval, isolation, observability, and cost controls.
+Market metaphor:
 
-Their problem is lock-in.
+> Claude Managed Agents is the iOS path. Open Managed Agents is the Android path.
 
-Open Managed Agents exists because developers need the same managed-agent substrate without being trapped inside one model vendor, one agent harness, one cloud, or one pricing curve.
+The target stays the same as the OpenClaw-specific project:
 
-## The Android Analogy
+- Claude Managed Agents-shaped primitives.
+- Self-hostable open-source managed-agent layer.
+- Durable sessions.
+- Isolated execution environments.
+- Events and streaming.
+- Tool policy and approvals.
+- Subagents/delegation.
+- Model/provider freedom.
+- Practical deployment by developers and cloud OEMs.
 
-Apple model:
-
-- one vendor controls hardware, OS, app runtime, distribution, and services
-- tight integration
-- high margins
-- great experience
-- constrained ecosystem
-
-Android model:
-
-- open runtime
-- many hardware vendors
-- many distribution channels
-- many price points
-- broad developer surface
-- default path for everyone who cannot or will not live inside Apple's stack
-
-Open Managed Agents should be Android-like:
-
-- open-source
-- framework-agnostic
-- model-agnostic
-- cloud-agnostic
-- cheap to self-host
-- embeddable by product companies
-- opinionated enough to be useful
-
-The goal is not to beat closed platforms on polish on day one.
-The goal is to become the open substrate developers trust when they want to build real agent products.
-
-## What We Mean By Managed Agents
-
-A managed-agent runtime owns the operational layer around an agent harness.
-
-It should own:
-
-- durable sessions
-- per-session sandbox lifecycle
-- event log and replay
-- tool execution policy
-- human approval flow
-- credentials boundary
-- egress/network policy
-- model routing and pricing
-- cancellation/interruption
-- background execution
-- delegation/subagents
-- warm pools and capacity controls
-- observability and audit logs
-- SDK/API compatibility
-
-The agent harness should be replaceable.
-
-OpenClaw, Codex, Claude Agent SDK, Hermes, Pi, OpenCode, and future frameworks should all become drivers under the same managed runtime contract.
-
-## What This Is Not
-
-Open Managed Agents is not:
-
-- a chat UI
-- an issue tracker
-- a desktop workspace app
-- a prompt queue
-- a wrapper around many CLIs
-- a new agent harness
-- an OpenClaw fork
-- a model router only
-
-Those can exist on top.
-
-The platform layer is the runtime substrate.
-
-## First-Principles Definition Of Agent-Agnostic
-
-There are three levels of "agent-agnostic."
-
-### 1. Adapter-Agnostic
-
-Can call many agent CLIs or SDKs through adapters.
-
-This is useful, but shallow.
-
-Example shape:
+The only strategic difference:
 
 ```text
-task -> provider switch -> run claude/codex/openclaw/hermes -> normalize output
+openclaw-managed-agents:
+  managed-agent layer for OpenClaw/Pi
+
+open-managed-agents:
+  managed-agent layer for OpenClaw, Codex, Claude Agent SDK, Hermes,
+  Pi, OpenCode, and future harnesses
 ```
 
-This is what Multica mostly does.
+OpenClaw remains the flagship adapter because it owns the personal-agent brand.
+Open Managed Agents is the wider platform.
 
-### 2. Harness-Agnostic Managed Runtime
+## Runtime Layer Or Managed-Agent Layer
 
-Same managed-agent API works across different harnesses, while the managed layer still owns:
+Calling this a "runtime layer" is technically reasonable, but incomplete.
 
-- lifecycle
-- isolation
-- event log
-- control plane
-- credentials
-- policy
-- cost
-- observability
+Better language:
 
-This is the real target.
+> Open Managed Agents is a managed-agent layer with a runtime substrate.
 
-Example shape:
+The distinction matters.
+
+| Term | Meaning | Should we use it? |
+|---|---|---|
+| Agent harness | The loop/brain implementation: OpenClaw/Pi, Codex, Claude Agent SDK, Hermes | Yes, for adapter boundary |
+| Container runtime | Docker/ECS/Kubernetes/Cloud Run process and sandbox substrate | Yes, for infrastructure backend |
+| Runtime substrate | The internal machinery that spawns, warms, reaps, isolates, and observes execution | Yes, internally |
+| Managed-agent layer | The product/API/control layer: agents, environments, sessions, events, policy, credentials, observability | Yes, public/default |
+
+The user-facing claim should not be "we are a container runtime." That sounds too
+low-level and confuses us with Docker, Firecracker, AgentCore Runtime, or
+Kubernetes.
+
+The stronger public claim:
+
+> We provide the open managed-agent layer: the API and operational boundary that
+> turns agent harnesses into safe, durable, product-ready managed agents.
+
+Use "runtime" when talking about internals:
+
+- session runtime
+- sandbox runtime
+- container runtime
+- harness runtime
+- managed-agent runtime substrate
+
+Use "managed-agent layer" when talking about product category.
+
+## Claude Managed Agents Standard
+
+Claude Managed Agents is still the primary product standard.
+
+The standard is not exact API cloning. The standard is the product primitive set:
+
+- `Agent`: model, instructions, tools, MCP, skills, permissions, quotas.
+- `Environment`: packages, files, runtime image, network policy, sandbox profile.
+- `Session`: durable execution context with one or more turns.
+- `Event`: append-only observable history with SSE/streaming.
+
+The standard also includes behavior:
+
+- async/background execution;
+- long-running sessions;
+- event history and streaming;
+- cancellation/interruption/steering;
+- tool approval;
+- environment lifecycle;
+- sandbox isolation;
+- durable files/session state;
+- usage/cost observability;
+- recoverability after process failure;
+- SDK/API ergonomics.
+
+Open Managed Agents should be an open implementation of this product shape.
+
+Not a Claude clone.
+Not an Anthropic cloud clone.
+Not a wrapper around one model.
+
+The promise is:
+
+> Claude Managed Agents-shaped managed-agent primitives, open to any harness and
+> any model provider.
+
+## Relationship To openclaw-managed-agents
+
+`openclaw-managed-agents` is the reference implementation and first vertical
+distro.
+
+Open Managed Agents should copy its strongest decisions:
+
+- API-first service.
+- Four core primitives: `Agent`, `Environment`, `Session`, `Event`.
+- Stateless orchestrator process.
+- Durable metadata stores.
+- Durable session event/state source.
+- One isolated execution environment per active session.
+- Containers as compute caches, sessions as durable resources.
+- Active pool and warm pool.
+- Queueing events posted while a session is running.
+- Restart recovery.
+- SSE event streaming.
+- OpenAI-compatible adoption path.
+- Tool permission policy.
+- Approval flow.
+- Subagents as first-class sessions.
+- Limited networking.
+- Vault/credential boundary work.
+- Metrics, logs, audit, health endpoints.
+- Small-VPS deployability.
+- Developer-as-OEM positioning.
+
+Open Managed Agents should change exactly the parts that make the current repo
+OpenClaw-specific:
+
+- `PiJsonlEventReader` becomes a harness-neutral event log interface.
+- `GatewayWebSocketClient` becomes an adapter-specific control client.
+- `OPENCLAW_*` spawn env becomes adapter-built runtime config.
+- OpenClaw gateway HTTP calls become `HarnessAdapter.startTurn`.
+- OpenClaw tool approval plugin becomes one implementation of a generic approval
+  contract.
+- OpenClaw/Pi session ids become adapter-native session metadata under a managed
+  session id.
+- OpenClaw runtime image becomes one runtime image among several.
+
+This is not "build another platform."
+
+It is:
+
+> extract the managed-agent layer from OpenClaw Managed Agents and make the
+> harness replaceable.
+
+## Two Directions
+
+Both projects can coexist.
+
+| Project | Direction | Why it exists |
+|---|---|---|
+| `openclaw-managed-agents` | OpenClaw-specific managed-agent distro | Best first product for personal OpenClaw agents |
+| `open-managed-agents` | Harness-agnostic managed-agent layer | General Android/OpenRouter layer for managed agents |
+
+The docs should be largely related because the target is the same.
+
+The divergence:
 
 ```text
-client -> managed session API -> runtime adapter -> isolated harness container
+openclaw-managed-agents:
+  personal-first vertical product
+  OpenClaw/Pi as the fixed harness
+  fastest path to "my Claw" products
+
+open-managed-agents:
+  platform-first horizontal product
+  OpenClaw as default/flagship harness
+  Codex/Claude SDK/Hermes/etc. as replaceable drivers
 ```
 
-### 3. Semantics-Agnostic
+Do not erase the OpenClaw wedge.
 
-Every harness behaves identically.
+OpenClaw gives the emotional brand:
 
-This is impossible.
+- personal;
+- open;
+- tool-rich;
+- model-flexible;
+- "my Claw" feeling.
 
-Different harnesses have different capabilities. Some support native tool approvals. Some do not. Some support compaction. Some do not. Some expose rich event streams. Some only expose stdout.
+Open Managed Agents gives the broader infrastructure story:
 
-The correct design is capability-gated agnosticism, not fake sameness.
+- managed portability;
+- model/provider competition;
+- cloud/OEM neutrality;
+- no single harness lock-in.
 
-## Multica Assessment
+## Category Map
 
-Multica is agent-agnostic as a workspace/task runner.
+Use layer language precisely.
 
-It detects installed local agent tools, registers a runtime per daemon/tool/workspace, dispatches tasks, prepares a local workdir, runs the selected CLI, and normalizes messages/results.
+| Layer | Job | Examples | Our relationship |
+|---|---|---|---|
+| Model router | Route inference across providers/models | OpenRouter, LiteLLM, ZenMux | We can consume this; not our main layer |
+| Agent harness | Agent loop, tool protocol, local session semantics | OpenClaw/Pi, Codex App Server, Claude Agent SDK, Hermes, LangGraph, CrewAI | Harnesses become adapters |
+| Managed-agent layer | Agent/session/environment/event API, policy, lifecycle, isolation, observability | Claude Managed Agents, openclaw-managed-agents, open-managed-agents | This is our layer |
+| Container/sandbox runtime | Process/container/microVM execution substrate | Docker, ECS, Cloud Run, Kubernetes, Agent Sandbox, Firecracker | Internal backend |
+| Workflow orchestrator | Decide what work should run, retry/reconcile tasks | OpenAI Symphony | Can run on top |
+| Workspace/team app | Human collaboration around agents | Multica, Linear-like agent workspaces | Can run on top |
+| Cloud/OEM SKU | IAM, billing, regions, support, compliance | Anthropic, AWS, future clouds | We enable this, not operate it ourselves |
 
-That is useful.
+Strategic mistake:
 
-But it is not the same as agent-agnostic managed-agent infrastructure.
+> competing at all layers.
 
-Multica's runtime is:
+Correct move:
+
+> own the open managed-agent layer, with enough runtime substrate to be useful.
+
+## Product Positioning
+
+### Android Versus iOS
+
+The closed path:
 
 ```text
-user machine daemon x one installed AI coding tool
+Developer app
+  -> Claude Managed Agents
+  -> Anthropic managed runtime
+  -> Anthropic harness
+  -> Anthropic models
 ```
 
-It is not a managed sandbox runtime.
-It is not a cloud/session substrate.
-It does not uniformly own security, session durability, event semantics, approval policy, egress, or credentials isolation across harnesses.
+This is iOS:
 
-Sharp conclusion:
+- polished;
+- coherent;
+- easy;
+- closed;
+- premium priced;
+- vendor controlled.
 
-> Multica is agent-agnostic like Zapier is app-agnostic. It can call many things. It is not agent-agnostic like an OS kernel is hardware-agnostic.
-
-This does not make Multica bad. It means it is playing a different game.
-
-## Relationship To OpenClaw
-
-OpenClaw is the flagship harness.
-
-Open Managed Agents is the runtime layer.
-
-OpenClaw gives:
-
-- personal-agent identity
-- broad tools and integrations
-- open model/provider support
-- strong brand direction: "my Claw"
-- practical agent behavior for end-user-facing products
-
-Open Managed Agents gives:
-
-- safety
-- durability
-- policy
-- isolation
-- lifecycle
-- cost control
-- observability
-- multi-harness portability
-
-Product logic:
+The open path:
 
 ```text
-end customers want personal agents
-developers want to build personal-agent products
-direct agent harnesses are unsafe/expensive to operate
-closed managed-agent platforms are safe but locked and expensive
-Open Managed Agents gives a safe, cheap, open runtime
-OpenClaw is the default personal-agent experience on top
+Developer app
+  -> Open Managed Agents
+  -> developer/cloud-OEM infrastructure
+  -> OpenClaw/Codex/Claude SDK/Hermes/etc.
+  -> any model/provider/router
 ```
 
-OpenClaw remains the wedge.
-Open Managed Agents becomes the platform.
+This is Android:
 
-## Why Developers Choose This
+- open;
+- portable;
+- cheaper;
+- OEM-friendly;
+- more fragmented;
+- must be opinionated to stay usable.
 
-The target developers are not agent-framework hobbyists.
+The public sentence:
 
-They are builders of real agent products:
+> Open Managed Agents is the Android path for Claude Managed Agents-style
+> infrastructure.
 
-- personal assistant apps
-- AI employee products
-- vertical workflow agents
-- coding/devops agents
-- support agents with tools
-- research agents
-- finance/ops agents
-- local-first or privacy-sensitive agents
-- agent platforms that need hosted execution
+### OpenRouter For Managed Agents
 
-They choose Open Managed Agents when they need:
+OpenRouter made the model interchangeable behind one developer surface.
 
-- managed execution without model lock-in
-- cheaper model routing
-- OpenClaw/OpenRouter-style provider optionality
-- stable per-user agent sessions
-- tool safety
-- auditability
-- self-hosting
-- embeddable APIs
-- runtime control without building infra from scratch
+Open Managed Agents should make the managed agent harness interchangeable behind
+one developer surface.
 
-They do not choose us because we have one more prompt API.
-They choose us because operating autonomous agents safely is hard.
+Analogy:
 
-## Why Not Direct Agent Harnesses
+```text
+OpenRouter:
+  one API surface
+  many model providers
+  price/performance competition
 
-Direct OpenClaw / Codex / Claude SDK / Hermes is easier at first.
+Open Managed Agents:
+  one managed-agent API surface
+  many agent harnesses
+  model/framework/cloud competition
+```
+
+OpenRouter routes inference.
+
+Open Managed Agents manages execution.
+
+That difference matters. We are not only proxying requests. We own sessions,
+state, isolation, tools, approvals, events, credentials, and lifecycle.
+
+## Who Uses This
+
+The user is a developer or cloud/OEM building agent products.
+
+They are not buying "agent theory."
+
+They need a service boundary:
+
+- create an agent;
+- create a session;
+- send an event;
+- stream events;
+- inspect logs;
+- approve tools;
+- cancel/interrupt;
+- cap spend;
+- isolate workspace;
+- recover after deploys;
+- route to cheaper models;
+- swap the harness if the product needs it.
+
+Product builders:
+
+- personal assistant apps;
+- personal OpenClaw-style products;
+- coding/devops agents;
+- vertical workflow agents;
+- support/ops agents with tools;
+- finance/research agents;
+- local-first or VPC-sensitive products;
+- cloud providers packaging managed agents;
+- workspace products that do not want to own runtime infra.
+
+The reason they choose us:
+
+> Direct harnesses are too raw. Closed managed agents are too locked. Building
+> the managed layer themselves is too much infrastructure work.
+
+## Why Direct Harnesses Are Not Enough
+
+Direct OpenClaw, Codex, Claude Agent SDK, Hermes, or LangGraph is easier for a
+demo.
 
 It breaks when the product needs:
 
-- many users
-- durable sessions
-- background runs
-- cancellation
-- approval gates
-- rate limits
-- cost budgets
-- sandboxing
-- credential boundaries
-- observability
-- audit logs
-- model/provider routing
-- warm starts
-- deployment repeatability
+- many users;
+- durable multi-turn sessions;
+- background execution;
+- event streaming;
+- restart recovery;
+- tool approval;
+- cancellation/interruption;
+- quotas and rate limits;
+- cost accounting;
+- credential boundaries;
+- network policy;
+- sandbox lifecycle;
+- warm starts;
+- audit logs;
+- subagent visibility;
+- deployment repeatability.
 
 Direct harness usage is library integration.
+
 Managed agents is product infrastructure.
 
 ## Why Not Claude Managed Agents Or Bedrock
 
-Closed managed-agent platforms are safer than direct harnesses.
+Claude Managed Agents and Bedrock/AgentCore validate the need.
 
-But they are expensive and strategically constrained:
+But closed vendor platforms have structural constraints:
 
-- tied to vendor models
-- tied to vendor cloud/runtime assumptions
-- limited framework choice
-- weak portability
-- pricing controlled by the model/platform owner
-- hard to customize deeply
-- not ideal for open personal-agent products
+- vendor model gravity;
+- vendor cloud gravity;
+- premium pricing;
+- limited harness choice;
+- limited runtime portability;
+- weaker self-host/VPC story unless using the vendor's cloud;
+- platform roadmap controlled by someone else.
 
-OpenAI and Anthropic monetize their model APIs directly.
-They are not structurally incentivized to collapse agent execution pricing through open model competition.
+OpenAI and Anthropic monetize model usage directly. They are not structurally
+incentivized to make agent execution a cheap, open, model-competitive commodity.
 
-Open Managed Agents can route to strong cheaper models, including DeepSeek, Moonshot, Qwen, open-weight providers, OpenRouter-like routers, and future commodity inference.
+That is the opening.
 
-This is the timing window.
+Open Managed Agents can use strong cheaper models and routers:
 
-## Competitive Map
+- DeepSeek;
+- Moonshot/Kimi;
+- Qwen;
+- open-weight providers;
+- OpenRouter-like routers;
+- ZenMux-like routers;
+- future commodity inference.
 
-| Product | What It Really Is | Strength | Weakness | Our Read |
-|---|---|---|---|---|
-| Claude Managed Agents | Closed managed runtime for Claude agents | polished, safe, vendor-backed | Anthropic/model lock-in, expensive, narrow harness surface | validates category |
-| Amazon Bedrock Managed Agents / AgentCore | AWS managed infra for enterprise agents | cloud primitives, governance, enterprise trust | AWS complexity, Bedrock gravity, not personal-agent-native | validates infra need |
-| OpenAI Symphony | orchestration around Codex-style managed coding agents | strong coding workflow and OpenAI ecosystem | OpenAI model/business gravity, likely less open runtime substrate | validates orchestration need |
-| Multica | workspace app + local daemon + many agent CLI adapters | practical multi-agent task execution | not a true managed-agent OS layer | useful reference, different game |
-| OpenClaw Managed Agents | OpenClaw-specific managed runtime | strong personal-agent wedge, real container/session infra | harness hardcoded to OpenClaw today | starting point |
-| Open Managed Agents | open managed runtime for many harnesses | open, cheap, portable, foundational | harder abstraction, must handle capability differences honestly | target platform |
+The managed-agent layer becomes the place where cheap model competition turns
+into product economics.
 
-## Technical Architecture
+## Multica Assessment
 
-The key abstraction is a harness adapter above container runtime.
+Multica is agent-agnostic as a workspace/task product.
+
+It detects installed local agent tools, registers one runtime per
+`workspace x daemon x provider`, creates local workdirs, invokes CLIs, and
+normalizes task messages/results.
+
+That is adapter-agnostic.
+
+It is not the same as a harness-agnostic managed-agent layer.
+
+Multica's current execution center is:
 
 ```text
-Client / SDK / OpenAI-compatible API
-        |
-Managed Agent API
-        |
-Agent Router
-        |
-        |-- Session Store
-        |-- Queue Store
-        |-- Environment Store
-        |-- Vault / Secrets
-        |-- Managed Event Log
-        |-- Metrics / Audit
-        |
-Harness Adapter Registry
-        |
-        |-- OpenClaw Adapter
-        |-- Codex Adapter
-        |-- Claude Agent SDK Adapter
-        |-- Hermes Adapter
-        |-- Generic CLI Adapter
-        |
-Container Runtime
-        |
-        |-- Docker
-        |-- ECS / Fargate
-        |-- Cloud Run
-        |-- Kubernetes
-        |-- Local Worker
+user machine daemon x installed AI coding CLI
+```
+
+Open Managed Agents' execution center should be:
+
+```text
+managed session API x isolated runtime x harness adapter
+```
+
+Sharp distinction:
+
+> Multica manages work assigned to many agents. Open Managed Agents manages the
+> runtime contract that makes agents safe, durable, and product-ready.
+
+Multica could become a client of Open Managed Agents if it wants real cloud
+managed execution.
+
+## What To Keep From openclaw-managed-agents
+
+This is the key engineering instruction.
+
+Do not throw away working infrastructure.
+
+| Area | Keep? | Reason |
+|---|---:|---|
+| Hono HTTP server | Yes | API shape is already close to Claude Managed Agents primitives |
+| `Agent`, `Environment`, `Session`, `Event` public model | Yes | This is the standard |
+| SQLite-backed stores | Yes | Good v1 self-host persistence |
+| QueueStore per session | Yes | Correct for events posted while running |
+| Session status machine | Yes | Useful managed lifecycle boundary |
+| `SessionContainerPool` active/warm pool idea | Yes | Core runtime substrate |
+| Docker backend | Yes | Best default self-host backend |
+| Limited networking sidecar | Yes | Important Claude parity/security feature |
+| Auth/rate limiting | Yes | Necessary for public API |
+| Pino logs and Prometheus metrics | Yes | Operationally useful |
+| OpenAI-compatible endpoint | Yes | Adoption path |
+| Python/TypeScript SDK direction | Yes | Developer distribution |
+| Deploy scripts | Yes | Small-OEM install path |
+| Subagents as first-class sessions | Yes | Strong product/observability model |
+| Parent-token lineage model | Yes | Generalize beyond OpenClaw |
+| Vault/secret work | Yes | Needs hardening, but direction is right |
+| Portal | Maybe | Useful inspector, but do not drift into Multica workspace app |
+
+## What Must Change
+
+| Current OpenClaw-specific part | Generalized Open Managed Agents version |
+|---|---|
+| `PiJsonlEventReader` is the event source | `ManagedEventLog` interface, with OpenClaw/Pi JSONL as one adapter source |
+| `GatewayWebSocketClient` is attached to every pool entry | Adapter-owned `ControlClient` with capability-gated methods |
+| Router builds `OPENCLAW_*` env vars | Harness adapter builds spawn spec/config |
+| Router calls OpenClaw `/v1/chat/completions` | Router calls `HarnessAdapter.startTurn` |
+| OpenClaw gateway session key is canonical | Managed session id is canonical; native session id is adapter metadata |
+| Tool approval depends on OpenClaw plugin | Generic approval event contract; OpenClaw plugin is one implementation |
+| MCP shape passes through to `openclaw.json` | MCP becomes managed config mapped per adapter |
+| Thinking level is Pi/OpenClaw-specific | Capability-gated reasoning config |
+| Runtime image pins `openclaw` | Multiple harness runtime images |
+| `openclaw-call-agent` CLI | Generic `oma-call-agent` injected into compatible runtimes |
+| `OPENCLAW_*` env names | `OMA_*` platform env plus adapter-specific env |
+| Events are not stored by orchestrator | Orchestrator owns normalized event log for non-native adapters |
+| Warm-pool compatibility only considers OpenClaw config | Warm-pool signature includes adapter kind, image, capabilities, config, secrets generation |
+
+## Target Architecture
+
+```mermaid
+flowchart TB
+  Client["Client, SDK, or OpenAI-compatible client"] --> API["Open Managed Agents API"]
+
+  subgraph ManagedLayer["Managed-agent layer"]
+    API --> Server["HTTP server<br/>auth, rate limits, SSE, OpenAI shim"]
+    Server --> Router["AgentRouter<br/>run, queue, cancel, approvals, subagents"]
+    Router --> Stores["Stores<br/>agents, environments, sessions, queue, vault, audit"]
+    Router --> Events["ManagedEventLog<br/>normalized durable event stream"]
+    Router --> Registry["HarnessAdapterRegistry"]
+    Router --> Pool["SessionRuntimePool<br/>active, warm, eviction, reap"]
+  end
+
+  subgraph Adapters["Harness adapters"]
+    Registry --> OpenClaw["OpenClaw adapter"]
+    Registry --> Codex["Codex adapter"]
+    Registry --> ClaudeSDK["Claude Agent SDK adapter"]
+    Registry --> Hermes["Hermes adapter"]
+    Registry --> GenericCLI["Generic CLI adapter"]
+  end
+
+  subgraph RuntimeSubstrate["Runtime substrate"]
+    Pool --> ContainerRuntime["ContainerRuntime<br/>Docker first, cloud backends later"]
+    ContainerRuntime --> HarnessContainer["Per-session or warm harness container"]
+    ContainerRuntime --> Sidecar["Optional egress proxy sidecar"]
+    HarnessContainer --> AdapterServer["OMA adapter server<br/>common internal protocol"]
+    AdapterServer --> NativeHarness["Native harness<br/>OpenClaw, Codex, Claude SDK, Hermes"]
+    NativeHarness --> Tools["Tools, files, shell, MCP"]
+    NativeHarness --> Models["Model providers and routers"]
+    HarnessContainer --> Workspace["Mounted workspace/session state"]
+  end
+
+  AdapterServer --> Events
+  Tools --> Workspace
 ```
 
 ## Harness Adapter Contract
 
-The adapter is the driver model.
+The harness adapter is the new core abstraction.
+
+It lives above `ContainerRuntime`.
+
+`ContainerRuntime` answers:
+
+> How do I spawn/stop/inspect an isolated execution unit?
+
+`HarnessAdapter` answers:
+
+> How do I run a managed agent session inside that execution unit?
 
 Rough contract:
 
 ```ts
-interface AgentHarnessAdapter {
-  kind: string;
+type HarnessKind =
+  | "openclaw"
+  | "codex"
+  | "claude_agent_sdk"
+  | "hermes"
+  | "pi"
+  | "opencode"
+  | "generic_cli";
 
-  capabilities(): HarnessCapabilities;
-
-  buildSpawnSpec(ctx: SpawnContext): SpawnOptions;
-
-  startTurn(ctx: TurnContext): Promise<TurnResult>;
-
-  cancel?(ctx: SessionContext): Promise<void>;
-  interrupt?(ctx: SessionContext, message: string): Promise<void>;
-  compact?(ctx: SessionContext): Promise<void>;
-  confirmTool?(
-    ctx: SessionContext,
-    approvalId: string,
-    decision: "allow" | "deny"
-  ): Promise<void>;
-
-  listEvents(ctx: SessionContext): Promise<ManagedEvent[]>;
-  followEvents?(ctx: SessionContext): AsyncIterable<ManagedEvent>;
-}
-```
-
-Capabilities must be explicit:
-
-```ts
 type HarnessCapabilities = {
   streaming: boolean;
   cancel: boolean;
@@ -382,47 +560,40 @@ type HarnessCapabilities = {
   compaction: boolean;
   nativeSessionResume: boolean;
   usage: boolean;
+  subagents: boolean;
 };
+
+interface HarnessAdapter {
+  kind: HarnessKind;
+  capabilities(config: AgentRuntimeConfig): HarnessCapabilities;
+
+  buildSpawnSpec(ctx: SpawnContext): SpawnOptions;
+  waitReady(ctx: ReadyContext): Promise<void>;
+
+  startTurn(ctx: TurnContext): Promise<TurnResult>;
+
+  cancel?(ctx: SessionControlContext): Promise<void>;
+  interrupt?(ctx: SessionControlContext, message: string): Promise<void>;
+  compact?(ctx: SessionControlContext): Promise<void>;
+  confirmTool?(
+    ctx: SessionControlContext,
+    approvalId: string,
+    decision: "allow" | "deny"
+  ): Promise<void>;
+
+  listEvents(ctx: SessionContext): Promise<ManagedEvent[]>;
+  followEvents?(ctx: SessionContext): AsyncIterable<ManagedEvent>;
+}
 ```
 
-No fake uniformity.
-Unsupported features fail loudly.
+Do not promise semantic equality.
 
-## Managed Event Log
+Promise managed portability.
 
-The event log is the spine.
+## Internal Adapter Protocol
 
-Today OpenClaw Managed Agents reads Pi/OpenClaw JSONL.
-That is fine for OpenClaw, but it cannot be the platform contract.
-
-Open Managed Agents needs a harness-neutral event log:
-
-- `user.message`
-- `agent.message`
-- `agent.thinking`
-- `agent.tool_call`
-- `agent.tool_result`
-- `agent.error`
-- `agent.usage`
-- `agent.tool_confirmation_request`
-- `session.compaction`
-- `session.cancelled`
-- `session.delegation_started`
-- `session.delegation_completed`
-
-Adapters can source events differently:
-
-- OpenClaw adapter: read native Pi JSONL and map it
-- Codex adapter: capture JSON-RPC/app-server events and append normalized events
-- Claude SDK adapter: capture SDK stream and append normalized events
-- Hermes adapter: capture ACP/events and append normalized events
-- Generic CLI adapter: parse stdout/stderr with weaker guarantees
-
-Public APIs should read the managed event log, not a harness-native file.
-
-## Internal Runtime Protocol
-
-Each harness image should expose a small common internal API to the orchestrator.
+To avoid turning the orchestrator into a pile of native protocols, each harness
+runtime image should expose a small common adapter server.
 
 ```text
 GET  /readyz
@@ -436,178 +607,325 @@ GET  /sessions/:id/outcome
 GET  /logs
 ```
 
-This avoids baking every native harness protocol into the orchestrator.
+For OpenClaw, the adapter can wrap:
 
-The orchestrator manages sessions.
-The adapter container translates to native harness behavior.
+- OpenClaw gateway HTTP;
+- OpenClaw gateway WS control plane;
+- Pi/OpenClaw JSONL.
 
-## Runtime Images
+For Codex, the adapter can wrap:
 
-Initial images:
+- Codex App Server / JSON-RPC;
+- Codex session/thread id;
+- Codex event stream.
 
-- `open-managed-agents/openclaw-runtime`
-- `open-managed-agents/codex-runtime`
-- `open-managed-agents/hermes-runtime`
-- `open-managed-agents/claude-sdk-runtime`
-- `open-managed-agents/generic-cli-runtime`
+For Claude Agent SDK, the adapter can wrap:
 
-OpenClaw runtime should remain the flagship.
+- SDK stream;
+- SDK tool hooks;
+- SDK session/resume semantics where available.
 
-Codex/Hermes should be used to validate that the platform is genuinely harness-pluggable.
+For Hermes, the adapter can wrap:
 
-Claude SDK support matters, but should not define the architecture.
+- Hermes/ACP protocol;
+- native session metadata;
+- event stream.
+
+The orchestrator should speak one managed adapter protocol.
+The adapter should speak native harness protocol.
+
+## Managed Event Log
+
+The event log is the spine of managed agents.
+
+OpenClaw Managed Agents currently gets this by reading Pi/OpenClaw JSONL. That is
+excellent for OpenClaw, but not enough for an agent-agnostic platform.
+
+Open Managed Agents needs a normalized durable event log.
+
+Baseline event types:
+
+- `user.message`
+- `user.tool_confirmation`
+- `agent.message`
+- `agent.thinking`
+- `agent.tool_call`
+- `agent.tool_result`
+- `agent.tool_confirmation_request`
+- `agent.status`
+- `agent.error`
+- `agent.usage`
+- `session.started`
+- `session.cancelled`
+- `session.compaction`
+- `session.delegation_started`
+- `session.delegation_completed`
+
+Adapter event sourcing:
+
+| Adapter | Event source |
+|---|---|
+| OpenClaw | Read native Pi/OpenClaw JSONL and/or mirror into managed log |
+| Codex | Capture app-server/JSON-RPC notifications and append managed events |
+| Claude SDK | Capture SDK stream and append managed events |
+| Hermes | Capture ACP/native stream and append managed events |
+| Generic CLI | Parse stdout/stderr with weaker guarantees and mark capability limits |
+
+Important rule:
+
+> The public API reads managed events. Native events are adapter implementation
+> details.
+
+OpenClaw JSONL can remain a trusted native source, but the public platform cannot
+be Pi-JSONL-shaped forever.
+
+## Capability-Gated Compatibility
+
+Agent-agnostic does not mean every harness supports every feature.
+
+The platform should expose a capability matrix and reject unsupported operations
+loudly.
+
+| Capability | OpenClaw | Codex | Claude SDK | Hermes | Generic CLI |
+|---|---:|---:|---:|---:|---:|
+| Start turn | yes | yes | yes | yes | yes |
+| Streaming events | yes | yes | yes | likely | maybe |
+| Native resume | yes | yes | likely | likely | maybe |
+| Cancel | yes | yes | likely | likely | process kill |
+| Interrupt/steer | yes | maybe | maybe | maybe | no |
+| Tool approvals | yes via plugin | maybe | SDK hooks maybe | maybe | no/weak |
+| MCP | yes | depends | depends | depends | no/weak |
+| Compaction | yes | maybe | maybe | maybe | no |
+| Usage/cost | yes | yes/partial | yes/partial | partial | weak |
+| Subagents | yes via injected CLI | yes if tool/shell | yes if tool hook | maybe | weak |
+
+This table should become tested metadata, not marketing copy.
 
 ## Data Model Direction
 
-Agent templates need runtime identity:
+Agent config needs a runtime block.
 
 ```ts
 type AgentConfig = {
   agentId: string;
+  name?: string;
+
   runtime: {
-    kind: "openclaw" | "codex" | "claude_sdk" | "hermes" | "generic_cli";
+    kind: HarnessKind;
     image?: string;
     config: Record<string, unknown>;
   };
+
   model?: string;
   instructions?: string;
   tools?: string[];
   mcpServers?: Record<string, unknown>;
   permissionPolicy?: PermissionPolicy;
-  quotas?: Quota;
+  quota?: Quota;
+  callableAgents?: string[];
+  maxSubagentDepth?: number;
 };
 ```
 
-Sessions need native runtime metadata:
+Session config needs native metadata.
 
 ```ts
 type Session = {
   sessionId: string;
   agentId: string;
-  runtimeKind: string;
+  runtimeKind: HarnessKind;
   nativeSessionId?: string;
+  nativeThreadId?: string;
   status: "idle" | "starting" | "running" | "failed" | "cancelled";
-  eventSource: "managed" | "native_openclaw_jsonl";
+  capabilitySnapshot: HarnessCapabilities;
 };
 ```
 
-## Migration From OpenClaw Managed Agents
+Environment config needs to stay mostly compatible with Claude Managed Agents:
 
-Do not throw away the existing project.
+```ts
+type Environment = {
+  environmentId: string;
+  packages?: {
+    apt?: string[];
+    pip?: string[];
+    npm?: string[];
+    cargo?: string[];
+    gem?: string[];
+    go?: string[];
+  };
+  networking?: "unrestricted" | {
+    type: "limited";
+    allowedHosts: string[];
+  };
+  files?: Record<string, string>;
+  runtimeImage?: string;
+};
+```
 
-Extract it.
+## Current Status
 
-Phase 1:
+This repo currently contains strategy only.
 
-- create new repo
-- copy the strategic direction only
-- do not mutate current OpenClaw Managed Agents
+The implementation should not start from scratch.
 
-Phase 2:
+The correct implementation path is:
 
-- port current infrastructure into new repo
-- wrap current OpenClaw-specific logic as `OpenClawHarnessAdapter`
-- keep behavior identical
+1. Copy or port the working `openclaw-managed-agents` codebase into this repo.
+2. Keep behavior identical with only naming/build changes.
+3. Extract OpenClaw-specific pieces behind `OpenClawHarnessAdapter`.
+4. Introduce managed event log abstraction.
+5. Add one second real adapter.
+6. Only then claim agent-agnostic execution.
 
-Phase 3:
+## Extraction Plan From openclaw-managed-agents
 
-- introduce `ManagedEventLog`
-- keep OpenClaw JSONL read-through as compatibility path
-- make router depend on event-log interface
+### Phase 0 - Strategy
 
-Phase 4:
+- [x] Create repo.
+- [x] Create strategy doc.
+- [x] Recenter strategy as a generalization of `openclaw-managed-agents`.
 
-- add second adapter: Codex or Hermes
-- implement harness contract tests
-- expose capability matrix
+### Phase 1 - Baseline Port
 
-Phase 5:
+- [ ] Copy the current orchestrator/runtime/store/server/SDK/deploy structure.
+- [ ] Rename project-level labels from OpenClaw-specific to Open Managed Agents
+      where they are platform-level.
+- [ ] Keep OpenClaw runtime as the only working adapter.
+- [ ] Do not change behavior yet.
+- [ ] Keep tests passing.
 
-- add Claude Agent SDK adapter
-- add cloud runtime backends
-- build hosted control-plane packaging
+### Phase 2 - Adapter Boundary
 
-## The Hard Part
+- [ ] Create `src/harness/adapter.ts`.
+- [ ] Move `buildSpawnOptions` OpenClaw env construction into
+      `OpenClawHarnessAdapter`.
+- [ ] Move OpenClaw `/v1/chat/completions` invocation into adapter.
+- [ ] Move OpenClaw WS control calls behind adapter control methods.
+- [ ] Move Pi JSONL mapping behind adapter event source.
+- [ ] Keep the public API unchanged.
 
-The hard part is not launching different CLIs.
+### Phase 3 - Managed Event Log
 
-Multica proves that is doable.
+- [ ] Define `ManagedEventLog`.
+- [ ] Implement SQLite or file-backed normalized event log.
+- [ ] Keep OpenClaw JSONL read-through initially.
+- [ ] Add optional mirroring from OpenClaw JSONL to managed events.
+- [ ] Make server/router read through the event interface.
 
-The hard part is making different harnesses safe and operationally consistent under one managed layer.
+### Phase 4 - Second Adapter
 
-Hard problems:
+- [ ] Choose Codex or Hermes as the first non-OpenClaw adapter.
+- [ ] Build a runtime image with the common adapter server.
+- [ ] Implement start/resume/cancel/events.
+- [ ] Add harness contract tests.
+- [ ] Publish capability matrix from code.
 
-- common session semantics
-- event durability
-- cancellation semantics
-- approval semantics
-- model/cost accounting
-- tool policy normalization
-- persistent memory differences
-- credentials injection
-- sandbox escape surface
-- MCP compatibility
-- subagent delegation
-- warm pool behavior
+### Phase 5 - Claude SDK Adapter
 
-This is why the product is valuable.
+- [ ] Add Claude Agent SDK runtime image.
+- [ ] Map SDK stream to managed events.
+- [ ] Map tool hooks to approval events where possible.
+- [ ] Document exactly what differs from Claude Managed Agents.
 
-## Strategic Rule
+### Phase 6 - Cloud Backends
 
-Never sell fake sameness.
+- [ ] Keep Docker as default.
+- [ ] Add runtime backend factory.
+- [ ] Explore ECS/Fargate, Cloud Run, Kubernetes, and Agent Sandbox.
+- [ ] Do not block the product on this.
 
-Sell managed portability.
+## Comparison
 
-Correct promise:
+| Aspect | Open Managed Agents | openclaw-managed-agents | Claude Managed Agents | Bedrock AgentCore | Symphony | Multica |
+|---|---|---|---|---|---|---|
+| Primary layer | Managed-agent layer | Managed-agent layer for OpenClaw | Closed managed-agent platform | AWS enterprise agent platform | Workflow orchestration | Workspace/task app |
+| Harness | Pluggable | OpenClaw/Pi | Claude harness | Any framework in AWS model | Usually Codex | Local CLIs |
+| Main standard | Claude Managed Agents-shaped primitives | Same | Native | AWS/AgentCore | Issue/workflow spec | Workspace/task model |
+| Execution owner | Self-host/OEM | Self-host/OEM | Anthropic | AWS | User/operator | Local daemon/cloud app |
+| Event model | Managed normalized log | Pi/OpenClaw JSONL projected | First-class persisted events | Traces/streams/observability | Logs/status | Task messages |
+| Isolation | Runtime substrate, Docker first | Docker per active session | Managed containers | MicroVM/session isolation | Implementation-defined | Local workdir/CLI sandbox |
+| Model choice | Any provider/router per adapter | Any OpenClaw provider/router | Anthropic | Bedrock/external via AWS path | Underlying agent | Underlying CLI |
+| Openness | OSS platform | OSS vertical distro | Proprietary | Proprietary AWS | OSS orchestrator | OSS app |
+| Best at | Open Android layer for managed agents | Personal OpenClaw product wedge | Claude-native polish | Enterprise AWS governance | Issue-agent orchestration | Human workspace UX |
+| Main risk | Adapter complexity and fake uniformity | Too OpenClaw-specific | Lock-in/pricing | AWS gravity | Not runtime layer | Not true managed runtime |
 
-> Bring your harness. We manage the runtime.
+## Strategic Rules
 
-Incorrect promise:
+1. Do not start from scratch.
 
-> Every harness works exactly the same.
+   Use `openclaw-managed-agents` as the working base.
 
-## Initial Product Wedge
+2. Do not dilute the target.
 
-The first wedge remains personal agents.
+   The target is still an open Claude Managed Agents-style product layer.
 
-OpenClaw gives the brand:
+3. Do not fake parity.
 
-- personal
-- open
-- tool-rich
-- model-flexible
-- emotionally ownable: "my Claw"
+   Harness differences must be explicit and capability-gated.
 
-Open Managed Agents gives the trust layer:
+4. Do not become Multica.
 
-- safe
-- private
-- cheap
-- stable
-- observable
-- embeddable
+   A portal/inspector is fine. A workspace/issue app is a different layer.
 
-The combined message:
+5. Do not become Symphony.
 
-> Build personal-agent products without trusting one closed model vendor or rebuilding managed-agent infra yourself.
+   Workflow orchestration should run on top, not become core.
 
-## Short-Term TODOs
+6. Do not become only a model router.
 
-- [ ] Create repo skeleton
-- [ ] Define harness adapter interface
-- [ ] Define managed event schema
-- [ ] Define runtime capability matrix
-- [ ] Define OpenClaw adapter extraction plan
-- [ ] Decide first non-OpenClaw adapter: Codex or Hermes
-- [ ] Write architecture diagram
-- [ ] Write comparison doc versus Claude Managed Agents, Bedrock, Symphony, Multica
-- [ ] Decide naming: `open-managed-agents` repo, `oma` package/CLI maybe later
+   OpenRouter analogy is about openness and interchangeability. Our product owns
+   execution lifecycle, not just inference routing.
+
+7. Keep OpenClaw as the flagship.
+
+   Agent-agnostic does not mean brandless. OpenClaw is the best default harness
+   for personal-agent products.
+
+## Open Questions
+
+- Should `openclaw-managed-agents` remain a separate vertical distro forever, or
+  eventually become `open-managed-agents` with `runtime.kind = "openclaw"`?
+- Should the first non-OpenClaw adapter be Codex or Hermes?
+- Should managed events be stored in SQLite, JSONL, or both?
+- Should OpenClaw JSONL be mirrored into managed events or read-through forever?
+- How much exact Claude Managed Agents API compatibility is useful versus
+  misleading?
+- What is the minimum adapter capability set before we call a harness
+  "supported"?
+- Should `ContainerRuntime` be renamed to avoid confusion with harness runtime?
+- Should public package names use `oma`, `open-managed-agents`, or something
+  more brandable?
+
+## Immediate TODO
+
+- [ ] Add a repo `README.md` with the sharp positioning.
+- [ ] Add an `AGENTS.md` for this repo explaining that it generalizes
+      `openclaw-managed-agents`.
+- [ ] Port the current codebase into this repo without changing behavior.
+- [ ] Add `docs/architecture.md` describing the adapter boundary.
+- [ ] Define `HarnessAdapter` and `ManagedEventLog` interfaces before adding any
+      second adapter.
+- [ ] Write an explicit keep/change migration checklist from the current
+      OpenClaw-specific code.
+- [ ] Decide first second adapter: Codex if we want OpenAI/Symphony relevance,
+      Hermes if we want OpenClaw ecosystem continuity.
 
 ## Decision
 
-Build Open Managed Agents as a separate repo.
+Build Open Managed Agents as the horizontal project.
 
-Keep OpenClaw Managed Agents untouched for now.
+Keep `openclaw-managed-agents` untouched for now.
 
-Use it as the working reference implementation, not the final architecture boundary.
+Treat it as the reference vertical implementation.
+
+The next engineering move is not invention.
+
+It is extraction:
+
+```text
+OpenClaw-specific managed runtime
+  -> OpenClaw adapter
+  -> harness-agnostic managed-agent layer
+```
 
