@@ -48,6 +48,7 @@ function makeApp(opts: {
   }
 
   const events = {
+    stateRoot: "/tmp/open-managed-agents-test-state",
     latestAgentMessage(_agentId: string, sessionId: string) {
       return latestAgentMessageFor(sessionId);
     },

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { ManagedEventLog } from "../events/types.js";
 import type { GatewayWebSocketClient } from "../runtime/gateway-ws.js";
 import { ParentTokenMinter } from "../runtime/parent-token.js";
 import type { SessionContainerPool } from "../runtime/pool.js";
@@ -21,7 +22,7 @@ import {
 
 function makeRouter(opts: {
   poolStub?: Partial<SessionContainerPool>;
-  eventReaderStub?: Partial<PiJsonlEventReader>;
+  eventReaderStub?: Partial<ManagedEventLog>;
   passthroughEnv?: Record<string, string>;
 } = {}): {
   router: AgentRouter;
@@ -37,7 +38,7 @@ function makeRouter(opts: {
   // their own shaped stub.
   const pool = (opts.poolStub ?? {}) as SessionContainerPool;
   const eventReader = (opts.eventReaderStub ??
-    new PiJsonlEventReader("/tmp/does-not-exist")) as PiJsonlEventReader;
+    new PiJsonlEventReader("/tmp/does-not-exist")) as ManagedEventLog;
   const cfg: RouterConfig = {
     runtimeImage: "test-image",
     hostStateRoot: "/tmp/test-state",
@@ -555,7 +556,7 @@ describe("AgentRouter.runEvent — JSONL advancement guarantees", () => {
           ({ baseUrl: "http://container.test", token: "tok" }) as any,
         evictSession: async () => {},
       },
-      eventReaderStub: fakeEvents as unknown as PiJsonlEventReader,
+      eventReaderStub: fakeEvents as unknown as ManagedEventLog,
     });
     const agent = seedAgent(store);
     const session = router.createSession(agent.agentId);
@@ -594,7 +595,7 @@ describe("AgentRouter.runEvent — JSONL advancement guarantees", () => {
           ({ baseUrl: "http://container.test", token: "tok" }) as any,
         evictSession: async () => {},
       },
-      eventReaderStub: fakeEvents as unknown as PiJsonlEventReader,
+      eventReaderStub: fakeEvents as unknown as ManagedEventLog,
     });
     const agent = seedAgent(store);
     const session = router.createSession(agent.agentId);
@@ -660,7 +661,7 @@ describe("AgentRouter.runEvent — JSONL advancement guarantees", () => {
           ({ baseUrl: "http://container.test", token: "tok" }) as any,
         evictSession: async () => {},
       },
-      eventReaderStub: fakeEvents as unknown as PiJsonlEventReader,
+      eventReaderStub: fakeEvents as unknown as ManagedEventLog,
     });
     const agent = seedAgent(store);
     const session = router.createSession(agent.agentId);
@@ -717,7 +718,7 @@ describe("AgentRouter.runEvent — JSONL advancement guarantees", () => {
           ({ baseUrl: "http://container.test", token: "tok" }) as any,
         evictSession: async () => {},
       },
-      eventReaderStub: fakeEvents as unknown as PiJsonlEventReader,
+      eventReaderStub: fakeEvents as unknown as ManagedEventLog,
     });
     const agent = seedAgent(store);
     const session = router.createSession(agent.agentId);
@@ -784,7 +785,7 @@ describe("AgentRouter.runEvent — JSONL advancement guarantees", () => {
         },
         evictSession: async () => {},
       },
-      eventReaderStub: fakeEvents as unknown as PiJsonlEventReader,
+      eventReaderStub: fakeEvents as unknown as ManagedEventLog,
     });
     const agent = store.agents.create({
       model: "moonshot/kimi-k2.5",
@@ -878,7 +879,7 @@ describe("AgentRouter.runEvent — JSONL advancement guarantees", () => {
         getWsClient: () => fakeWs as unknown as GatewayWebSocketClient,
         evictSession: async () => {},
       },
-      eventReaderStub: fakeEvents as unknown as PiJsonlEventReader,
+      eventReaderStub: fakeEvents as unknown as ManagedEventLog,
     });
     const agent = store.agents.create({
       model: "moonshot/kimi-k2.5",
@@ -974,7 +975,7 @@ describe("AgentRouter.runEvent — JSONL advancement guarantees", () => {
         getWsClient: () => fakeWs as unknown as GatewayWebSocketClient,
         evictSession: async () => {},
       },
-      eventReaderStub: fakeEvents as unknown as PiJsonlEventReader,
+      eventReaderStub: fakeEvents as unknown as ManagedEventLog,
     });
     const agent = store.agents.create({
       model: "moonshot/kimi-k2.5",
@@ -1049,7 +1050,7 @@ describe("AgentRouter.runEvent — JSONL advancement guarantees", () => {
           ({ baseUrl: "http://container.test", token: "tok" }) as any,
         evictSession: async () => {},
       },
-      eventReaderStub: fakeEvents as unknown as PiJsonlEventReader,
+      eventReaderStub: fakeEvents as unknown as ManagedEventLog,
     });
     const agent = seedAgent(store);
     const session = router.createSession(agent.agentId);
@@ -1111,7 +1112,7 @@ describe("AgentRouter.runEvent — JSONL advancement guarantees", () => {
           ({ baseUrl: "http://container.test", token: "tok" }) as any,
         evictSession: async () => {},
       },
-      eventReaderStub: fakeEvents as unknown as PiJsonlEventReader,
+      eventReaderStub: fakeEvents as unknown as ManagedEventLog,
     });
     const agent = seedAgent(store);
     const session = router.createSession(agent.agentId);
@@ -1198,7 +1199,7 @@ describe("AgentRouter.runEvent — JSONL advancement guarantees", () => {
           ({ baseUrl: "http://container.test", token: "tok" }) as any,
         evictSession: async () => {},
       },
-      eventReaderStub: fakeEvents as unknown as PiJsonlEventReader,
+      eventReaderStub: fakeEvents as unknown as ManagedEventLog,
       passthroughEnv: { ZENMUX_API_KEY: "sk-test" },
     });
     const agent = store.agents.create({

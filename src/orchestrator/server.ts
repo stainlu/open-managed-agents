@@ -6,6 +6,7 @@ import { createAuthMiddleware } from "../auth.js";
 import { writeAudit } from "../audit.js";
 import { addContext, getLogger, withContext } from "../log.js";
 import { createRateLimitMiddleware } from "../rate-limit.js";
+import type { ManagedEventLog } from "../events/types.js";
 import {
   agentsCreatedTotal,
   httpRequestDurationSeconds,
@@ -14,7 +15,6 @@ import {
   sessionEventsTotal,
 } from "../metrics.js";
 import type { ParentTokenMinter } from "../runtime/parent-token.js";
-import type { PiJsonlEventReader } from "../store/pi-jsonl.js";
 import type {
   AgentStore,
   AuditStore,
@@ -105,7 +105,7 @@ export type ServerDeps = {
   agents: AgentStore;
   environments: EnvironmentStore;
   sessions: SessionStore;
-  events: PiJsonlEventReader;
+  events: ManagedEventLog;
   audit: AuditStore;
   vaults: VaultStore;
   router: AgentRouter;
@@ -381,7 +381,7 @@ async function validateAndCanonicalizeModel(
 
 // Session response shape. `output` is a computed convenience: the content of
 // the most recent agent.message in the session, or null if none yet. The
-// event log lives in Pi's JSONL on the host mount — see PiJsonlEventReader.
+// Event log lives behind ManagedEventLog; OpenClaw uses Pi JSONL on the host mount.
 //
 // container metadata (boot_ms / pool_source / container_id) comes from
 // SessionContainerStore, not from the Session row — the container is
@@ -390,7 +390,7 @@ async function validateAndCanonicalizeModel(
 // and these fields go null on subsequent responses.
 async function sessionResponse(
   session: Session,
-  events: PiJsonlEventReader,
+  events: ManagedEventLog,
   passthroughEnv: Record<string, string> | undefined,
   containers?: SessionContainerStore,
 ) {

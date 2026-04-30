@@ -1,5 +1,6 @@
 import { accessSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { ManagedEventLog, ManagedEventLogFollowOptions } from "../events/types.js";
 import type { Event } from "../orchestrator/types.js";
 
 // Reads the per-session JSONL that OpenClaw's SessionManager writes for us.
@@ -85,7 +86,7 @@ type SessionsJsonEntry = {
 
 type SessionsJson = Record<string, SessionsJsonEntry>;
 
-export class PiJsonlEventReader {
+export class PiJsonlEventReader implements ManagedEventLog {
   constructor(public readonly stateRoot: string) {}
 
   listBySession(agentId: string, sessionId: string): Event[] {
@@ -228,13 +229,7 @@ export class PiJsonlEventReader {
   async *follow(
     agentId: string,
     sessionId: string,
-    opts: {
-      signal?: AbortSignal;
-      pollIntervalMs?: number;
-      idleTimeoutMs?: number;
-      isSessionRunning?: () => boolean;
-      afterEventId?: string;
-    } = {},
+    opts: ManagedEventLogFollowOptions = {},
   ): AsyncGenerator<Event> {
     const pollMs = opts.pollIntervalMs ?? 100;
     const idleTimeoutMs = opts.idleTimeoutMs ?? 30_000;

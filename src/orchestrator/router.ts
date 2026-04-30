@@ -10,6 +10,7 @@ import {
   type HarnessStreamingTurn,
   type HarnessTurnResult,
 } from "../harness/types.js";
+import type { ManagedEventLog } from "../events/types.js";
 import { addContext, getLogger, withCapturedContext } from "../log.js";
 import {
   quotaRejectionsTotal,
@@ -24,7 +25,6 @@ import type {
 import { GatewayWebSocketClient, GatewayWsError } from "../runtime/gateway-ws.js";
 import type { ParentTokenMinter } from "../runtime/parent-token.js";
 import { PoolCapacityError, type SessionContainerPool } from "../runtime/pool.js";
-import type { PiJsonlEventReader } from "../store/pi-jsonl.js";
 import type {
   AgentStore,
   EnvironmentStore,
@@ -181,7 +181,7 @@ export class AgentRouter {
     private readonly agents: AgentStore,
     private readonly environments: EnvironmentStore,
     private readonly sessions: SessionStore,
-    private readonly events: PiJsonlEventReader,
+    private readonly events: ManagedEventLog,
     private readonly pool: SessionContainerPool,
     private readonly queue: QueueStore,
     private readonly vaults: VaultStore,
