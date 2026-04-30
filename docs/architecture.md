@@ -2,19 +2,109 @@
 
 ## Goal
 
-Provide an API-first managed agent runtime that competes with Claude Managed Agents. Developers call a single HTTP API to create agents and run tasks; the runtime handles everything else — containerization, session persistence, provider integration, and cleanup. Cloud providers wrap this runtime under their own brand and sell it on their marketplaces.
+Provide an API-first managed-agent layer that competes with Claude Managed
+Agents while remaining open to multiple agent harnesses. Developers call one
+HTTP API to create agents and run tasks; Open Managed Agents owns session
+lifecycle, isolation, event streaming, policy, recovery, usage accounting, and
+runtime cleanup. The agent harness owns the loop.
 
-## Key constraint: OpenClaw is single-user
+The public product shape is:
 
-OpenClaw is fundamentally designed as one instance per user. The config, sessions, credentials, and workspace are all instance-scoped. The obvious "fix" would be to rewrite OpenClaw to be multi-tenant — that is the wrong move, because it would require months of architectural debate upstream and risks breaking every existing deployment.
+```text
+Client / SDK
+  -> Open Managed Agents API
+  -> managed-agent layer
+       agents, environments, sessions, events, queues, policy, credentials
+  -> harness adapter
+       OpenClaw production, Hermes experimental, future Codex/Claude SDK/etc.
+  -> runtime substrate
+       Docker first, cloud/container backends later
+  -> native harness
+       OpenClaw, Hermes, Codex, Claude Agent SDK, ...
+```
+
+The hard rule:
+
+> Own the managed-agent boundary. Do not own the agent brain.
+
+## Core Boundaries
+
+### Managed API
+
+The public API exposes managed concepts only:
+
+- `Agent`: template, model, instructions, tools, MCP, permission policy, quotas,
+  channels, and `harnessId`.
+- `Environment`: packages, networking, files, and runtime constraints.
+- `Session`: durable managed execution context. A session captures the harness
+  used at creation time, so later agent-template edits cannot move an existing
+  session to a different harness.
+- `Event`: normalized observable history, streamed over SSE and listed by
+  session.
+
+Native harness concepts stay behind adapter metadata:
+
+- OpenClaw/Pi session keys.
+- Hermes `SessionDB` rows and thread ids.
+- Future Codex thread/turn ids.
+- Future Claude Agent SDK session-store ids.
+
+### Harness Adapter
+
+`src/harness/types.ts` defines `HarnessAdapter`. Each adapter owns:
+
+- spawn-time container config;
+- turn invocation;
+- streaming turn invocation;
+- model/thinking patching where supported;
+- cancel/interrupt/compact/approval control where supported;
+- usage mapping;
+- native session metadata;
+- capability metadata.
+
+The registry is runtime-authoritative. Public schemas accept any valid harness
+identifier, and `HarnessRegistry` decides whether the adapter is installed.
+`GET /v1/harnesses` exposes the concrete capability matrix to clients.
+
+Current adapters:
+
+| Harness | Status | Boundary |
+|---|---|---|
+| `openclaw` | production/default | OpenClaw gateway HTTP + gateway WebSocket + Pi JSONL |
+| `hermes` | experimental | in-container `oma.adapter.v1` HTTP/SSE server wrapping Hermes `AIAgent` directly |
+
+Unsupported behavior is capability-gated. For example, Hermes MCP, compaction,
+and managed subagents are rejected explicitly instead of being silently faked.
+
+### Runtime Substrate
+
+The runtime substrate is not the product. It is the machinery that makes managed
+sessions safe and durable:
+
+- `SessionContainerPool`: active session containers plus warm containers.
+- `ContainerRuntime`: backend interface, Docker implementation today.
+- control-plane clients: OpenClaw gateway WS or adapter-server HTTP.
+- limited-networking sidecar for confined egress.
+
+This is why "runtime layer" is acceptable internally but incomplete publicly.
+The product category is managed-agent layer.
+
+## Default Adapter Constraint: OpenClaw Is Single-User
+
+OpenClaw is fundamentally designed as one instance per user. The config,
+sessions, credentials, and workspace are instance-scoped. The wrong fix would
+be rewriting OpenClaw to be multi-tenant. The right fix is external
+orchestration.
 
 **The elegant solution: run one OpenClaw container per active session.** Each container is single-user. The orchestrator creates multi-user semantics externally by owning a `SessionContainerPool` that spawns a fresh container for each new session's first event, reuses it across subsequent turns on that session, and can later evict that live container without losing the durable session. OpenClaw core stays exactly as it is.
 
 Container vs. session lifetime: sessions are durable (SQLite row + JSONL on the host mount). Containers are ephemeral compute caches (spawned on first event, kept resident while capacity allows, and later pressure-evicted or explicitly reaped). When a new container spawns under an existing session, Pi's `SessionManager.open()` rebuilds the `AgentSession` from the JSONL, so the agent sees the full conversation history. "Cattle, not pets" for compute; "pets, not cattle" for session state.
 
-This is also how Claude Managed Agents works under the hood — Anthropic's engineering posts describe stateless harnesses with many brains and many hands per session. We just formalized it on top of Pi + OpenClaw instead of building the whole stack ourselves.
+This is also how Claude Managed Agents works under the hood: stateless harness
+execution, isolated hands, and durable session logs. Open Managed Agents makes
+that boundary open and harness-agnostic.
 
-## Zero upstream changes required
+## OpenClaw Adapter: Zero Upstream Changes Required
 
 Everything shipped so far runs against the unmodified `openclaw` npm package (pinned in `Dockerfile.runtime`). There are no forks, no local patches, no upstream PRs waiting to land before the runtime works. The orchestrator, the entrypoint script, and a Docker image layer together are the full delta. The orchestrator directly uses OpenClaw's existing HTTP OpenAI-compat endpoint, its existing WebSocket control plane, its existing session-key resolver, its existing `/readyz` gate, its existing bearer-token auth, and its existing JSONL session format.
 
@@ -22,11 +112,17 @@ The strategic doc flagged four potential upstream changes that would make this c
 
 ## Components
 
-A thin Node/TypeScript HTTP service built on Hono, plus a small runtime layer for container lifecycle and WebSocket control. The orchestrator is split so each module has one job:
+A thin Node/TypeScript HTTP service built on Hono, plus a runtime substrate for
+container lifecycle and harness control. The orchestrator is split so each
+module has one job:
 
 ### Store (`src/store/`)
 
-The durable orchestrator state — agents, environments, session metadata, queues, audit rows, vault metadata, local secrets, and user-token records. Events are NOT stored here; they live in OpenClaw's per-session JSONL on the host mount, written by Pi's `SessionManager`, and the orchestrator reads them at query time via `PiJsonlEventReader`.
+The durable orchestrator state: agents, environments, session metadata, queues,
+audit rows, vault metadata, local secrets, and user-token records. Events are
+not stored in SQLite. They live behind the `ManagedEventLog` interface:
+OpenClaw sessions are read through Pi/OpenClaw JSONL, while adapter-server
+harnesses such as Hermes can emit normalized managed JSONL.
 
 - **`AgentStore`**, **`EnvironmentStore`**, and **`SessionStore`** — interfaces in `src/store/types.ts`. Synchronous methods (both backends are sync; we don't introduce speculative async).
 - **`SqliteStore`** (default, `src/store/sqlite.ts`) — `better-sqlite3`, WAL journal mode, `foreign_keys = ON`, CHECK constraints on session status. Core tables include `agents`, `agent_versions` (immutable version history), `environments`, `sessions`, durable queued events, audit events, key/value secrets, vaults + vault credentials, session/container adoption records, and local users. Sessions cascade on agent delete is **off** — sessions outlive their template. Additive column migrations (for example `ephemeral`, `environment_id`, `version`, `archived_at`, `permission_policy_json`, `thinking_level`, `channels`, `vault_id`) are gated on `PRAGMA table_info` checks and ALTERs on startup.
@@ -39,7 +135,21 @@ The durable orchestrator state — agents, environments, session metadata, queue
 
 On startup, `src/index.ts` attempts selective recovery instead of blindly failing every in-flight run. It asks the runtime for managed containers, matches them against `session_containers`, adopts healthy containers back into the pool, stops true orphans, fails only `starting`/`running` sessions that could not be recovered, clears their queues, attaches observers to adopted running sessions, and drains queued work for idle sessions. SIGTERM/SIGINT wire to `pool.shutdown()` and `store.close()` so WebSockets close, containers stop, and the SQLite WAL flushes cleanly.
 
-### PiJsonlEventReader (`src/store/pi-jsonl.ts`)
+### Managed Event Log (`src/events/`, `src/harness/openclaw-events.ts`)
+
+`ManagedEventLog` is the event boundary used by the server and router. It lets
+the public API read normalized managed events without caring whether the native
+source is Pi JSONL, adapter-emitted JSONL, or a future harness-native event
+stream.
+
+Current implementations:
+
+- **`OpenClawJsonlEventLog`** maps OpenClaw/Pi JSONL into managed events.
+- **`ManagedJsonlEventLog`** stores already-normalized adapter events.
+- **`CompositeManagedEventLog`** tries adapter-normalized events first and falls
+  back to OpenClaw read-through when needed.
+
+### OpenClaw JSONL Event Source (`src/harness/openclaw-events.ts`)
 
 Parses OpenClaw's per-session JSONL at query time. Resolves our `session_id` -> the Pi session file via `<stateRoot>/<agentId>/sessions/<sessionId>/agents/main/sessions/sessions.json` keyed by the canonical `agent:main:<session_id>` form, then opens `<stateRoot>/<agentId>/sessions/<sessionId>/agents/main/sessions/<piSessionId>.jsonl`. A legacy fallback still checks the old per-agent path (`<stateRoot>/<agentId>/agents/main/sessions/...`) so existing local state can be read.
 
@@ -60,7 +170,7 @@ active side is additionally bounded by an admission cap:
 
 - **`warmForAgent(agentId, spawnOptions)`** — pre-boots a container (spawn + `/readyz` + WS handshake) and stores it in the warm bucket keyed by agentId. Called by the server after `POST /v1/agents`. No-ops if a warm container already exists for this agent. Evicts the oldest warm entry first when the pool is at `OPENCLAW_MAX_WARM_CONTAINERS`. **The router skips this call entirely for delegating agents** (`callableAgents.length > 0 || maxSubagentDepth > 0`) — see the note under AgentRouter.warmForAgent for why.
 - **`acquireForSession({sessionId, spawnOptions, agentId?})`** — returns a live `Container` for the session. Checks three sources in order: (1) existing active container, (2) pre-warmed container matching the agentId, (3) fresh spawn. When claiming from the warm pool, auto-replenishes in the background. Bumps `lastUsedAt` on reuse and enforces the active-cap admission policy before any new cold spawn.
-- **`getWsClient(sessionId)`** — lookup used by the router for cancel (`sessions.abort`) and per-event model override (`sessions.patch`).
+- **`getWsClient(sessionId)`** — legacy method name; returns the harness control client for the active session. OpenClaw returns a gateway WS client, adapter-server harnesses return an HTTP control client. Used by the router for cancel, patch, compact, and approval resolution.
 - **`evictSession(sessionId)`** — manual teardown (closes WS, stops container). Called by `DELETE /v1/sessions/:id` and the router's infra-failure path.
 - **`shutdown()`** — SIGTERM path. Clears the sweeper, closes every WS, stops every container. Best-effort (errors are swallowed so one stuck stop doesn't block the process).
 - **`cleanupOnReap?: (sessionId) => Promise<void>`** — **only** called from the idle-reap path (not manual evict, not shutdown). `index.ts` wires this to check `store.sessions.get(sessionId)?.ephemeral` and, if true, delete the Pi JSONL + store row. This is how Item 8's keyless `/v1/chat/completions` calls get cleaned up without accumulating forever.
@@ -69,7 +179,7 @@ The pool has **no direct dependency on the store**. It takes an `isBusy: (sessio
 
 Startup recovery: the normal startup path uses `DockerContainerRuntime.listManaged()` plus `session_containers` records to adopt recoverable containers and stop only true orphans. `cleanupOrphaned()` remains available as a concrete Docker helper for explicit sweeps and tests, but it is not the default startup behavior.
 
-### GatewayWebSocketClient (`src/runtime/gateway-ws.ts`)
+### OpenClaw GatewayWebSocketClient (`src/runtime/gateway-ws.ts`)
 
 Operator-role WebSocket client to each live container's gateway control plane. Documented upstream at `openclaw/docs/gateway/protocol.md`. One client per container; lifetime tracks the container's lifetime.
 
@@ -93,15 +203,18 @@ On the default SQLite backend, the queue survives orchestrator restart and persi
 
 ### AgentRouter (`src/orchestrator/router.ts`)
 
-The brain of the orchestrator. Takes the store, the pool, the JSONL reader, the event queue, and a config bundle. Exposes six methods:
+The brain of the orchestrator. Takes the stores, pool, managed event log, event
+queue, harness registry, and config bundle. The router resolves the harness
+from the session, not from a mutable current agent template, so an existing
+session keeps its original native runtime.
 
 - **`createSession(agentId, opts?)`** — pure metadata: allocates a store row, no container spawn, no JSONL write. Validates the agent is not archived. The container is only spawned when the first event arrives (or earlier via warm-up).
 - **`warmSession(sessionId)`** — proactively boots template-level warmth for a session so the first event can claim a ready container. Sessions with dedicated container config (`vaultId`, `networking: limited`, package installs) bypass this path and cold-spawn.
 - **`warmForAgent(agentId)`** — pre-warms a container for an agent template. Called by the server after `POST /v1/agents`. The warm container waits in the pool until claimed by a compatible session. **Skipped for delegating agents** (`callableAgents.length > 0 || maxSubagentDepth > 0`). `buildSpawnOptions` bakes the sessionId into both Docker labels and the signed `OPENCLAW_ORCHESTRATOR_TOKEN` env var, and Docker env is immutable post-create; a warm container built with the `__warm__` placeholder would carry that placeholder into every subagent spawn the claimed session later hosts, producing wrong token lineage (the orchestrator doesn't currently verify `parentSessionId` against the session store, so the failure would be silent rather than a crash). Skipping the warm pool for delegating agents preserves the latency benefit for the common non-delegating case without the identity smear.
-- **`runEvent({sessionId, content, model?, thinkingLevel?, rejectIfBusy?})`** — idle path starts a background run (`beginRun` -> session status `starting` -> fire-and-forget `executeInBackground`); `starting` or `running` path enqueues unless `rejectIfBusy` is set, in which case it returns `session_busy` for callers that cannot correlate queued replies. Returns `{session, queued}`. Model and thinking overrides are baked into the first-turn container config and patched through the gateway `sessions.patch` path on later turns once OpenClaw has created the Pi session key.
-- **`cancel(sessionId)`** — looks up the pool's WS client, calls `abort(canonicalKey)`, drains the queue, calls `endRunCancelled`. Cancellation is a deliberate stop, not an agent failure.
-- **`confirmTool(sessionId, approvalId, decision)`** — resolves a pending tool-confirmation approval via the container's WS `plugin.approval.resolve`. Used when the agent template has `always_ask` permission policy.
-- **`executeInBackground`** (private) — acquires a container via the pool (with agentId for warm-pool matching), optionally applies a WS `patch` for model/thinking overrides when a Pi session key already exists, installs one approval subscription set per session, rehydrates pending approvals from `plugin.approval.list`, invokes the container's `/v1/chat/completions`, reads `latestAgentMessage` from the JSONL for cost rollup, then either drains the queue or calls `endRunSuccess`. Injects `OPENCLAW_PACKAGES_JSON` (from environment config), `OPENCLAW_DENIED_TOOLS` (from deny policy), and `OPENCLAW_CONFIRM_TOOLS` (from always_ask policy) into the container env.
+- **`runEvent({sessionId, content, model?, thinkingLevel?, rejectIfBusy?})`** — idle path starts a background run (`beginRun` -> session status `starting` -> fire-and-forget `executeInBackground`); `starting` or `running` path enqueues unless `rejectIfBusy` is set, in which case it returns `session_busy` for callers that cannot correlate queued replies. Returns `{session, queued}`. Model and thinking overrides are baked into the first-turn container config and patched through the harness control plane on later turns when supported.
+- **`cancel(sessionId)`** — looks up the pool's control client, calls the active harness adapter's abort method, drains the queue, calls `endRunCancelled`. Cancellation is a deliberate stop, not an agent failure.
+- **`confirmTool(sessionId, approvalId, decision)`** — resolves a pending tool-confirmation approval through the active harness adapter. OpenClaw uses gateway plugin approval resolution; Hermes uses the adapter-server approval endpoint for the subset it supports.
+- **`executeInBackground`** (private) — acquires a container via the pool (with agentId for warm-pool matching), optionally applies a harness patch for model/thinking overrides, installs one approval subscription set per session, rehydrates pending approvals, invokes the harness turn API, reads the managed event log for cost/output rollup, then either drains the queue or calls `endRunSuccess`.
 - **`handleBackgroundFailure`** (private) — guard against overwriting a cancel's idle state with an in-flight HTTP error. If `session.status !== "running"` at catch time, the failure is a side-effect of an external cancel and we leave the session alone. Otherwise drain the queue + evict the container + `endRunFailure`.
 
 ### Server (`src/orchestrator/server.ts`)
@@ -114,7 +227,7 @@ The Hono app. Every route in the API section of the README registers here. Notab
 - **Session routes** — `POST /v1/sessions` validates `environmentId` / `vaultId` when provided, creates metadata, and fires proactive `warmSession` in the background when compatible. `POST /v1/sessions/:id/events` dispatches on event type: `user.message` triggers `runEvent`, `user.tool_confirmation` triggers `confirmTool`. Additional session routes cover cancel, compact, logs, event listing/streaming, deletion, and workspace file CRUD.
 - **Vault routes** — CRUD for per-end-user credential bundles plus credential add/list/delete. Secret values are accepted on write and never returned from reads; vault-bound sessions bypass the warm pool because credentials are spawn-time container configuration.
 - **Auth routes** — `/auth/anonymous` and GitHub OAuth helpers mint `tok_...` user tokens for the portal. Current user tokens scope some session listing behavior but are not a complete resource-ownership model; the admin bearer token remains the deployment boundary.
-- **SSE streaming** — `GET /v1/sessions/:id/events?stream=true` uses `streamSSE` from `hono/streaming`, wires `AbortController` from `sse.onAbort` into `PiJsonlEventReader.follow`. Emits an initial `session.status_*` event on connect, checks for status transitions on every yielded event and on every 15 s heartbeat tick, and emits a final status event when the follow loop ends.
+- **SSE streaming** — `GET /v1/sessions/:id/events?stream=true` uses `streamSSE` from `hono/streaming`, wires `AbortController` from `sse.onAbort` into `ManagedEventLog.follow`. Emits an initial `session.status_*` event on connect, checks for status transitions on every yielded event and on every 15 s heartbeat tick, and emits a final status event when the follow loop ends.
 - **`POST /v1/chat/completions`** — OpenAI-compat handler. Required `x-openclaw-agent-id` header, sticky session via `x-openclaw-session-key` or body `user`, keyless calls create ephemeral sessions. Stale-detection via `beforeEventId` snapshot. Non-streaming calls poll every 500 ms with a 600 s cap and treat both `starting` and `running` as in-flight states. Both streaming and non-streaming sticky-session calls return `409 session_busy` if a run is already in flight, because OpenAI blocking responses need one request to map to one assistant reply. `stream: true` pipes the container's real SSE chunks through to the caller byte-for-byte; disconnect before upstream `[DONE]` aborts the upstream reader and marks the managed run failed so it cannot strand the session in `running`.
 
 ### Delegated subagents (`src/runtime/parent-token.ts` + `docker/call-agent.mjs`)
@@ -136,11 +249,15 @@ Agent templates support three permission policies:
 - **`deny`** — specified tools are blocked entirely via OpenClaw's `tools.deny` config
 - **`always_ask`** — specified tools pause for client confirmation before execution
 
-The `always_ask` flow uses an OpenClaw plugin installed in the runtime container image at `/opt/openclaw-plugins/confirm-tools/`. The entrypoint copies it to `/workspace/extensions/confirm-tools/` (the plugin discovery path, derived from `OPENCLAW_STATE_DIR`) when `OPENCLAW_CONFIRM_TOOLS` is set. The plugin registers a `before_tool_call` hook via `definePluginEntry` (from `openclaw/plugin-sdk/plugin-entry`) that returns `requireApproval` for matching tools. The gateway then broadcasts `plugin.approval.requested` / `plugin.approval.resolved` to WS clients; the orchestrator keeps one approval subscription set per session, rehydrates pending approvals via `plugin.approval.list` after warm reuse or adoption, and surfaces them as `agent.tool_confirmation_request` SSE events. Those SSE events carry both `approval_id` (resolver key) and `tool_call_id` (used to correlate the approval with the matching `agent.tool_use` row). The client resolves the approval via `POST /v1/sessions/:id/events { type: "user.tool_confirmation", toolUseId: <approval_id>, result }`, which the server routes to `router.confirmTool()` → `wsClient.approvalResolve()`.
+The OpenClaw `always_ask` flow uses a plugin installed in the runtime container image at `/opt/openclaw-plugins/confirm-tools/`. The entrypoint copies it to `/workspace/extensions/confirm-tools/` (the plugin discovery path, derived from `OPENCLAW_STATE_DIR`) when `OPENCLAW_CONFIRM_TOOLS` is set. The plugin registers a `before_tool_call` hook via `definePluginEntry` (from `openclaw/plugin-sdk/plugin-entry`) that returns `requireApproval` for matching tools. The gateway then broadcasts `plugin.approval.requested` / `plugin.approval.resolved` to WS clients; the orchestrator keeps one approval subscription set per session, rehydrates pending approvals via `plugin.approval.list` after warm reuse or adoption, and surfaces them as `agent.tool_confirmation_request` SSE events. Those SSE events carry both `approval_id` (resolver key) and `tool_call_id` (used to correlate the approval with the matching `agent.tool_use` row). The client resolves the approval via `POST /v1/sessions/:id/events { type: "user.tool_confirmation", toolUseId: <approval_id>, result }`, which the server routes to `router.confirmTool()` and then to the active harness adapter's approval resolver.
 
-### Python SDK (`sdk/python/`)
+### SDKs (`sdk/python/`, `sdk/typescript/`)
 
-Typed Python client publishable to PyPI as `open-managed-agents`. Uses `httpx` for HTTP and `httpx-sse` for SSE streaming. Covers the full API: `client.agents`, `client.environments`, `client.sessions` (including `send`, `stream`, `cancel`, `confirm_tool`, `events`). Dataclass types for `Agent`, `Environment`, `Session`, `Event`. Context manager support.
+The Python SDK is publishable to PyPI as `open-managed-agents`; the TypeScript
+SDK is publishable as `@stainlu/open-managed-agents`. Both expose the managed
+resources: agents, environments, harnesses, sessions, and vaults. Streaming is
+SSE-based. Harness capability discovery lives at `client.harnesses.catalog()` /
+`client.harnesses.list()`.
 
 ### DockerContainerRuntime (`src/runtime/docker.ts`)
 
@@ -159,7 +276,7 @@ The orchestrator process itself reads a small set of env vars at startup. Everyt
 | `PORT` | HTTP port for the orchestrator API | `8080` |
 | `OPENCLAW_STORE` | `sqlite` \| `memory`. Memory is for tests only — data is lost on restart | `sqlite` |
 | `OPENCLAW_STORE_PATH` | SQLite file path (when `OPENCLAW_STORE=sqlite`) | `/var/openclaw/state/managed-runtime.db` |
-| `OPENCLAW_STATE_ROOT` | **In-process** path of the mounted sessions directory — used by `PiJsonlEventReader` to open JSONL files | `/var/openclaw/sessions` |
+| `OPENCLAW_STATE_ROOT` | **In-process** path of the mounted sessions directory, used by the managed event-log implementations to open session event files | `/var/openclaw/sessions` |
 | `OPENCLAW_HOST_STATE_ROOT` | **Host-side** path of the same directory — passed to dockerode when spawning agent containers (the Docker daemon resolves against the host filesystem, so a container-relative path would fail). Must be absolute; startup throws if not | `/var/openclaw/sessions` |
 | `OPENCLAW_RUNTIME_IMAGE` | Docker image reference the orchestrator spawns per session | `open-managed-agents/openclaw-agent:latest` |
 | `OPENCLAW_DOCKER_NETWORK` | Docker bridge network shared by the orchestrator and unrestricted agent containers | `openclaw-net` |
@@ -300,14 +417,17 @@ Session continuity across container restarts is carried in the HTTP call, not in
 
 OpenClaw's gateway picks the key up via `resolveSessionKey` in `src/gateway/http-utils.ts` (upstream openclaw repo) and maps it to a persistent session on disk. When a new container starts up and receives a request under a session key that already has a JSONL file, Pi's `SessionManager.open()` loads the prior events and constructs the `AgentSession` with full historical context. The embedded Pi runner (`src/agents/pi-embedded-runner/run/attempt.ts`) then invokes the model with the reconstructed context, so the agent sees the full conversation history, not just the latest user message.
 
-The orchestrator is a **reader-only** participant in this file system. It does NOT write to sessions.json or any JSONL. The only file operations it performs are:
+For OpenClaw sessions, the orchestrator is a **reader-only** participant in this
+file system. It does NOT write to `sessions.json` or OpenClaw/Pi JSONL. The
+OpenClaw event source performs these operations:
 
-- `PiJsonlEventReader.listBySession` — read + parse for `GET /v1/sessions/:id/events`
-- `PiJsonlEventReader.latestAgentMessage` — read + parse for the `sessionResponse.output` field, the Item 9 cost rollup, and the Item 8 chat-completions stale-detection snapshot
-- `PiJsonlEventReader.follow` — poll + parse for the SSE streaming endpoint (`?stream=true`)
-- `PiJsonlEventReader.deleteBySession` — remove the JSONL + its `sessions.json` entry on `DELETE /v1/sessions/:id` and on ephemeral session reap (Item 8)
+- `OpenClawJsonlEventLog.listBySession` — read + parse for `GET /v1/sessions/:id/events`
+- `OpenClawJsonlEventLog.latestAgentMessage` — read + parse for the `sessionResponse.output` field, cost rollup, and chat-completions stale-detection snapshot
+- `OpenClawJsonlEventLog.follow` — poll + parse for the SSE streaming endpoint (`?stream=true`)
+- `OpenClawJsonlEventLog.deleteBySession` — remove the JSONL + its `sessions.json` entry on `DELETE /v1/sessions/:id` and on ephemeral session reap
 
-Because OpenClaw is the sole writer, there is no sync bug between the orchestrator's view of the event log and Pi's actual state — if you want to know what's in a session, there is exactly one place to look.
+Because OpenClaw is the sole writer for OpenClaw sessions, there is no sync bug
+between the orchestrator's view of that native event log and Pi's actual state.
 
 For the MVP the JSONL files live on a local Docker bind mount. A future item replaces it with S3 / GCS / Azure Blob / Aliyun OSS / Volcengine TOS via an upstream `SessionStorage` abstraction on OpenClaw.
 
@@ -351,34 +471,31 @@ For the MVP the JSONL files live on a local Docker bind mount. A future item rep
 
 4.  Background: executeInBackground:
                 (a) pool.acquireForSession() — no live container for this session,
-                    so runtime.spawn() creates one with the agent's env +
-                    passthrough provider keys, mounts
+                    so runtime.spawn() creates one from the active harness
+                    adapter's spawn options plus passthrough provider keys,
+                    mounts
                     <hostStateRoot>/<agentId>/sessions/<sessionId> at
                     /workspace, joins the unrestricted Docker network or
                     the limited-session confined/control-plane networks.
                     Waits for /readyz.
-                    Opens a GatewayWebSocketClient and runs the operator
-                    handshake. Cache entry stored in active Map, spawnedAt/
-                    lastUsedAt stamped.
+                    Opens the harness control client. OpenClaw uses its gateway
+                    WebSocket; adapter-server harnesses use HTTP control.
+                    Cache entry stored in active Map, spawnedAt/lastUsedAt
+                    stamped.
                     On successful claim, sessions.markRunning(sessionId)
                     flips the session from starting → running.
                 (b) If modelOverride or thinkingLevel was supplied, the
-                    first turn gets it through openclaw.json boot config.
-                    Once the Pi session key exists, later turns also call
-                    wsClient.patch(canonicalKey, { model, thinkingLevel })
-                    via the gateway WS.
-                (c) invokeChatCompletions — POST http://<container>/v1/chat/completions
-                    with Authorization: Bearer <OPENCLAW_GATEWAY_TOKEN>,
-                    x-openclaw-agent-id: main, x-openclaw-session-key:
-                    agent:main:<session_id>, body { model: "openclaw/main",
-                    user: <session_id>, messages: [{role: "user", content}],
-                    stream: false }. OpenClaw's embedded agent loop runs
-                    tool-using multi-turn turns and returns the final
-                    completion. Returns { output, tokensIn, tokensOut }.
+                    first turn gets it through spawn config when the harness
+                    needs that; later turns use harness.patchSession when
+                    supported.
+                (c) harness.invokeTurn(...) calls the native turn boundary.
+                    OpenClaw uses `/v1/chat/completions`; Hermes uses the
+                    `oma.adapter.v1` turn endpoint. The native agent loop runs
+                    and returns normalized { output, tokensIn, tokensOut,
+                    events?, native? }.
                 (d) events.latestAgentMessage(agentId, sessionId) reads the
-                    newest agent.message from the just-written JSONL and
-                    pulls its costUsd (Pi's per-turn cost.total from the
-                    provider catalog; Item 9).
+                    newest agent.message from the managed event log and pulls
+                    its costUsd when present.
                 (e) queue.shift(sessionId) — if another event was queued
                     while this run was in flight, the session stays
                     "running", usage is rolled up via addUsage (no status
@@ -388,18 +505,21 @@ For the MVP the JSONL files live on a local Docker bind mount. A future item rep
 
 5.  Developer  → GET /v1/sessions/ses_yyy
                  Server reads the session row from SQLite and the newest
-                 agent.message from the JSONL via
-                 PiJsonlEventReader.latestAgentMessage (that's the
+                 agent.message from the managed event log via
+                 ManagedEventLog.latestAgentMessage (that's the
                  computed `output` field on the response).
 
 6.  Developer  → GET /v1/sessions/ses_yyy/events
-                 Server iterates the JSONL once and returns the typed
+                 Server iterates the managed event log once and returns the typed
                  Event array.
 ```
 
 ### Subsequent events on the same session (warm path — reuses the container)
 
-Identical to the cold path, except `pool.acquireForSession()` finds the live entry in the active Map, bumps `lastUsedAt`, and returns the existing `Container` + `GatewayWebSocketClient` without spawning anything. Container spawn time (~15 s for Docker local) collapses to ~100 ms of pool overhead.
+Identical to the cold path, except `pool.acquireForSession()` finds the live
+entry in the active Map, bumps `lastUsedAt`, and returns the existing
+`Container` plus harness control client without spawning anything. Container
+spawn time (~15 s for Docker local) collapses to ~100 ms of pool overhead.
 
 ### Queue path (event arrives while the session is already running)
 
@@ -423,18 +543,17 @@ runEvent sees session.status === "running"
 ```
 router.cancel(sessionId):
   (a) validate session.status === "running", else 409
-  (b) pool.getWsClient(sessionId) — must exist since the session is running
-  (c) wsClient.abort("agent:main:<session_id>") via the gateway WS
-      (wraps the gateway's sessions.abort method)
+  (b) pool.getWsClient(sessionId) — legacy name for active harness control client
+  (c) harness.abortSession(controlClient, sessionId)
   (d) queue.clear(sessionId) so the success path doesn't auto-restart
   (e) sessions.endRunCancelled — flips status to idle, clears error
   Response: { session_id, session_status: "idle", cancelled: true }
 
-The in-flight chat completions HTTP request inside executeInBackground
-errors out as a side effect of the WS abort. handleBackgroundFailure
-checks session.status before transitioning — finds it already idle —
-and leaves the session + container alone. The container stays healthy
-in the pool for the next event.
+The in-flight turn request inside executeInBackground errors out as a side
+effect of the harness abort. handleBackgroundFailure checks session.status before
+transitioning, finds it already idle, and leaves the session + container alone.
+The container stays healthy in the pool for the next event when the harness
+supports clean interruption.
 ```
 
 ### OpenAI-compat adapter (`POST /v1/chat/completions`)
@@ -483,10 +602,10 @@ Server wires an AbortController from sse.onAbort and starts a 15 s
 heartbeat interval that also checks for session status transitions.
 
 1. Emit initial session.status_<status> SSE event on connect.
-2. PiJsonlEventReader.follow() runs:
+2. ManagedEventLog.follow() runs:
      Phase 1 — catch-up: yield every existing event in order
      Phase 2 — tail-follow: 250 ms poll loop, emit any events whose
-               Pi event_id is new since the last yield
+               event_id is new since the last yield
 3. On each yielded event and each heartbeat tick, check if session
    status changed → emit session.status_<new> SSE event. Container
    claim / evict transitions emit `session.container_attached` /
@@ -506,15 +625,27 @@ Event types in the stream: all JSONL-derived types (including
 
 ## Token and cost accounting
 
-**Tokens** come from the OpenAI-compat HTTP response. `invokeChatCompletions` reads `usage.prompt_tokens` and `usage.completion_tokens` from the container's reply and passes them through to the `RunUsage` that `endRunSuccess` / `addUsage` rolls into the session.
+**Tokens** come from the active harness adapter's turn result. OpenClaw reads
+OpenAI-compatible `usage.prompt_tokens` and `usage.completion_tokens`; Hermes
+maps token fields from its `AIAgent` result when present. The router passes the
+normalized usage through to the `RunUsage` that `endRunSuccess` / `addUsage`
+rolls into the session.
 
-**Cost** comes from Pi's JSONL first. After `invokeChatCompletions` returns, `executeInBackground` calls `events.latestAgentMessage(agentId, sessionId)` and reads `costUsd` off the returned event. `PiJsonlEventReader.mapLineToEvent` surfaces it from `message.usage.cost.total` in the JSONL, which Pi's provider plugins compute from their catalogs.
+**Cost** comes from the managed event log first. For OpenClaw, `OpenClawJsonlEventLog`
+surfaces it from `message.usage.cost.total` in Pi JSONL, which Pi's provider
+plugins compute from their catalogs. Adapter-server harnesses can emit
+normalized event costs directly.
 
 Why read from the JSONL instead of computing cost in the orchestrator:
 
-1. **Pi is already the authority.** Its provider plugins know the catalogs, the cache-aware rates, and the provider-specific quirks. Maintaining a second static price sheet in the orchestrator would drift from the real provider prices within weeks.
-2. **Cache-aware for free.** Moonshot and Anthropic both bill `cacheRead` tokens at a much lower rate than fresh input. A naive `tokens * perMillion` sheet ignores that and reports the wrong number. Pi's per-turn cost already includes the cache discount.
-3. **Zero hardcoding.** The orchestrator is provider-agnostic. It does not embed knowledge of any particular provider's pricing.
+1. **The harness/provider path is already the authority.** Native providers know
+   catalogs, cache-aware rates, and provider-specific quirks. Maintaining a
+   second static price sheet in the orchestrator would drift.
+2. **Cache-aware when the harness provides it.** Moonshot and Anthropic both
+   bill `cacheRead` tokens at a much lower rate than fresh input. A naive
+   `tokens * perMillion` sheet ignores that.
+3. **Zero hardcoding.** The orchestrator is provider-agnostic. It does not
+   embed knowledge of any particular provider's pricing.
 
 When the transcript has tokens but no explicit cost and `ZENMUX_API_KEY` is configured, the orchestrator estimates `cost_usd` from ZenMux's live `/models` catalog instead of leaving the turn at zero. The local `docker/provider-prices.json` table is now fallback-only for direct-provider Moonshot / DeepSeek bootstrap, not the primary accounting path in a ZenMux deployment.
 
@@ -617,7 +748,7 @@ Prometheus text format at `GET /metrics` (no auth gate — same as `/healthz`, o
 | `pool_spawn_duration_seconds` | histogram | — | `doSpawn` (runtime.spawn + waitForReady + WS handshake) |
 | `pool_cold_starts_total` | counter | `agent_id` | Cold-start claims attributed to an agent template |
 | `container_boot_duration_seconds` | histogram | — | Cold-boot duration observed at container claim |
-| `session_run_duration_seconds` | histogram | — | `router.executeInBackground` around `invokeChatCompletions` |
+| `session_run_duration_seconds` | histogram | — | `router.executeInBackground` around harness turn invocation |
 | `session_run_failures_total` | counter | — | `handleBackgroundFailure` |
 | `agents_created_total` | counter | — | `POST /v1/agents` |
 | `session_events_total` | counter | `type=user.message\|user.tool_confirmation` | `POST /v1/sessions/:id/events` |
@@ -651,7 +782,7 @@ Run via `pnpm test`. Adding a new test module is just dropping a `*.test.ts` fil
 
 **End-to-end (`test/e2e.sh`, bash + curl + jq).** Exercises the full stack: spawns real containers via `docker compose up`, creates agents and sessions through the HTTP API, verifies multi-turn memory + pool reuse + SQLite persistence across orchestrator restart + OpenAI-compat + SSE streaming + cancel + queue ordering + delegated subagents + `always_ask` flow + agent versioning + environment CRUD. Requires a provider API key and ~5 minutes per run.
 
-Covering `router.ts` and `pool.ts` in unit tests is harder because both take concrete infrastructure (Docker, WebSockets). The e2e suite validates them end-to-end; a follow-up could add in-memory mocks of `ContainerRuntime` and `GatewayWebSocketClient` for faster router-level coverage.
+Covering `router.ts` and `pool.ts` in unit tests is harder because both take concrete infrastructure (Docker, harness control clients). The e2e suite validates them end-to-end; a follow-up could add in-memory mocks of `ContainerRuntime` and `ContainerControlPlane` for faster router-level coverage.
 
 ## Security notes
 
