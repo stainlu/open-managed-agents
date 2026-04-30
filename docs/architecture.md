@@ -16,7 +16,7 @@ Client / SDK
   -> managed-agent layer
        agents, environments, sessions, events, queues, policy, credentials
   -> harness adapter
-       OpenClaw production, Hermes experimental, future Codex/Claude SDK/etc.
+       OpenClaw production, Hermes/Codex experimental, future Claude SDK/etc.
   -> runtime substrate
        Docker first, cloud/container backends later
   -> native harness
@@ -46,7 +46,7 @@ Native harness concepts stay behind adapter metadata:
 
 - OpenClaw/Pi session keys.
 - Hermes `SessionDB` rows and thread ids.
-- Future Codex thread/turn ids.
+- Codex thread/turn ids.
 - Future Claude Agent SDK session-store ids.
 
 ### Harness Adapter
@@ -72,9 +72,11 @@ Current adapters:
 |---|---|---|
 | `openclaw` | production/default | OpenClaw gateway HTTP + gateway WebSocket + Pi JSONL |
 | `hermes` | experimental | in-container `oma.adapter.v1` HTTP/SSE server wrapping Hermes `AIAgent` directly |
+| `codex` | experimental | in-container `oma.adapter.v1` HTTP/SSE server driving `codex app-server` JSON-RPC |
 
 Unsupported behavior is capability-gated. For example, Hermes MCP, compaction,
-and managed subagents are rejected explicitly instead of being silently faked.
+and managed subagents, Codex MCP, Codex per-tool deny policy, and Codex managed
+subagents are rejected explicitly instead of being silently faked.
 
 ### Runtime Substrate
 

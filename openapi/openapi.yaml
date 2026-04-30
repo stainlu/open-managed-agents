@@ -555,7 +555,7 @@ components:
     HarnessId:
       type: string
       pattern: "^[a-z0-9][a-z0-9._-]*$"
-      examples: [openclaw, hermes]
+      examples: [openclaw, hermes, codex]
     HarnessCapability:
       type: object
       required: [support, detail]

@@ -7,6 +7,7 @@ import { ManagedJsonlEventLog } from "./events/jsonl.js";
 import { OpenClawJsonlEventLog } from "./harness/openclaw-events.js";
 import { OpenClawHarnessAdapter } from "./harness/openclaw.js";
 import { HermesHarnessAdapter } from "./harness/hermes.js";
+import { CodexHarnessAdapter } from "./harness/codex.js";
 import { HarnessRegistry } from "./harness/registry.js";
 import { getLogger, rootLogger } from "./log.js";
 import {
@@ -159,6 +160,7 @@ async function main(): Promise<void> {
   );
   const runtimeImage = env("OPENCLAW_RUNTIME_IMAGE", "open-managed-agents/openclaw-agent:latest");
   const hermesRuntimeImage = env("OMA_HERMES_RUNTIME_IMAGE", "open-managed-agents/hermes-agent:latest");
+  const codexRuntimeImage = env("OMA_CODEX_RUNTIME_IMAGE", "open-managed-agents/codex-agent:latest");
   // hostStateRoot is the host-side path, needed by dockerode for bind
   // mounts on spawned agent containers. The actual Docker daemon resolves
   // paths against the host filesystem, not the orchestrator's.
@@ -422,7 +424,17 @@ async function main(): Promise<void> {
     environments: store.environments,
   });
 
-  const harnesses = new HarnessRegistry({ adapters: [harness, hermesHarness] });
+  const codexHarness = new CodexHarnessAdapter({
+    runtimeImage: codexRuntimeImage,
+    hostStateRoot,
+    stateRoot,
+    network,
+    gatewayPort,
+    passthroughEnv,
+    environments: store.environments,
+  });
+
+  const harnesses = new HarnessRegistry({ adapters: [harness, hermesHarness, codexHarness] });
   const routerCfg: RouterConfig = {
     passthroughEnv,
     runTimeoutMs,

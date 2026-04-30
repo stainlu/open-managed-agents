@@ -9,7 +9,7 @@ streaming event history; tool policy; cancellation; recovery; and observability.
 
 The current implementation is a baseline port of `openclaw-managed-agents`
 with the first harness boundary extracted. OpenClaw is the production adapter.
-Hermes is now wired as the second, experimental adapter.
+Hermes and Codex are wired as experimental adapters.
 
 ## Positioning
 
@@ -45,13 +45,14 @@ Working today:
 - Public `/v1/harnesses` capability catalog.
 - Managed JSONL event log abstraction.
 - Experimental Hermes adapter runtime via direct `AIAgent` integration.
+- Experimental Codex adapter runtime via `codex app-server`.
 - Limited networking sidecar.
 - Subagents as first-class sessions.
 
 Not done yet:
 
 - Full Hermes parity: arbitrary pre-tool approvals, MCP, compaction, subagents.
-- Codex adapter.
+- Full Codex parity: MCP, managed subagents, and per-tool deny policy.
 - Claude Agent SDK adapter.
 
 ## Architecture Direction
@@ -62,7 +63,7 @@ Client / SDK
   -> managed-agent layer
        agents, environments, sessions, events, queues, policy, credentials
   -> harness adapter
-       OpenClaw production, Hermes experimental
+       OpenClaw production, Hermes/Codex experimental
   -> runtime substrate
        Docker first, cloud backends later
   -> native harness

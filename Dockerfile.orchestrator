@@ -41,6 +41,8 @@ ENV NODE_ENV=production \
     PORT=8080 \
     OPENCLAW_DOCKER_NETWORK=openclaw-net \
     OPENCLAW_RUNTIME_IMAGE=open-managed-agents/openclaw-agent:latest \
+    OMA_HERMES_RUNTIME_IMAGE=open-managed-agents/hermes-agent:latest \
+    OMA_CODEX_RUNTIME_IMAGE=open-managed-agents/codex-agent:latest \
     OPENCLAW_HOST_STATE_ROOT=/var/openclaw/sessions \
     OPENCLAW_GATEWAY_PORT=18789
 
