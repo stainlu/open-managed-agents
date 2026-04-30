@@ -461,6 +461,6 @@ export type QueuedEvent = {
   /** Optional per-event model override. */
   model?: string;
   /** Optional per-event thinking-level override. */
-  thinkingLevel?: string;
+  thinkingLevel?: AgentConfig["thinkingLevel"];
   enqueuedAt: number;
 };

@@ -284,7 +284,7 @@ describe("OpenClawHarnessAdapter", () => {
     });
     await adapter.abortSession(control, "ses_1");
     await adapter.compactSession(control, "ses_1");
-    await adapter.resolveApproval(control, "ap_1", "allow");
+    await adapter.resolveApproval(control, "ses_1", "ap_1", "allow");
 
     expect(calls).toEqual([
       {

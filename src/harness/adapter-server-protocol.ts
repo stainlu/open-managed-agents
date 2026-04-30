@@ -17,6 +17,7 @@ export const AdapterServerRoutes = {
   patch: "/sessions/:session_id/patch",
   compact: "/sessions/:session_id/compact",
   resolveApproval: "/sessions/:session_id/approvals/:approval_id",
+  listApprovals: "/sessions/:session_id/approvals",
   listEvents: "/sessions/:session_id/events",
   outcome: "/sessions/:session_id/outcome",
   logs: "/logs",
@@ -198,6 +199,18 @@ export const AdapterServerApprovalRequestSchema = z
   .strict();
 
 export type AdapterServerApprovalRequest = z.infer<typeof AdapterServerApprovalRequestSchema>;
+
+export const AdapterServerListApprovalsResponseSchema = z
+  .object({
+    protocol_version: z.literal(ADAPTER_SERVER_PROTOCOL_VERSION),
+    approvals: z.array(AdapterServerApprovalRequestSchema),
+    native: AdapterServerNativeStateSchema.optional(),
+  })
+  .strict();
+
+export type AdapterServerListApprovalsResponse = z.infer<
+  typeof AdapterServerListApprovalsResponseSchema
+>;
 
 export const AdapterServerControlRequestSchema = z
   .object({

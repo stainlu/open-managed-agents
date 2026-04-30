@@ -30,7 +30,7 @@ import type {
   VaultStore,
 } from "../store/types.js";
 import type { VaultCredentialMcpOAuth } from "../store/types.js";
-import type { AgentConfig, Event, Session } from "./types.js";
+import type { AgentConfig, EnvironmentConfig, Event, Session } from "./types.js";
 import { estimateZenMuxTurnCostUsd } from "./zenmux-pricing.js";
 
 const log = getLogger("router");
@@ -63,7 +63,7 @@ export type RunEventArgs = {
    * WS sessions.patch path as `model`. Session-scoped like model —
    * persists across subsequent runs until changed.
    */
-  thinkingLevel?: string;
+  thinkingLevel?: AgentConfig["thinkingLevel"];
   /**
    * Return session_busy instead of appending to the durable queue when
    * the session is already running. Used by OpenAI-compatible blocking
@@ -456,7 +456,8 @@ export class AgentRouter {
       remainingSubagentDepth: 0,
       environmentId: null,
     } as Session);
-    await this.pool.warmForAgent(agentId, spawnOptions);
+    const harness = this.harnessForAgent(agent);
+    await this.pool.warmForAgent(agentId, spawnOptions, harness.controlPlane);
   }
 
   /**
@@ -633,6 +634,7 @@ export class AgentRouter {
       const container = await this.pool.acquireForSession({
         sessionId: args.sessionId,
         spawnOptions,
+        controlPlane: harness.controlPlane,
         agentId: agent.agentId,
         networking,
         bypassWarmPool: this.shouldBypassWarmPool(running, agent),
@@ -653,7 +655,7 @@ export class AgentRouter {
             `session ${args.sessionId} has no WS client for patch`,
           );
         }
-        const patch: { model?: string; thinkingLevel?: string } = {};
+        const patch: { model?: string; thinkingLevel?: AgentConfig["thinkingLevel"] } = {};
         if (args.model) patch.model = args.model;
         if (effectiveThinking) patch.thinkingLevel = effectiveThinking;
         try {
@@ -678,6 +680,13 @@ export class AgentRouter {
           content: args.content,
           sessionId: args.sessionId,
           timeoutMs: this.cfg.runTimeoutMs,
+          agent,
+          session: bumped,
+          environment: bumped.environmentId
+            ? this.environments.get(bumped.environmentId)
+            : undefined,
+          model: args.model,
+          thinkingLevel: effectiveThinking,
         });
       } catch (err) {
         runEnd();
@@ -1167,7 +1176,7 @@ export class AgentRouter {
       );
     }
     try {
-      await harness.resolveApproval(controlClient, approvalId, decision);
+      await harness.resolveApproval(controlClient, sessionId, approvalId, decision);
       this.removePendingApproval(sessionId, approvalId);
     } catch (err) {
       throw wrapHarnessControlError(err, "confirm_tool_failed");
@@ -1220,7 +1229,7 @@ export class AgentRouter {
     session: Session,
     opts?: {
       modelOverride?: string;
-      thinkingLevel?: string;
+      thinkingLevel?: AgentConfig["thinkingLevel"];
     },
   ): SpawnOptions {
     const harness = "harnessId" in session
@@ -1240,7 +1249,7 @@ export class AgentRouter {
     agent: AgentConfig,
     content: string,
     modelOverride?: string,
-    thinkingLevelOverride?: string,
+    thinkingLevelOverride?: AgentConfig["thinkingLevel"],
   ): Promise<void> {
     const t0 = Date.now();
     const tick = (label: string, from: number) => ({ [label + "_ms"]: Date.now() - from });
@@ -1313,12 +1322,23 @@ export class AgentRouter {
       token: container.token,
       content,
       sessionKey: sessionId,
+      agent,
+      session: currentSession,
+      environment: currentSession?.environmentId
+        ? this.environments.get(currentSession.environmentId)
+        : undefined,
+      model: modelOverride,
+      thinkingLevel: effectiveThinking,
     });
     runEnd();
     log.info(
       { session_id: sessionId, chat_completions_ms: Date.now() - cursor },
       "chat.completions returned",
     );
+
+    if (completion.events && completion.events.length > 0) {
+      this.events.appendEvents?.(agent.agentId, sessionId, completion.events);
+    }
 
     const latestAgent = await this.waitForTurnAdvanced(
       agent.agentId,
@@ -1344,6 +1364,14 @@ export class AgentRouter {
       tokensOut,
       costUsd,
     };
+
+    if (completion.native) {
+      this.sessions.updateNativeMetadata(sessionId, {
+        nativeSessionId: completion.native.nativeSessionId,
+        nativeThreadId: completion.native.nativeThreadId,
+        nativeMetadata: completion.native.nativeMetadata,
+      });
+    }
 
     // Drain the queue, if any. When the queue has more, roll up usage
     // without flipping to idle and recursively process the next entry —
@@ -1671,7 +1699,7 @@ export class AgentRouter {
     spawnOptions: SpawnOptions,
     currentSession: Session | undefined,
     modelOverride: string | undefined,
-    thinkingLevelOverride: string | undefined,
+    thinkingLevelOverride: AgentConfig["thinkingLevel"] | undefined,
     timings: Record<string, number>,
   ): Promise<Container> {
     const MAX_INFRA_RETRIES = 2;
@@ -1685,6 +1713,7 @@ export class AgentRouter {
         const container = await this.pool.acquireForSession({
           sessionId,
           spawnOptions,
+          controlPlane: harness.controlPlane,
           agentId: agent.agentId,
           networking: currentSession ? this.resolveNetworking(currentSession) : undefined,
           bypassWarmPool: this.shouldBypassWarmPool(currentSession, agent),
@@ -1713,7 +1742,7 @@ export class AgentRouter {
               `session ${sessionId} has no WS client for patch`,
             );
           }
-          const patch: { model?: string; thinkingLevel?: string } = {};
+          const patch: { model?: string; thinkingLevel?: AgentConfig["thinkingLevel"] } = {};
           if (modelOverride) patch.model = modelOverride;
           if (effectiveThinking) patch.thinkingLevel = effectiveThinking;
           try {
@@ -1779,6 +1808,11 @@ export class AgentRouter {
     token: string;
     content: string;
     sessionKey: string;
+    agent: AgentConfig;
+    session?: Session;
+    environment?: EnvironmentConfig;
+    model?: string;
+    thinkingLevel?: AgentConfig["thinkingLevel"];
   }): Promise<CompletionResult> {
     try {
       return await args.harness.invokeTurn({
@@ -1787,6 +1821,11 @@ export class AgentRouter {
         content: args.content,
         sessionId: args.sessionKey,
         timeoutMs: this.cfg.runTimeoutMs,
+        agent: args.agent,
+        session: args.session,
+        environment: args.environment,
+        model: args.model,
+        thinkingLevel: args.thinkingLevel,
       });
     } catch (err) {
       if (err instanceof HarnessInvocationError) {

@@ -2,8 +2,11 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CompositeManagedEventLog } from "./events/composite.js";
+import { ManagedJsonlEventLog } from "./events/jsonl.js";
 import { OpenClawJsonlEventLog } from "./harness/openclaw-events.js";
 import { OpenClawHarnessAdapter } from "./harness/openclaw.js";
+import { HermesHarnessAdapter } from "./harness/hermes.js";
 import { HarnessRegistry } from "./harness/registry.js";
 import { getLogger, rootLogger } from "./log.js";
 import {
@@ -155,6 +158,7 @@ async function main(): Promise<void> {
     `http://open-managed-agents-orchestrator:${port}`,
   );
   const runtimeImage = env("OPENCLAW_RUNTIME_IMAGE", "open-managed-agents/openclaw-agent:latest");
+  const hermesRuntimeImage = env("OMA_HERMES_RUNTIME_IMAGE", "open-managed-agents/hermes-agent:latest");
   // hostStateRoot is the host-side path, needed by dockerode for bind
   // mounts on spawned agent containers. The actual Docker daemon resolves
   // paths against the host filesystem, not the orchestrator's.
@@ -263,7 +267,10 @@ async function main(): Promise<void> {
 
   // Event reader. Parses OpenClaw's per-session JSONL on the mounted state
   // directory at query time; the orchestrator never writes to those files.
-  const eventReader = new OpenClawJsonlEventLog(stateRoot);
+  const eventReader = new CompositeManagedEventLog(stateRoot, [
+    new ManagedJsonlEventLog(stateRoot),
+    new OpenClawJsonlEventLog(stateRoot),
+  ]);
 
   // Per-session container pool. isBusy closes over the session store so the
   // sweeper can skip containers whose session currently has a run in flight
@@ -405,10 +412,21 @@ async function main(): Promise<void> {
     vaults: store.vaults,
   });
 
+  const hermesHarness = new HermesHarnessAdapter({
+    runtimeImage: hermesRuntimeImage,
+    hostStateRoot,
+    stateRoot,
+    network,
+    gatewayPort,
+    passthroughEnv,
+    environments: store.environments,
+  });
+
+  const harnesses = new HarnessRegistry({ adapters: [harness, hermesHarness] });
   const routerCfg: RouterConfig = {
     passthroughEnv,
     runTimeoutMs,
-    harnesses: new HarnessRegistry({ adapters: [harness] }),
+    harnesses,
   };
 
   const router = new AgentRouter(
@@ -553,6 +571,7 @@ async function main(): Promise<void> {
           baseUrl: info.baseUrl,
           token: gatewayToken,
         },
+        controlPlane: harnesses.require(session.harnessId).controlPlane,
         configSignature: persisted?.configSignature,
         spawnedAt: persisted?.spawnedAt,
         ownedResources,

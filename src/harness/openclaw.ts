@@ -2,7 +2,8 @@ import { chownSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import rawModelAliases from "../model-aliases.json" with { type: "json" };
 import type { Mount, SpawnOptions } from "../runtime/container.js";
-import { GatewayWsError } from "../runtime/gateway-ws.js";
+import type { ContainerControlClient, ContainerControlPlane } from "../runtime/control.js";
+import { GatewayWebSocketClient, GatewayWsError } from "../runtime/gateway-ws.js";
 import type { ParentTokenMinter } from "../runtime/parent-token.js";
 import type { EnvironmentStore, VaultStore } from "../store/types.js";
 import type { AgentConfig, Session } from "../orchestrator/types.js";
@@ -64,6 +65,7 @@ type OpenClawControlClient = {
 export class OpenClawHarnessAdapter implements HarnessAdapter {
   readonly id = "openclaw";
   readonly displayName = "OpenClaw";
+  readonly controlPlane = createOpenClawControlPlane();
 
   constructor(private readonly cfg: OpenClawHarnessAdapterConfig) {}
 
@@ -211,7 +213,7 @@ export class OpenClawHarnessAdapter implements HarnessAdapter {
   async patchSession(
     controlClient: unknown,
     sessionId: string,
-    fields: { model?: string; thinkingLevel?: string },
+    fields: { model?: string; thinkingLevel?: AgentConfig["thinkingLevel"] },
   ): Promise<void> {
     const ws = openClawControlClient(controlClient, ["patch"]);
     const patch: Record<string, string> = {};
@@ -235,6 +237,7 @@ export class OpenClawHarnessAdapter implements HarnessAdapter {
 
   async resolveApproval(
     controlClient: unknown,
+    _sessionId: string,
     approvalId: string,
     decision: "allow" | "deny",
   ): Promise<void> {
@@ -590,4 +593,63 @@ function normalizeChatCompletionUsage(
 
 function asFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function createOpenClawControlPlane(): ContainerControlPlane {
+  return {
+    async connect(container) {
+      const wsClient = new GatewayWebSocketClient({
+        baseUrl: container.baseUrl,
+        token: container.token,
+        clientName: "open-managed-agents",
+      });
+      try {
+        await wsClient.connect();
+        return wsClient;
+      } catch (err) {
+        await wsClient.close().catch(() => {
+          /* best-effort */
+        });
+        throw err;
+      }
+    },
+    async ensureConnected(container, client) {
+      const wsClient = asGatewayWsClient(client);
+      if (wsClient.isConnected()) return wsClient;
+      const replacement = new GatewayWebSocketClient({
+        baseUrl: container.baseUrl,
+        token: container.token,
+        clientName: "open-managed-agents",
+      });
+      try {
+        await replacement.connect();
+      } catch (err) {
+        await replacement.close().catch(() => {
+          /* best-effort */
+        });
+        throw err;
+      }
+      await wsClient.close().catch(() => {
+        /* best-effort */
+      });
+      return replacement;
+    },
+    async close(client) {
+      await client.close();
+    },
+  };
+}
+
+function asGatewayWsClient(client: ContainerControlClient): GatewayWebSocketClient {
+  if (client instanceof GatewayWebSocketClient) return client;
+  if (
+    typeof (client as { isConnected?: unknown }).isConnected === "function" &&
+    typeof (client as { close?: unknown }).close === "function"
+  ) {
+    return client as GatewayWebSocketClient;
+  }
+  throw new HarnessControlError(
+    "invalid_control_client",
+    "OpenClaw control client is not a gateway WebSocket client",
+  );
 }

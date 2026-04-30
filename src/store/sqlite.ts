@@ -42,6 +42,12 @@ import type {
 
 const nanoid = customAlphabet("abcdefghijklmnopqrstuvwxyz0123456789", 12);
 const SESSION_STATUS_VALUES_SQL = `'idle', 'starting', 'running', 'failed'`;
+const THINKING_LEVELS = new Set<string>(["off", "low", "medium", "high", "xhigh"]);
+
+function parseQueuedThinkingLevel(value: string | null): ThinkingLevel | undefined {
+  if (!value) return undefined;
+  return THINKING_LEVELS.has(value) ? (value as ThinkingLevel) : undefined;
+}
 
 // ---------- Row shapes ----------
 
@@ -1400,7 +1406,7 @@ class SqliteQueueStore implements QueueStore {
     return {
       content: row.content,
       model: row.model ?? undefined,
-      thinkingLevel: row.thinking_level ?? undefined,
+      thinkingLevel: parseQueuedThinkingLevel(row.thinking_level),
       enqueuedAt: row.enqueued_at,
     };
   }
@@ -1420,7 +1426,7 @@ class SqliteQueueStore implements QueueStore {
     return {
       content: row.content,
       model: row.model ?? undefined,
-      thinkingLevel: row.thinking_level ?? undefined,
+      thinkingLevel: parseQueuedThinkingLevel(row.thinking_level),
       enqueuedAt: row.enqueued_at,
     };
   }

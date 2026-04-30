@@ -29,6 +29,9 @@ describe("adapter-server protocol", () => {
     expect(AdapterServerRoutes.resolveApproval).toBe(
       "/sessions/:session_id/approvals/:approval_id",
     );
+    expect(AdapterServerRoutes.listApprovals).toBe(
+      "/sessions/:session_id/approvals",
+    );
   });
 
   it("validates ready responses with explicit capabilities", () => {

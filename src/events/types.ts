@@ -14,6 +14,7 @@ export type ManagedEventLog = {
    * OpenClaw backend this is the host-mounted Pi/OpenClaw state directory.
    */
   readonly stateRoot: string;
+  appendEvents?(agentId: string, sessionId: string, events: Event[]): void;
   listBySession(agentId: string, sessionId: string): Event[];
   latestAgentMessage(agentId: string, sessionId: string): Event | undefined;
   latestAgentOutcome(agentId: string, sessionId: string): Event | undefined;

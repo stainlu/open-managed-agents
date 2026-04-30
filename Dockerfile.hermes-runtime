@@ -1,0 +1,47 @@
+# Open Managed Agents - Hermes adapter runtime image
+#
+# Runs one Hermes Agent instance behind the internal oma.adapter.v1 HTTP/SSE
+# protocol. The orchestrator still owns session lifecycle, isolation, queues,
+# policy, and public API shape; Hermes owns the agent loop.
+
+FROM python:3.11-slim
+
+ARG HERMES_AGENT_REF=5401a0080d97cfa61e20749f02ba6b54dbb181bd
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        git \
+        tini \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+        "hermes-agent[acp,mcp,bedrock,pty] @ git+https://github.com/NousResearch/hermes-agent.git@${HERMES_AGENT_REF}"
+
+RUN groupadd -r hermes && useradd -r -g hermes -m -d /home/hermes hermes
+RUN mkdir -p /workspace /opt/oma-hermes-adapter \
+    && chown -R hermes:hermes /workspace /home/hermes /opt/oma-hermes-adapter
+
+COPY docker/hermes-adapter/oma_hermes_adapter.py /opt/oma-hermes-adapter/oma_hermes_adapter.py
+
+USER hermes
+WORKDIR /workspace
+
+ENV OMA_ADAPTER_PROTOCOL="oma.adapter.v1" \
+    OMA_ADAPTER_HARNESS_ID="hermes" \
+    OMA_ADAPTER_PORT="18789" \
+    OPENCLAW_GATEWAY_PORT="18789" \
+    OMA_STATE_DIR="/workspace" \
+    HERMES_HOME="/workspace/.hermes" \
+    TERMINAL_CWD="/workspace" \
+    TERMINAL_ENV="local" \
+    PYTHONUNBUFFERED="1"
+
+EXPOSE 18789
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
+    CMD curl --silent --fail "http://127.0.0.1:${OMA_ADAPTER_PORT}/readyz" || exit 1
+
+ENTRYPOINT ["/usr/bin/tini", "--", "python", "/opt/oma-hermes-adapter/oma_hermes_adapter.py"]

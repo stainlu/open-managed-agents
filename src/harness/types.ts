@@ -1,5 +1,6 @@
 import type { SpawnOptions } from "../runtime/container.js";
-import type { AgentConfig, Session } from "../orchestrator/types.js";
+import type { ContainerControlPlane } from "../runtime/control.js";
+import type { AgentConfig, EnvironmentConfig, Event, Session } from "../orchestrator/types.js";
 import type { HarnessId } from "./ids.js";
 
 export type { HarnessId } from "./ids.js";
@@ -16,7 +17,7 @@ export type HarnessSpawnOptionsArgs = {
   agent: AgentConfig;
   session: HarnessSessionContext;
   modelOverride?: string;
-  thinkingLevel?: string;
+  thinkingLevel?: AgentConfig["thinkingLevel"];
 };
 
 export type HarnessTurnInvocationArgs = {
@@ -25,6 +26,11 @@ export type HarnessTurnInvocationArgs = {
   content: string;
   sessionId: string;
   timeoutMs: number;
+  agent?: AgentConfig;
+  session?: Session;
+  environment?: EnvironmentConfig;
+  model?: string;
+  thinkingLevel?: AgentConfig["thinkingLevel"];
 };
 
 export type HarnessTurnResult = {
@@ -32,6 +38,12 @@ export type HarnessTurnResult = {
   tokensIn: number;
   tokensOut: number;
   model?: string;
+  events?: Event[];
+  native?: {
+    nativeSessionId?: string | null;
+    nativeThreadId?: string | null;
+    nativeMetadata?: Record<string, unknown> | null;
+  };
 };
 
 export type HarnessStreamingTurnInvocationArgs = HarnessTurnInvocationArgs;
@@ -80,6 +92,7 @@ export class HarnessControlError extends Error {
 export type HarnessAdapter = {
   readonly id: HarnessId;
   readonly displayName: string;
+  readonly controlPlane?: ContainerControlPlane;
   buildSpawnOptions(args: HarnessSpawnOptionsArgs): SpawnOptions;
   shouldBypassWarmPool(session: Pick<Session, "environmentId" | "vaultId"> | undefined): boolean;
   modelForUsage(model: string): string;
@@ -89,12 +102,13 @@ export type HarnessAdapter = {
   patchSession(
     controlClient: unknown,
     sessionId: string,
-    fields: { model?: string; thinkingLevel?: string },
+    fields: { model?: string; thinkingLevel?: AgentConfig["thinkingLevel"] },
   ): Promise<void>;
   abortSession(controlClient: unknown, sessionId: string): Promise<void>;
   compactSession(controlClient: unknown, sessionId: string): Promise<void>;
   resolveApproval(
     controlClient: unknown,
+    sessionId: string,
     approvalId: string,
     decision: "allow" | "deny",
   ): Promise<void>;

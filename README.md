@@ -7,8 +7,9 @@ It targets the Claude Managed Agents product shape: `Agent`, `Environment`,
 `Session`, and `Event` primitives; durable sessions; isolated execution;
 streaming event history; tool policy; cancellation; recovery; and observability.
 
-The current implementation is a baseline port of `openclaw-managed-agents`.
-OpenClaw is the first working harness adapter. Hermes is the next target adapter.
+The current implementation is a baseline port of `openclaw-managed-agents`
+with the first harness boundary extracted. OpenClaw is the production adapter.
+Hermes is now wired as the second, experimental adapter.
 
 ## Positioning
 
@@ -40,14 +41,15 @@ Working today:
 - SSE event streaming.
 - OpenAI-compatible `/v1/chat/completions` shim.
 - Tool permission policies and approvals for the OpenClaw adapter.
+- Generic `HarnessAdapter` interface.
+- Managed JSONL event log abstraction.
+- Experimental Hermes adapter runtime via direct `AIAgent` integration.
 - Limited networking sidecar.
 - Subagents as first-class sessions.
 
 Not done yet:
 
-- Generic `HarnessAdapter` interface.
-- Managed JSONL event log abstraction.
-- Hermes adapter.
+- Full Hermes parity: arbitrary pre-tool approvals, MCP, compaction, subagents.
 - Codex adapter.
 - Claude Agent SDK adapter.
 
@@ -59,7 +61,7 @@ Client / SDK
   -> managed-agent layer
        agents, environments, sessions, events, queues, policy, credentials
   -> harness adapter
-       OpenClaw first, Hermes next
+       OpenClaw production, Hermes experimental
   -> runtime substrate
        Docker first, cloud backends later
   -> native harness
@@ -90,9 +92,9 @@ pnpm docker:build
 docker compose up --build -d
 ```
 
-The baseline still uses `OPENCLAW_*` environment variables internally because
-the only working adapter is OpenClaw. Those names should move behind the adapter
-boundary before adding `OMA_*` platform-level configuration.
+Some runtime internals still use `OPENCLAW_*` names for compatibility with the
+OpenClaw adapter and existing deployment scripts. New harness-neutral adapter
+protocol pieces use `OMA_*`.
 
 ## Strategy Notes
 

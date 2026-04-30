@@ -12,7 +12,10 @@ import type {
   NetworkingSpec,
   SpawnOptions,
 } from "./container.js";
-import { GatewayWebSocketClient, GatewayWsError } from "./gateway-ws.js";
+import type {
+  ContainerControlClient,
+  ContainerControlPlane,
+} from "./control.js";
 
 const log = getLogger("pool");
 
@@ -27,11 +30,9 @@ const log = getLogger("pool");
 // explicitly marks as auto-reapable (for example one-shot ephemeral
 // sessions), while speculative warm containers still age out by TTL.
 //
-// Item 7 added a GatewayWebSocketClient to each live container. After the
-// HTTP /readyz check succeeds, the pool also opens a WebSocket to the
-// gateway's control plane and runs the operator handshake. The router uses
-// that WS client to issue cancel / steer / patch operations against the
-// running session; the WS lifetime mirrors the container lifetime.
+// Each live container also carries a harness-specific control client. For
+// OpenClaw that is its gateway WebSocket; for adapter-server harnesses it can
+// be a small HTTP client. The pool owns only the lifecycle, not the protocol.
 //
 // The pool is in-memory only. On orchestrator restart the pool is empty;
 // any containers that outlived the prior process are reaped at startup by
@@ -176,8 +177,9 @@ export type PoolConfig = {
 type ActiveContainer = {
   sessionId: string;
   container: Container;
-  /** Operator-role WS client for control-plane calls (abort/steer/patch). */
-  wsClient: GatewayWebSocketClient;
+  /** Harness-specific control client for cancel/patch/approvals/etc. */
+  controlClient: ContainerControlClient;
+  controlPlane: ContainerControlPlane;
   /** Fingerprint of the boot-time config baked into this container. */
   configSignature: string;
   spawnedAt: number;
@@ -201,10 +203,29 @@ export type OwnedSessionResources = NonNullable<ActiveContainer["ownedResources"
 type WarmContainer = {
   agentId: string;
   container: Container;
-  wsClient: GatewayWebSocketClient;
+  controlClient: ContainerControlClient;
+  controlPlane: ContainerControlPlane;
   spawnOptions: SpawnOptions;
   configSignature: string;
   spawnedAt: number;
+};
+
+const noopControlClient: ContainerControlClient = {
+  async close(): Promise<void> {
+    /* no persistent control connection */
+  },
+};
+
+const noopControlPlane: ContainerControlPlane = {
+  async connect(): Promise<ContainerControlClient> {
+    return noopControlClient;
+  },
+  async ensureConnected(_container, client): Promise<ContainerControlClient> {
+    return client;
+  },
+  async close(client): Promise<void> {
+    await client.close();
+  },
 };
 
 function stableSortRecord(
@@ -347,7 +368,11 @@ export class SessionContainerPool {
    * pool bounded so that a host with many agent templates doesn't
    * accumulate one persistent 2 GiB container per template.
    */
-  async warmForAgent(agentId: string, spawnOptions: SpawnOptions): Promise<void> {
+  async warmForAgent(
+    agentId: string,
+    spawnOptions: SpawnOptions,
+    controlPlane?: ContainerControlPlane,
+  ): Promise<void> {
     if (this.shuttingDown) return;
     // warm-pool disabled → every warm path is a no-op. Applies to
     // startup warming, agent-create warming, session-create warming,
@@ -369,7 +394,12 @@ export class SessionContainerPool {
       await this.reapWarmEntry(admission.evictedWarm, "cap-exceeded");
     }
     if (!admission.shouldSpawn) return;
-    const promise = this.doWarmForAgent(agentId, spawnOptions, configSignature);
+    const promise = this.doWarmForAgent(
+      agentId,
+      spawnOptions,
+      configSignature,
+      controlPlane ?? noopControlPlane,
+    );
     this.pendingByAgent.set(agentId, { configSignature, promise });
     try {
       await promise;
@@ -385,6 +415,7 @@ export class SessionContainerPool {
     agentId: string,
     spawnOptions: SpawnOptions,
     configSignature: string,
+    controlPlane: ContainerControlPlane,
   ): Promise<void> {
     const t0 = Date.now();
     try {
@@ -400,15 +431,10 @@ export class SessionContainerPool {
         throw err;
       }
       const tReady = Date.now();
-      const wsClient = new GatewayWebSocketClient({
-        baseUrl: container.baseUrl,
-        token: container.token,
-        clientName: "open-managed-agents",
-      });
+      let controlClient: ContainerControlClient;
       try {
-        await wsClient.connect();
+        controlClient = await controlPlane.connect(container);
       } catch (err) {
-        await wsClient.close().catch(() => { /* best-effort */ });
         await this.runtime.stop(container.id).catch(() => { /* best-effort */ });
         throw err;
       }
@@ -421,7 +447,8 @@ export class SessionContainerPool {
         this.warm.set(agentId, {
           agentId,
           container,
-          wsClient,
+          controlClient,
+          controlPlane,
           spawnOptions,
           configSignature,
           spawnedAt: Date.now(),
@@ -430,7 +457,7 @@ export class SessionContainerPool {
         return true;
       });
       if (!inserted) {
-        await wsClient.close().catch(() => { /* best-effort */ });
+        await controlPlane.close(controlClient).catch(() => { /* best-effort */ });
         await this.runtime.stop(container.id).catch(() => { /* best-effort */ });
         return;
       }
@@ -439,7 +466,7 @@ export class SessionContainerPool {
           agent_id: agentId,
           container_create_ms: tCreated - t0,
           ready_wait_ms: tReady - tCreated,
-          ws_connect_ms: tConnected - tReady,
+          control_connect_ms: tConnected - tReady,
           total_warm_ms: tConnected - t0,
         },
         "pre-warmed container for agent",
@@ -599,6 +626,7 @@ export class SessionContainerPool {
   async acquireForSession(args: {
     sessionId: string;
     spawnOptions: SpawnOptions;
+    controlPlane?: ContainerControlPlane;
     /** Agent ID for warm-pool matching. */
     agentId?: string;
     /**
@@ -676,6 +704,7 @@ export class SessionContainerPool {
     args: {
       sessionId: string;
       spawnOptions: SpawnOptions;
+      controlPlane?: ContainerControlPlane;
       agentId?: string;
       networking?: NetworkingSpec;
       bypassWarmPool?: boolean;
@@ -691,6 +720,7 @@ export class SessionContainerPool {
         return await this.doLimitedSpawn({
           sessionId: args.sessionId,
           spawnOptions: args.spawnOptions,
+          controlPlane: args.controlPlane ?? noopControlPlane,
           allowedHosts: args.networking.allowedHosts,
           allowMcpServers: args.networking.allowMcpServers,
           allowPackageManagers: args.networking.allowPackageManagers,
@@ -725,7 +755,7 @@ export class SessionContainerPool {
           if (warmEntry.configSignature !== configSignature) {
             this.warm.delete(args.agentId);
             poolWarmContainers.set(this.warm.size);
-            await warmEntry.wsClient.close().catch(() => {
+            await warmEntry.controlPlane.close(warmEntry.controlClient).catch(() => {
               /* best-effort */
             });
             await this.runtime.stop(warmEntry.container.id).catch((err) => {
@@ -741,7 +771,11 @@ export class SessionContainerPool {
             );
             if (!healthy) {
               await this.reapWarmEntry(warmEntry, "deleted");
-              void this.warmForAgent(args.agentId, warmEntry.spawnOptions).catch((err) => {
+              void this.warmForAgent(
+                args.agentId,
+                warmEntry.spawnOptions,
+                warmEntry.controlPlane,
+              ).catch((err) => {
                 log.warn({ err, agent_id: args.agentId }, "warm-pool replenish after failed claim failed");
               });
             } else {
@@ -761,7 +795,7 @@ export class SessionContainerPool {
                     },
                     "warm workspace claim failed; discarding warm container and cold-spawning",
                   );
-                  await warmEntry.wsClient.close().catch(() => {
+                  await warmEntry.controlPlane.close(warmEntry.controlClient).catch(() => {
                     /* best-effort */
                   });
                   await this.runtime.stop(warmEntry.container.id).catch((stopErr) => {
@@ -774,20 +808,31 @@ export class SessionContainerPool {
                       "warm stop failed after workspace claim failure",
                     );
                   });
-                  void this.warmForAgent(args.agentId, warmEntry.spawnOptions).catch((warmErr) => {
+                  void this.warmForAgent(
+                    args.agentId,
+                    warmEntry.spawnOptions,
+                    warmEntry.controlPlane,
+                  ).catch((warmErr) => {
                     log.warn(
                       { err: warmErr, agent_id: args.agentId },
                       "warm-pool replenish after workspace claim failure failed",
                     );
                   });
-                  return await this.doSpawn(args, configSignature);
+                  return await this.doSpawn(
+                    {
+                      ...args,
+                      controlPlane: args.controlPlane ?? noopControlPlane,
+                    },
+                    configSignature,
+                  );
                 }
               }
               const now = Date.now();
               this.active.set(args.sessionId, {
                 sessionId: args.sessionId,
                 container: warmEntry.container,
-                wsClient: warmEntry.wsClient,
+                controlClient: warmEntry.controlClient,
+                controlPlane: warmEntry.controlPlane,
                 configSignature,
                 spawnedAt: warmEntry.spawnedAt,
                 lastUsedAt: now,
@@ -807,7 +852,11 @@ export class SessionContainerPool {
                 { session_id: args.sessionId, agent_id: args.agentId },
                 "claimed pre-warmed container",
               );
-              void this.warmForAgent(args.agentId, warmEntry.spawnOptions).catch((err) => {
+              void this.warmForAgent(
+                args.agentId,
+                warmEntry.spawnOptions,
+                warmEntry.controlPlane,
+              ).catch((err) => {
                 log.warn({ err, agent_id: args.agentId }, "warm-pool replenish failed");
               });
               return warmEntry.container;
@@ -816,7 +865,13 @@ export class SessionContainerPool {
         }
       }
 
-      return await this.doSpawn(args, configSignature);
+      return await this.doSpawn(
+        {
+          ...args,
+          controlPlane: args.controlPlane ?? noopControlPlane,
+        },
+        configSignature,
+      );
     } finally {
       this.releaseActiveReservation(args.sessionId);
     }
@@ -825,6 +880,7 @@ export class SessionContainerPool {
   private async doSpawn(args: {
     sessionId: string;
     spawnOptions: SpawnOptions;
+    controlPlane: ContainerControlPlane;
   }, configSignature: string): Promise<Container> {
     const spawnEnd = poolSpawnDurationSeconds.startTimer();
     const t0 = Date.now();
@@ -840,23 +896,14 @@ export class SessionContainerPool {
     }
     const tReady = Date.now();
 
-    const wsClient = new GatewayWebSocketClient({
-      baseUrl: container.baseUrl,
-      token: container.token,
-      clientName: "open-managed-agents",
-    });
+    let controlClient: ContainerControlClient;
     try {
-      await wsClient.connect();
+      controlClient = await args.controlPlane.connect(container);
     } catch (err) {
-      await wsClient.close().catch(() => {
-        /* best-effort */
-      });
       await this.runtime.stop(container.id).catch(() => {
         /* best-effort */
       });
-      const code = err instanceof GatewayWsError ? err.code : "ws_connect_failed";
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new GatewayWsError(code, `gateway ws handshake failed: ${msg}`);
+      throw err;
     }
     const tConnected = Date.now();
 
@@ -864,7 +911,8 @@ export class SessionContainerPool {
     this.active.set(args.sessionId, {
       sessionId: args.sessionId,
       container,
-      wsClient,
+      controlClient,
+      controlPlane: args.controlPlane,
       configSignature,
       spawnedAt: now,
       lastUsedAt: now,
@@ -890,7 +938,7 @@ export class SessionContainerPool {
         session_id: args.sessionId,
         container_create_ms: tCreated - t0,
         ready_wait_ms: tReady - tCreated,
-        ws_connect_ms: tConnected - tReady,
+        control_connect_ms: tConnected - tReady,
         total_spawn_ms: totalSpawnMs,
       },
       "fresh container spawn completed",
@@ -926,6 +974,7 @@ export class SessionContainerPool {
   private async doLimitedSpawn(args: {
     sessionId: string;
     spawnOptions: SpawnOptions;
+    controlPlane: ContainerControlPlane;
     allowedHosts: string[];
     allowMcpServers?: boolean;
     allowPackageManagers?: boolean;
@@ -960,9 +1009,8 @@ export class SessionContainerPool {
       confinedNet: false,
       egressNet: false,
       sidecar: undefined as Container | undefined,
-      sidecarWs: undefined as undefined,
       agent: undefined as Container | undefined,
-      agentWs: undefined as GatewayWebSocketClient | undefined,
+      agentControl: undefined as ContainerControlClient | undefined,
     };
 
     const rollback = async (err: unknown): Promise<never> => {
@@ -971,8 +1019,8 @@ export class SessionContainerPool {
         { err: errMsg, session_id: args.sessionId },
         "limited-spawn failed — rolling back",
       );
-      if (created.agentWs) {
-        await created.agentWs.close().catch(() => {});
+      if (created.agentControl) {
+        await args.controlPlane.close(created.agentControl).catch(() => {});
       }
       if (created.agent) {
         await this.runtime.stop(created.agent.id).catch(() => {});
@@ -1080,33 +1128,24 @@ export class SessionContainerPool {
       created.agent = agent;
       await this.runtime.waitForReady(agent, this.cfg.readyTimeoutMs);
 
-      // 4. WS handshake from the orchestrator over the control-plane
+      // 4. Harness control handshake from the orchestrator over the control-plane
       //    network. The agent's container name is reachable on both
       //    confined and control-plane; the orchestrator is only on
       //    control-plane, so traffic flows through there.
-      const wsClient = new GatewayWebSocketClient({
-        baseUrl: agent.baseUrl,
-        token: agent.token,
-        clientName: "open-managed-agents",
-      });
+      let controlClient: ContainerControlClient;
       try {
-        await wsClient.connect();
-        created.agentWs = wsClient;
+        controlClient = await args.controlPlane.connect(agent);
+        created.agentControl = controlClient;
       } catch (err) {
-        await wsClient.close().catch(() => {});
-        const code = err instanceof GatewayWsError ? err.code : "ws_connect_failed";
-        const msg = err instanceof Error ? err.message : String(err);
-        throw new GatewayWsError(
-          code,
-          `gateway ws handshake failed (limited session): ${msg}`,
-        );
+        throw err;
       }
 
       const now = Date.now();
       this.active.set(args.sessionId, {
         sessionId: args.sessionId,
         container: agent,
-        wsClient,
+        controlClient,
+        controlPlane: args.controlPlane,
         configSignature,
         spawnedAt: now,
         lastUsedAt: now,
@@ -1150,12 +1189,12 @@ export class SessionContainerPool {
   }
 
   /**
-   * Get the operator-role WS client for an active session, if one exists.
+   * Get the harness-specific control client for an active session, if one exists.
    * Returns undefined when the session has no live container in the pool
    * (e.g., it was reaped by the idle sweeper or was never acquired).
    */
-  getWsClient(sessionId: string): GatewayWebSocketClient | undefined {
-    return this.active.get(sessionId)?.wsClient;
+  getWsClient(sessionId: string): ContainerControlClient | undefined {
+    return this.active.get(sessionId)?.controlClient;
   }
 
   /** Returns the container id of this session's active container, if any. */
@@ -1187,7 +1226,7 @@ export class SessionContainerPool {
     this.active.delete(sessionId);
     poolActiveContainers.set(this.active.size);
     this.cfg.onContainerReleased?.(sessionId);
-    await entry.wsClient.close().catch(() => {
+    await entry.controlPlane.close(entry.controlClient).catch(() => {
       /* best-effort */
     });
     await this.runtime.stop(entry.container.id).catch((err) => {
@@ -1223,6 +1262,7 @@ export class SessionContainerPool {
   async adopt(args: {
     sessionId: string;
     container: Container;
+    controlPlane?: ContainerControlPlane;
     agentId?: string;
     configSignature?: string | null;
     spawnedAt?: number | null;
@@ -1234,24 +1274,19 @@ export class SessionContainerPool {
       );
     }
     await this.runtime.waitForReady(args.container, this.cfg.readyTimeoutMs);
-    const wsClient = new GatewayWebSocketClient({
-      baseUrl: args.container.baseUrl,
-      token: args.container.token,
-      clientName: "open-managed-agents",
-    });
+    const controlPlane = args.controlPlane ?? noopControlPlane;
+    let controlClient: ContainerControlClient;
     try {
-      await wsClient.connect();
+      controlClient = await controlPlane.connect(args.container);
     } catch (err) {
-      await wsClient.close().catch(() => {
-        /* best-effort */
-      });
       throw err;
     }
     const now = Date.now();
     this.active.set(args.sessionId, {
       sessionId: args.sessionId,
       container: args.container,
-      wsClient,
+      controlClient,
+      controlPlane,
       configSignature: args.configSignature ?? "adopted",
       spawnedAt: args.spawnedAt ?? 0,
       lastUsedAt: now,
@@ -1303,10 +1338,10 @@ export class SessionContainerPool {
     const warmEntries = Array.from(this.warm.values());
     this.active.clear();
     this.warm.clear();
-    // Close WS clients first so the agents see a clean disconnect.
+    // Close control clients first so the agents see a clean disconnect.
     await Promise.allSettled([
-      ...entries.map((e) => e.wsClient.close()),
-      ...warmEntries.map((e) => e.wsClient.close()),
+      ...entries.map((e) => e.controlPlane.close(e.controlClient)),
+      ...warmEntries.map((e) => e.controlPlane.close(e.controlClient)),
     ]);
     // Stop every container (agents + sidecars + warm).
     const containerIds = [
@@ -1350,7 +1385,7 @@ export class SessionContainerPool {
         { session_id: entry.sessionId, idle_seconds: idleSec },
         "reaping idle container",
       );
-      await entry.wsClient.close().catch(() => {
+      await entry.controlPlane.close(entry.controlClient).catch(() => {
         /* best-effort */
       });
       await this.runtime.stop(entry.container.id).catch((err) => {
@@ -1434,12 +1469,20 @@ export class SessionContainerPool {
   }
 
   private async ensureReusableEntryHealthy(
-    entry: { container: Container; wsClient: GatewayWebSocketClient },
+    entry: {
+      container: Container;
+      controlClient: ContainerControlClient;
+      controlPlane: ContainerControlPlane;
+    },
     meta: Record<string, unknown>,
   ): Promise<boolean> {
     try {
       await this.runtime.waitForReady(entry.container, this.reuseProbeTimeoutMs());
-      entry.wsClient = await this.ensureWsClientConnected(entry.container, entry.wsClient);
+      entry.controlClient = await this.ensureControlClientConnected(
+        entry.container,
+        entry.controlClient,
+        entry.controlPlane,
+      );
       return true;
     } catch (err) {
       log.warn(
@@ -1450,26 +1493,13 @@ export class SessionContainerPool {
     }
   }
 
-  private async ensureWsClientConnected(
+  private async ensureControlClientConnected(
     container: Container,
-    wsClient: GatewayWebSocketClient,
-  ): Promise<GatewayWebSocketClient> {
-    if (wsClient.isConnected()) return wsClient;
-    const replacement = new GatewayWebSocketClient({
-      baseUrl: container.baseUrl,
-      token: container.token,
-      clientName: "open-managed-agents",
-    });
-    try {
-      await replacement.connect();
-    } catch (err) {
-      await replacement.close().catch(() => { /* best-effort */ });
-      throw err;
-    }
-    await wsClient.close().catch(() => {
-      /* best-effort */
-    });
-    return replacement;
+    controlClient: ContainerControlClient,
+    controlPlane: ContainerControlPlane,
+  ): Promise<ContainerControlClient> {
+    if (!controlPlane.ensureConnected) return controlClient;
+    return controlPlane.ensureConnected(container, controlClient);
   }
 
   private async reapWarmEntry(
@@ -1483,7 +1513,7 @@ export class SessionContainerPool {
       { agent_id: entry.agentId, reason, age_seconds: ageSec },
       "reaping warm container",
     );
-    await entry.wsClient.close().catch(() => {
+    await entry.controlPlane.close(entry.controlClient).catch(() => {
       /* best-effort */
     });
     await this.runtime.stop(entry.container.id).catch((err) => {

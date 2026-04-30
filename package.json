@@ -20,8 +20,9 @@
     "test:e2e": "bash test/e2e.sh",
     "lint": "tsc --noEmit -p tsconfig.json",
     "docker:build-runtime": "docker build -f Dockerfile.runtime -t open-managed-agents/openclaw-agent:latest .",
+    "docker:build-hermes-runtime": "docker build -f Dockerfile.hermes-runtime -t open-managed-agents/hermes-agent:latest .",
     "docker:build-orchestrator": "docker build -f Dockerfile.orchestrator -t open-managed-agents/orchestrator:latest .",
-    "docker:build": "pnpm docker:build-runtime && pnpm docker:build-orchestrator"
+    "docker:build": "pnpm docker:build-runtime && pnpm docker:build-hermes-runtime && pnpm docker:build-orchestrator"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",

@@ -27,9 +27,9 @@ policy, credentials, recovery, observability, and public API shape.
 
 The harness owns the agent loop.
 
-## Near-Term Architecture Direction
+## Architecture Direction
 
-Keep the working OpenClaw behavior while extracting these behind an adapter:
+Keep the working OpenClaw behavior behind an adapter:
 
 - OpenClaw spawn env/config construction
 - OpenClaw gateway HTTP turn invocation
@@ -37,7 +37,21 @@ Keep the working OpenClaw behavior while extracting these behind an adapter:
 - Pi/OpenClaw JSONL event reader
 - OpenClaw confirm-tools approval implementation
 
-The next real adapter is Hermes, preferably through Hermes ACP, not CLI scraping.
+Hermes is the second adapter. The production boundary is a small in-container
+`oma.adapter.v1` HTTP/SSE server that imports Hermes `AIAgent` directly.
+
+Do not integrate Hermes by scraping CLI output. Do not treat Hermes ACP as the
+managed-agent control plane. ACP is useful reference code for persistence and
+cancellation, but direct `AIAgent` gives the adapter the real session DB,
+callbacks, interrupt path, model/runtime resolver, and usage payload without
+nesting another protocol.
+
+Current Hermes limitations should stay explicit:
+
+- permission `deny` maps to Hermes disabled toolsets;
+- permission `always_ask` is only backed by Hermes terminal dangerous-command
+  approval today, not arbitrary pre-tool approval for every Hermes tool;
+- MCP, compaction, and subagent delegation are not wired for Hermes yet.
 
 ## Editing Rules
 

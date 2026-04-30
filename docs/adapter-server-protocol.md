@@ -54,6 +54,7 @@ All request and response schemas live in
 | `POST` | `/sessions/:session_id/patch` | Patch session-scoped model/thinking config |
 | `POST` | `/sessions/:session_id/compact` | Compact native session context |
 | `POST` | `/sessions/:session_id/approvals/:approval_id` | Resolve a pending approval |
+| `GET` | `/sessions/:session_id/approvals` | Return pending approvals for polling/recovery |
 | `GET` | `/sessions/:session_id/events` | Return normalized managed events |
 | `GET` | `/sessions/:session_id/outcome` | Return latest turn/session outcome |
 | `GET` | `/logs` | Return adapter/native harness logs |
