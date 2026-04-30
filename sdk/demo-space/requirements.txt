@@ -1,0 +1,1 @@
+open-managed-agents @ git+https://github.com/stainlu/open-managed-agents.git@main#subdirectory=sdk/python

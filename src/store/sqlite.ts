@@ -1,0 +1,2031 @@
+import Database from "better-sqlite3";
+import { customAlphabet } from "nanoid";
+import { VaultCrypto } from "../crypto/vault-crypto.js";
+import type {
+  AgentConfig,
+  CreateAgentRequest,
+  CreateEnvironmentRequest,
+  EnvironmentConfig,
+  McpServers,
+  Networking,
+  Packages,
+  PermissionPolicy,
+  Quota,
+  Session,
+  SessionStatus,
+  ThinkingLevel,
+  UpdateAgentRequest,
+  User,
+  UserTier,
+} from "../orchestrator/types.js";
+import type {
+  AgentStore,
+  AuditRecord,
+  AuditStore,
+  EnvironmentStore,
+  AddCredentialInput,
+  QueuedEvent,
+  QueueStore,
+  RunUsage,
+  SecretStore,
+  SessionContainer,
+  SessionContainerStore,
+  SessionStore,
+  Store,
+  UserStore,
+  Vault,
+  VaultCredential,
+  VaultCredentialMcpOAuth,
+  VaultStore,
+} from "./types.js";
+
+const nanoid = customAlphabet("abcdefghijklmnopqrstuvwxyz0123456789", 12);
+const SESSION_STATUS_VALUES_SQL = `'idle', 'starting', 'running', 'failed'`;
+
+// ---------- Row shapes ----------
+
+type AgentRow = {
+  agent_id: string;
+  model: string;
+  tools_json: string;
+  instructions: string;
+  permission_policy_json: string | null;
+  name: string | null;
+  created_at: number;
+  updated_at: number | null;
+  archived_at: number | null;
+  version: number;
+  callable_agents_json: string | null;
+  max_subagent_depth: number;
+  mcp_servers_json: string | null;
+  quota_json: string | null;
+  thinking_level: string | null;
+  channels_json: string | null;
+};
+
+type EnvironmentRow = {
+  environment_id: string;
+  name: string;
+  description: string | null;
+  packages_json: string | null;
+  networking_json: string;
+  created_at: number;
+};
+
+type SessionRow = {
+  session_id: string;
+  agent_id: string;
+  environment_id: string | null;
+  status: string;
+  ephemeral: number;
+  remaining_subagent_depth: number;
+  tokens_in: number;
+  tokens_out: number;
+  cost_usd: number;
+  turns: number;
+  error: string | null;
+  created_at: number;
+  last_event_at: number | null;
+  vault_id: string | null;
+  parent_session_id: string | null;
+  user_id: string | null;
+};
+
+/** True when at least one channel is enabled on the agent — used to
+ *  decide whether to persist a row in `channels_json` or leave it NULL
+ *  (NULL = "all channels disabled", the default agent shape). */
+function hasAnyChannelEnabled(channels: AgentConfig["channels"]): boolean {
+  return Boolean(channels?.telegram?.enabled);
+}
+
+function rowToAgent(r: AgentRow): AgentConfig {
+  return {
+    agentId: r.agent_id,
+    model: r.model,
+    tools: JSON.parse(r.tools_json) as string[],
+    instructions: r.instructions,
+    permissionPolicy: r.permission_policy_json
+      ? (JSON.parse(r.permission_policy_json) as PermissionPolicy)
+      : { type: "always_allow" },
+    name: r.name ?? undefined,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at ?? r.created_at,
+    archivedAt: r.archived_at,
+    version: r.version ?? 1,
+    callableAgents: r.callable_agents_json
+      ? (JSON.parse(r.callable_agents_json) as string[])
+      : [],
+    maxSubagentDepth: r.max_subagent_depth,
+    mcpServers: r.mcp_servers_json
+      ? (JSON.parse(r.mcp_servers_json) as McpServers)
+      : {},
+    quota: r.quota_json ? (JSON.parse(r.quota_json) as Quota) : undefined,
+    thinkingLevel: (r.thinking_level as ThinkingLevel | null) ?? "off",
+    channels: r.channels_json
+      ? (JSON.parse(r.channels_json) as AgentConfig["channels"])
+      : { telegram: { enabled: false } },
+  };
+}
+
+function rowToEnvironment(r: EnvironmentRow): EnvironmentConfig {
+  return {
+    environmentId: r.environment_id,
+    name: r.name,
+    description: r.description ?? "",
+    packages: r.packages_json ? (JSON.parse(r.packages_json) as Packages) : null,
+    networking: JSON.parse(r.networking_json) as Networking,
+    createdAt: r.created_at,
+  };
+}
+
+function rowToSession(r: SessionRow): Session {
+  return {
+    sessionId: r.session_id,
+    agentId: r.agent_id,
+    environmentId: r.environment_id,
+    status: r.status as SessionStatus,
+    ephemeral: r.ephemeral === 1,
+    remainingSubagentDepth: r.remaining_subagent_depth,
+    turns: r.turns ?? 0,
+    tokensIn: r.tokens_in,
+    tokensOut: r.tokens_out,
+    costUsd: r.cost_usd,
+    error: r.error,
+    createdAt: r.created_at,
+    lastEventAt: r.last_event_at,
+    vaultId: r.vault_id,
+    parentSessionId: r.parent_session_id ?? null,
+    userId: r.user_id ?? null,
+  };
+}
+
+function createSessionsTableSql(tableName: string): string {
+  return `
+CREATE TABLE ${tableName} (
+  session_id TEXT PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  environment_id TEXT,
+  status TEXT NOT NULL CHECK (status IN (${SESSION_STATUS_VALUES_SQL})),
+  ephemeral INTEGER NOT NULL DEFAULT 0,
+  remaining_subagent_depth INTEGER NOT NULL DEFAULT 0,
+  turns INTEGER NOT NULL DEFAULT 0,
+  tokens_in INTEGER NOT NULL DEFAULT 0,
+  tokens_out INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL NOT NULL DEFAULT 0,
+  error TEXT,
+  created_at INTEGER NOT NULL,
+  last_event_at INTEGER,
+  vault_id TEXT,
+  parent_session_id TEXT,
+  user_id TEXT
+)`;
+}
+
+function createSessionContainersTableSql(
+  tableName: string,
+  sessionsTableName: string,
+): string {
+  return `
+CREATE TABLE ${tableName} (
+  session_id TEXT PRIMARY KEY REFERENCES ${sessionsTableName}(session_id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL,
+  container_id TEXT NOT NULL,
+  container_name TEXT NOT NULL,
+  container_port INTEGER NOT NULL,
+  gateway_token TEXT NOT NULL,
+  claimed_at INTEGER NOT NULL,
+  config_signature TEXT,
+  spawned_at INTEGER,
+  boot_ms INTEGER,
+  pool_source TEXT
+)`;
+}
+
+// ---------- Schema bootstrap ----------
+
+// Applied once per database. Idempotent — every CREATE uses IF NOT EXISTS.
+// When the schema needs to evolve, introduce explicit migrations; this block
+// is intentionally not migration-aware because the MVP has no deployed data.
+//
+// Events are intentionally NOT a SQLite table. The source of truth for events
+// is OpenClaw's per-session JSONL on the host mount, written by the pi-ai
+// SessionManager. PiJsonlEventReader (src/store/pi-jsonl.ts) reads them at
+// query time. If you find an `events` table in an older SQLite file, it is
+// a vestigial Item 3 artifact that this file no longer touches.
+//
+// Cascade choice:
+//   sessions -> agents : NO CASCADE. Sessions outlive their template. An
+//                        agent template is a factory — once a session is
+//                        created, the session carries all the config it
+//                        needs (via its event history on disk and its
+//                        tokens rollup), so deleting the template does
+//                        not invalidate past sessions.
+const SCHEMA = `
+CREATE TABLE IF NOT EXISTS agents (
+  agent_id TEXT PRIMARY KEY,
+  model TEXT NOT NULL,
+  tools_json TEXT NOT NULL,
+  instructions TEXT NOT NULL,
+  name TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER,
+  archived_at INTEGER,
+  version INTEGER NOT NULL DEFAULT 1,
+  callable_agents_json TEXT,
+  max_subagent_depth INTEGER NOT NULL DEFAULT 0,
+  mcp_servers_json TEXT,
+  quota_json TEXT,
+  thinking_level TEXT,
+  channels_json TEXT
+);
+
+CREATE TABLE IF NOT EXISTS agent_versions (
+  agent_id TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  model TEXT NOT NULL,
+  tools_json TEXT NOT NULL,
+  instructions TEXT NOT NULL,
+  permission_policy_json TEXT,
+  name TEXT,
+  callable_agents_json TEXT,
+  max_subagent_depth INTEGER NOT NULL DEFAULT 0,
+  mcp_servers_json TEXT,
+  quota_json TEXT,
+  thinking_level TEXT,
+  channels_json TEXT,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (agent_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS environments (
+  environment_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  packages_json TEXT,
+  networking_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  session_id TEXT PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  environment_id TEXT,
+  status TEXT NOT NULL CHECK (status IN (${SESSION_STATUS_VALUES_SQL})),
+  ephemeral INTEGER NOT NULL DEFAULT 0,
+  remaining_subagent_depth INTEGER NOT NULL DEFAULT 0,
+  turns INTEGER NOT NULL DEFAULT 0,
+  tokens_in INTEGER NOT NULL DEFAULT 0,
+  tokens_out INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL NOT NULL DEFAULT 0,
+  error TEXT,
+  created_at INTEGER NOT NULL,
+  last_event_at INTEGER,
+  vault_id TEXT,
+  parent_session_id TEXT,
+  user_id TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_agent_id ON sessions(agent_id);
+
+-- Small key/value table for orchestrator-private bytes. Today holds exactly
+-- the ParentTokenMinter HMAC secret so subagent tokens survive restart.
+-- Kept deliberately narrow — not a general config store.
+CREATE TABLE IF NOT EXISTS kv_secrets (
+  k TEXT PRIMARY KEY,
+  v BLOB NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+-- Durable event queue. When POST /v1/sessions/:id/events lands on a running
+-- session, the payload is persisted here instead of held in a Map. The
+-- router drains it between turns; the startup-drain pass in src/index.ts
+-- resumes any work a crashed process left behind.
+--
+-- ROWID ordering gives us FIFO for free — SQLite's auto-INTEGER PRIMARY KEY
+-- is monotonic within a database, so the lowest ROWID per session is the
+-- head. No explicit per-session seq column needed.
+CREATE TABLE IF NOT EXISTS queued_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL,
+  content TEXT NOT NULL,
+  model TEXT,
+  thinking_level TEXT,
+  enqueued_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_queued_events_session ON queued_events(session_id, id);
+
+-- Multi-tenant user accounts. Anonymous users auto-expire after 24h;
+-- GitHub-authenticated users persist. api_token is the bearer token
+-- used in Authorization headers — one per user, opaque to the client.
+CREATE TABLE IF NOT EXISTS users (
+  user_id TEXT PRIMARY KEY,
+  github_id INTEGER UNIQUE,
+  github_username TEXT,
+  avatar_url TEXT,
+  api_token TEXT UNIQUE NOT NULL,
+  tier TEXT NOT NULL CHECK (tier IN ('anonymous', 'github')),
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER
+);
+
+-- Structured audit log. One row per mutating API call. See
+-- src/audit.ts for the actor-extraction policy (token fingerprint, IP,
+-- or "anonymous") and the list of actions written. Indexed by target
+-- + ts so "what happened to agent X last month" is O(log n) not O(n).
+CREATE TABLE IF NOT EXISTS audit_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  request_id TEXT,
+  actor TEXT NOT NULL,
+  action TEXT NOT NULL,
+  target TEXT,
+  outcome TEXT NOT NULL,
+  metadata_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_target_ts ON audit_events(target, ts);
+CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_events(ts);
+CREATE INDEX IF NOT EXISTS idx_audit_action_ts ON audit_events(action, ts);
+
+-- Vaults: per-end-user credential bundles. Same shape concept as
+-- Claude MA's vaults (each vault belongs to ONE of the developer's
+-- app's end-users). Credentials live in vault_credentials keyed by
+-- vault_id with ON DELETE CASCADE so deleting a vault drops its secrets.
+-- user_id is indexed because listing-by-user is the common query
+-- (developer maps their user to a vault in their own DB).
+CREATE TABLE IF NOT EXISTS vaults (
+  vault_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_vaults_user ON vaults(user_id);
+
+CREATE TABLE IF NOT EXISTS vault_credentials (
+  credential_id TEXT PRIMARY KEY,
+  vault_id TEXT NOT NULL REFERENCES vaults(vault_id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  cred_type TEXT NOT NULL,
+  match_url TEXT NOT NULL,
+  -- Encrypted at rest (AES-256-GCM via VaultCrypto). Contents vary by
+  -- type: static_bearer = the raw bearer token; mcp_oauth = JSON blob
+  -- of accessToken + refreshToken + clientSecret. Non-secret OAuth
+  -- fields live in their own columns below.
+  token TEXT NOT NULL,
+  -- mcp_oauth only (NULL for static_bearer)
+  token_endpoint TEXT,
+  client_id TEXT,
+  scopes_json TEXT,
+  expires_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_vault_credentials_vault ON vault_credentials(vault_id);
+
+-- Session ↔ container mapping. Populated by the pool the instant a
+-- container becomes session-owned (fresh spawn OR warm claim) and
+-- deleted when the container is reaped/evicted. This is the
+-- authoritative source that lets orchestrator adoption reconnect to
+-- in-flight containers after a restart: Docker labels carry stale
+-- session-ids for claimed-warm containers (labels are immutable
+-- post-create), so falling back to them would misclassify every
+-- claimed-warm container as orphan and kill running sessions —
+-- exactly the "orchestrator restarted mid-run" bug we're fixing.
+-- FK cascades so deleting a session also drops its container row;
+-- the reverse direction (stopping a container) is handled in
+-- SessionContainerPool.
+CREATE TABLE IF NOT EXISTS session_containers (
+  session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL,
+  container_id TEXT NOT NULL,
+  container_name TEXT NOT NULL,
+  container_port INTEGER NOT NULL,
+  gateway_token TEXT NOT NULL,
+  claimed_at INTEGER NOT NULL,
+  config_signature TEXT,
+  spawned_at INTEGER,
+  -- Pool telemetry. NULL boot_ms only for adopt-at-restart (we didn't spawn it).
+  -- pool_source ∈ { cold, warm, limited, adopt }. Neither column is indexed —
+  -- they're read only when joining a single session row in the HTTP response.
+  boot_ms INTEGER,
+  pool_source TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_containers_container ON session_containers(container_id);
+`;
+
+// ---------- Agent store ----------
+
+class SqliteAgentStore implements AgentStore {
+  private readonly insertStmt: Database.Statement;
+  private readonly insertVersionStmt: Database.Statement;
+  private readonly getStmt: Database.Statement;
+  private readonly listStmt: Database.Statement;
+  private readonly deleteStmt: Database.Statement;
+  private readonly deleteVersionsStmt: Database.Statement;
+  private readonly updateStmt: Database.Statement;
+  private readonly listVersionsStmt: Database.Statement;
+  private readonly archiveStmt: Database.Statement;
+
+  constructor(private readonly db: Database.Database) {
+    this.insertStmt = db.prepare(
+      `INSERT INTO agents (
+        agent_id, model, tools_json, instructions, permission_policy_json,
+        name, created_at, updated_at, archived_at, version,
+        callable_agents_json, max_subagent_depth, mcp_servers_json, quota_json,
+        thinking_level, channels_json
+       ) VALUES (
+        @agent_id, @model, @tools_json, @instructions, @permission_policy_json,
+        @name, @created_at, @updated_at, NULL, 1,
+        @callable_agents_json, @max_subagent_depth, @mcp_servers_json, @quota_json,
+        @thinking_level, @channels_json
+       )`,
+    );
+    this.insertVersionStmt = db.prepare(
+      `INSERT INTO agent_versions (
+        agent_id, version, model, tools_json, instructions,
+        permission_policy_json, name,
+        callable_agents_json, max_subagent_depth, mcp_servers_json, quota_json,
+        thinking_level, channels_json, created_at
+       ) VALUES (
+        @agent_id, @version, @model, @tools_json, @instructions,
+        @permission_policy_json, @name,
+        @callable_agents_json, @max_subagent_depth, @mcp_servers_json, @quota_json,
+        @thinking_level, @channels_json, @created_at
+       )`,
+    );
+    this.getStmt = db.prepare(`SELECT * FROM agents WHERE agent_id = ?`);
+    this.listStmt = db.prepare(`SELECT * FROM agents ORDER BY created_at ASC`);
+    this.deleteStmt = db.prepare(`DELETE FROM agents WHERE agent_id = ?`);
+    this.deleteVersionsStmt = db.prepare(`DELETE FROM agent_versions WHERE agent_id = ?`);
+    this.updateStmt = db.prepare(
+      `UPDATE agents SET
+        model = @model, tools_json = @tools_json, instructions = @instructions,
+        permission_policy_json = @permission_policy_json,
+        name = @name, callable_agents_json = @callable_agents_json,
+        max_subagent_depth = @max_subagent_depth,
+        mcp_servers_json = @mcp_servers_json,
+        quota_json = @quota_json,
+        thinking_level = @thinking_level,
+        channels_json = @channels_json,
+        version = @version, updated_at = @updated_at
+       WHERE agent_id = @agent_id AND version = @prev_version`,
+    );
+    this.listVersionsStmt = db.prepare(
+      `SELECT agent_id, version, model, tools_json, instructions,
+              permission_policy_json, name,
+              callable_agents_json, max_subagent_depth, mcp_servers_json,
+              quota_json, thinking_level, channels_json,
+              created_at,
+              created_at as updated_at, NULL as archived_at
+       FROM agent_versions WHERE agent_id = ? ORDER BY version ASC`,
+    );
+    this.archiveStmt = db.prepare(
+      `UPDATE agents SET archived_at = @now, updated_at = @now WHERE agent_id = @agent_id`,
+    );
+  }
+
+  private agentToRow(agent: AgentConfig) {
+    return {
+      agent_id: agent.agentId,
+      model: agent.model,
+      tools_json: JSON.stringify(agent.tools),
+      instructions: agent.instructions,
+      permission_policy_json: agent.permissionPolicy.type !== "always_allow"
+        ? JSON.stringify(agent.permissionPolicy)
+        : null,
+      name: agent.name ?? null,
+      callable_agents_json: agent.callableAgents.length > 0
+        ? JSON.stringify(agent.callableAgents)
+        : null,
+      max_subagent_depth: agent.maxSubagentDepth,
+      mcp_servers_json:
+        agent.mcpServers && Object.keys(agent.mcpServers).length > 0
+          ? JSON.stringify(agent.mcpServers)
+          : null,
+      quota_json: agent.quota ? JSON.stringify(agent.quota) : null,
+      thinking_level: agent.thinkingLevel === "off" ? null : agent.thinkingLevel,
+      channels_json: hasAnyChannelEnabled(agent.channels)
+        ? JSON.stringify(agent.channels)
+        : null,
+    };
+  }
+
+  create(req: CreateAgentRequest): AgentConfig {
+    const now = Date.now();
+    const agent: AgentConfig = {
+      agentId: `agt_${nanoid()}`,
+      model: req.model,
+      tools: req.tools,
+      instructions: req.instructions,
+      permissionPolicy: req.permissionPolicy,
+      name: req.name,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      version: 1,
+      callableAgents: req.callableAgents,
+      maxSubagentDepth: req.maxSubagentDepth,
+      mcpServers: req.mcpServers,
+      quota: req.quota,
+      thinkingLevel: req.thinkingLevel,
+      channels: req.channels,
+    };
+    const row = this.agentToRow(agent);
+    this.insertStmt.run({ ...row, created_at: now, updated_at: now });
+    this.insertVersionStmt.run({ ...row, version: 1, created_at: now });
+    return agent;
+  }
+
+  get(agentId: string): AgentConfig | undefined {
+    const row = this.getStmt.get(agentId) as AgentRow | undefined;
+    return row ? rowToAgent(row) : undefined;
+  }
+
+  list(): AgentConfig[] {
+    const rows = this.listStmt.all() as AgentRow[];
+    return rows.map(rowToAgent);
+  }
+
+  delete(agentId: string): boolean {
+    this.deleteVersionsStmt.run(agentId);
+    const info = this.deleteStmt.run(agentId);
+    return info.changes > 0;
+  }
+
+  update(agentId: string, req: UpdateAgentRequest): AgentConfig | undefined {
+    const current = this.get(agentId);
+    if (!current || current.version !== req.version) return undefined;
+    const now = Date.now();
+    const updated: AgentConfig = {
+      ...current,
+      model: req.model ?? current.model,
+      tools: req.tools === null ? [] : (req.tools ?? current.tools),
+      instructions: req.instructions === null ? "" : (req.instructions ?? current.instructions),
+      permissionPolicy: req.permissionPolicy ?? current.permissionPolicy,
+      name: req.name === null ? undefined : (req.name ?? current.name),
+      callableAgents: req.callableAgents === null ? [] : (req.callableAgents ?? current.callableAgents),
+      maxSubagentDepth: req.maxSubagentDepth ?? current.maxSubagentDepth,
+      mcpServers: req.mcpServers === null ? {} : (req.mcpServers ?? current.mcpServers),
+      quota: req.quota === null ? undefined : (req.quota ?? current.quota),
+      thinkingLevel: req.thinkingLevel ?? current.thinkingLevel,
+      channels: req.channels ?? current.channels,
+      updatedAt: now,
+      version: current.version + 1,
+    };
+    if (
+      updated.model === current.model &&
+      JSON.stringify(updated.tools) === JSON.stringify(current.tools) &&
+      updated.instructions === current.instructions &&
+      JSON.stringify(updated.permissionPolicy) === JSON.stringify(current.permissionPolicy) &&
+      updated.name === current.name &&
+      JSON.stringify(updated.callableAgents) === JSON.stringify(current.callableAgents) &&
+      updated.maxSubagentDepth === current.maxSubagentDepth &&
+      JSON.stringify(updated.mcpServers) === JSON.stringify(current.mcpServers) &&
+      JSON.stringify(updated.quota) === JSON.stringify(current.quota) &&
+      updated.thinkingLevel === current.thinkingLevel &&
+      JSON.stringify(updated.channels) === JSON.stringify(current.channels)
+    ) {
+      return current;
+    }
+    const row = this.agentToRow(updated);
+    const info = this.updateStmt.run({
+      ...row,
+      version: updated.version,
+      updated_at: now,
+      prev_version: req.version,
+    });
+    if (info.changes === 0) return undefined;
+    this.insertVersionStmt.run({ ...row, version: updated.version, created_at: now });
+    return updated;
+  }
+
+  listVersions(agentId: string): AgentConfig[] {
+    const rows = this.listVersionsStmt.all(agentId) as AgentRow[];
+    return rows.map(rowToAgent);
+  }
+
+  archive(agentId: string): AgentConfig | undefined {
+    const now = Date.now();
+    const info = this.archiveStmt.run({ agent_id: agentId, now });
+    if (info.changes === 0) return undefined;
+    return this.get(agentId);
+  }
+}
+
+// ---------- Environment store ----------
+
+class SqliteEnvironmentStore implements EnvironmentStore {
+  private readonly insertStmt: Database.Statement;
+  private readonly getStmt: Database.Statement;
+  private readonly listStmt: Database.Statement;
+  private readonly deleteStmt: Database.Statement;
+
+  constructor(private readonly db: Database.Database) {
+    this.insertStmt = db.prepare(
+      `INSERT INTO environments (
+        environment_id, name, description, packages_json, networking_json, created_at
+       ) VALUES (
+        @environment_id, @name, @description, @packages_json, @networking_json, @created_at
+       )`,
+    );
+    this.getStmt = db.prepare(`SELECT * FROM environments WHERE environment_id = ?`);
+    this.listStmt = db.prepare(`SELECT * FROM environments ORDER BY created_at ASC`);
+    this.deleteStmt = db.prepare(`DELETE FROM environments WHERE environment_id = ?`);
+  }
+
+  create(req: CreateEnvironmentRequest): EnvironmentConfig {
+    const env: EnvironmentConfig = {
+      environmentId: `env_${nanoid()}`,
+      name: req.name,
+      description: req.description ?? "",
+      packages: req.packages ?? null,
+      networking: req.networking,
+      createdAt: Date.now(),
+    };
+    this.insertStmt.run({
+      environment_id: env.environmentId,
+      name: env.name,
+      description: env.description,
+      packages_json: env.packages ? JSON.stringify(env.packages) : null,
+      networking_json: JSON.stringify(env.networking),
+      created_at: env.createdAt,
+    });
+    return env;
+  }
+
+  get(environmentId: string): EnvironmentConfig | undefined {
+    const row = this.getStmt.get(environmentId) as EnvironmentRow | undefined;
+    return row ? rowToEnvironment(row) : undefined;
+  }
+
+  list(): EnvironmentConfig[] {
+    const rows = this.listStmt.all() as EnvironmentRow[];
+    return rows.map(rowToEnvironment);
+  }
+
+  delete(environmentId: string): boolean {
+    const info = this.deleteStmt.run(environmentId);
+    return info.changes > 0;
+  }
+}
+
+// ---------- Session store ----------
+
+class SqliteSessionStore implements SessionStore {
+  private readonly insertStmt: Database.Statement;
+  private readonly getStmt: Database.Statement;
+  private readonly listStmt: Database.Statement;
+  private readonly deleteStmt: Database.Statement;
+  private readonly beginRunStmt: Database.Statement;
+  private readonly markRunningStmt: Database.Statement;
+  private readonly endSuccessStmt: Database.Statement;
+  private readonly endFailureStmt: Database.Statement;
+  private readonly endCancelledStmt: Database.Statement;
+  private readonly addUsageStmt: Database.Statement;
+  private readonly bumpTurnsStmt: Database.Statement;
+  private readonly listByParentStmt: Database.Statement;
+  private readonly failRunningStmt: Database.Statement;
+
+  constructor(private readonly db: Database.Database) {
+    this.insertStmt = db.prepare(
+      `INSERT INTO sessions (
+        session_id, agent_id, environment_id, status, ephemeral,
+        remaining_subagent_depth,
+        tokens_in, tokens_out, cost_usd,
+        error, created_at, last_event_at, vault_id, parent_session_id, user_id
+       ) VALUES (
+        @session_id, @agent_id, @environment_id, 'idle', @ephemeral,
+        @remaining_subagent_depth,
+        0, 0, 0, NULL, @created_at, NULL, @vault_id, @parent_session_id, @user_id
+       )`,
+    );
+    this.getStmt = db.prepare(`SELECT * FROM sessions WHERE session_id = ?`);
+    this.listStmt = db.prepare(`SELECT * FROM sessions ORDER BY created_at ASC`);
+    this.listByParentStmt = db.prepare(`SELECT * FROM sessions WHERE parent_session_id = ? ORDER BY created_at ASC`);
+    this.deleteStmt = db.prepare(`DELETE FROM sessions WHERE session_id = ?`);
+    this.beginRunStmt = db.prepare(
+      `UPDATE sessions
+       SET status = 'starting', error = NULL, last_event_at = @now
+       WHERE session_id = @session_id`,
+    );
+    this.markRunningStmt = db.prepare(
+      `UPDATE sessions
+       SET status = 'running', error = NULL, last_event_at = @now
+       WHERE session_id = @session_id`,
+    );
+    this.endSuccessStmt = db.prepare(
+      `UPDATE sessions
+       SET status = 'idle',
+           tokens_in = tokens_in + @ti,
+           tokens_out = tokens_out + @to,
+           cost_usd = cost_usd + @cost,
+           last_event_at = @now
+       WHERE session_id = @session_id`,
+    );
+    this.endFailureStmt = db.prepare(
+      `UPDATE sessions
+       SET status = 'failed', error = @error, last_event_at = @now
+       WHERE session_id = @session_id`,
+    );
+    this.endCancelledStmt = db.prepare(
+      `UPDATE sessions
+       SET status = 'idle', error = NULL, last_event_at = @now
+       WHERE session_id = @session_id`,
+    );
+    this.addUsageStmt = db.prepare(
+      `UPDATE sessions
+       SET tokens_in = tokens_in + @ti,
+           tokens_out = tokens_out + @to,
+           cost_usd = cost_usd + @cost,
+           last_event_at = @now
+       WHERE session_id = @session_id`,
+    );
+    this.bumpTurnsStmt = db.prepare(
+      `UPDATE sessions
+       SET turns = turns + 1, last_event_at = @now
+       WHERE session_id = @session_id`,
+    );
+    this.failRunningStmt = db.prepare(
+      `UPDATE sessions
+       SET status = 'failed', error = @reason, last_event_at = @now
+       WHERE status IN ('starting', 'running')`,
+    );
+  }
+
+  create(args: {
+    agentId: string;
+    sessionId?: string;
+    environmentId?: string;
+    ephemeral?: boolean;
+    remainingSubagentDepth?: number;
+    vaultId?: string;
+    parentSessionId?: string;
+    userId?: string;
+  }): Session {
+    const sessionId = args.sessionId ?? `ses_${nanoid()}`;
+    const environmentId = args.environmentId ?? null;
+    const ephemeral = args.ephemeral ?? false;
+    const remainingSubagentDepth = args.remainingSubagentDepth ?? 0;
+    const vaultId = args.vaultId ?? null;
+    const parentSessionId = args.parentSessionId ?? null;
+    const userId = args.userId ?? null;
+    const createdAt = Date.now();
+    this.insertStmt.run({
+      session_id: sessionId,
+      agent_id: args.agentId,
+      environment_id: environmentId,
+      ephemeral: ephemeral ? 1 : 0,
+      remaining_subagent_depth: remainingSubagentDepth,
+      created_at: createdAt,
+      vault_id: vaultId,
+      parent_session_id: parentSessionId,
+      user_id: userId,
+    });
+    return {
+      sessionId,
+      agentId: args.agentId,
+      environmentId,
+      status: "idle",
+      ephemeral,
+      remainingSubagentDepth,
+      turns: 0,
+      tokensIn: 0,
+      tokensOut: 0,
+      costUsd: 0,
+      error: null,
+      createdAt,
+      lastEventAt: null,
+      vaultId,
+      parentSessionId,
+      userId,
+    };
+  }
+
+  get(sessionId: string): Session | undefined {
+    const row = this.getStmt.get(sessionId) as SessionRow | undefined;
+    return row ? rowToSession(row) : undefined;
+  }
+
+  list(): Session[] {
+    const rows = this.listStmt.all() as SessionRow[];
+    return rows.map(rowToSession);
+  }
+
+  listByParent(parentSessionId: string): Session[] {
+    const rows = this.listByParentStmt.all(parentSessionId) as SessionRow[];
+    return rows.map(rowToSession);
+  }
+
+  delete(sessionId: string): boolean {
+    const info = this.deleteStmt.run(sessionId);
+    return info.changes > 0;
+  }
+
+  beginRun(sessionId: string): Session | undefined {
+    const info = this.beginRunStmt.run({ session_id: sessionId, now: Date.now() });
+    if (info.changes === 0) return undefined;
+    return this.get(sessionId);
+  }
+
+  markRunning(sessionId: string): Session | undefined {
+    const info = this.markRunningStmt.run({ session_id: sessionId, now: Date.now() });
+    if (info.changes === 0) return undefined;
+    return this.get(sessionId);
+  }
+
+  endRunSuccess(sessionId: string, usage: RunUsage): Session | undefined {
+    const info = this.endSuccessStmt.run({
+      session_id: sessionId,
+      ti: usage.tokensIn,
+      to: usage.tokensOut,
+      cost: usage.costUsd,
+      now: Date.now(),
+    });
+    if (info.changes === 0) return undefined;
+    return this.get(sessionId);
+  }
+
+  endRunFailure(sessionId: string, error: string): Session | undefined {
+    const info = this.endFailureStmt.run({
+      session_id: sessionId,
+      error,
+      now: Date.now(),
+    });
+    if (info.changes === 0) return undefined;
+    return this.get(sessionId);
+  }
+
+  endRunCancelled(sessionId: string): Session | undefined {
+    const info = this.endCancelledStmt.run({
+      session_id: sessionId,
+      now: Date.now(),
+    });
+    if (info.changes === 0) return undefined;
+    return this.get(sessionId);
+  }
+
+  addUsage(sessionId: string, usage: RunUsage): Session | undefined {
+    const info = this.addUsageStmt.run({
+      session_id: sessionId,
+      ti: usage.tokensIn,
+      to: usage.tokensOut,
+      cost: usage.costUsd,
+      now: Date.now(),
+    });
+    if (info.changes === 0) return undefined;
+    return this.get(sessionId);
+  }
+
+  bumpTurns(sessionId: string): Session | undefined {
+    const info = this.bumpTurnsStmt.run({
+      session_id: sessionId,
+      now: Date.now(),
+    });
+    if (info.changes === 0) return undefined;
+    return this.get(sessionId);
+  }
+
+  failRunningSessions(reason: string): number {
+    const info = this.failRunningStmt.run({ reason, now: Date.now() });
+    return info.changes;
+  }
+}
+
+// ---------- Secret store ----------
+
+// ---------- Vault store ----------
+//
+// Stores per-end-user credential bundles that sessions can bind to at
+// spawn time. The token column holds the secret in plaintext; at-rest
+// encryption is a follow-up tied to KMS integration (either env-derived
+// AES-GCM as a first pass, or a cloud-OEM KMS plug via the same
+// VaultStore interface). The data IS protected by file-system
+// permissions on the orchestrator's state dir — a compromised SQLite
+// file is still a compromise.
+// Row shape reflecting the full vault_credentials table post-mcp_oauth.
+// OAuth-only columns are NULL for static_bearer rows.
+type VaultCredentialRow = {
+  credential_id: string;
+  vault_id: string;
+  name: string;
+  cred_type: string;
+  match_url: string;
+  token: string;
+  token_endpoint: string | null;
+  client_id: string | null;
+  scopes_json: string | null;
+  expires_at: number | null;
+  created_at: number;
+  updated_at: number;
+};
+
+class SqliteVaultStore implements VaultStore {
+  private readonly insertVaultStmt: Database.Statement;
+  private readonly getVaultStmt: Database.Statement;
+  private readonly listVaultsStmt: Database.Statement;
+  private readonly listVaultsByUserStmt: Database.Statement;
+  private readonly deleteVaultStmt: Database.Statement;
+  private readonly insertCredStmt: Database.Statement;
+  private readonly getCredStmt: Database.Statement;
+  private readonly listCredsStmt: Database.Statement;
+  private readonly deleteCredStmt: Database.Statement;
+  private readonly touchVaultStmt: Database.Statement;
+  private readonly updateOAuthTokensStmt: Database.Statement;
+
+  private readonly dbRef: Database.Database;
+
+  constructor(db: Database.Database, private readonly crypto: VaultCrypto) {
+    this.dbRef = db;
+    this.insertVaultStmt = db.prepare(
+      `INSERT INTO vaults (vault_id, user_id, name, created_at, updated_at)
+       VALUES (@vault_id, @user_id, @name, @now, @now)`,
+    );
+    this.getVaultStmt = db.prepare(`SELECT * FROM vaults WHERE vault_id = ?`);
+    this.listVaultsStmt = db.prepare(`SELECT * FROM vaults ORDER BY created_at DESC`);
+    this.listVaultsByUserStmt = db.prepare(
+      `SELECT * FROM vaults WHERE user_id = ? ORDER BY created_at DESC`,
+    );
+    this.deleteVaultStmt = db.prepare(`DELETE FROM vaults WHERE vault_id = ?`);
+    this.insertCredStmt = db.prepare(
+      `INSERT INTO vault_credentials (
+        credential_id, vault_id, name, cred_type, match_url, token,
+        token_endpoint, client_id, scopes_json, expires_at,
+        created_at, updated_at
+       ) VALUES (
+        @credential_id, @vault_id, @name, @cred_type, @match_url, @token,
+        @token_endpoint, @client_id, @scopes_json, @expires_at,
+        @now, @now
+       )`,
+    );
+    this.updateOAuthTokensStmt = db.prepare(
+      `UPDATE vault_credentials
+         SET token = @token, expires_at = @expires_at, updated_at = @now
+       WHERE credential_id = @credential_id AND cred_type = 'mcp_oauth'`,
+    );
+    this.getCredStmt = db.prepare(`SELECT * FROM vault_credentials WHERE credential_id = ?`);
+    this.listCredsStmt = db.prepare(
+      `SELECT * FROM vault_credentials WHERE vault_id = ? ORDER BY created_at ASC`,
+    );
+    this.deleteCredStmt = db.prepare(`DELETE FROM vault_credentials WHERE credential_id = ?`);
+    this.touchVaultStmt = db.prepare(
+      `UPDATE vaults SET updated_at = @now WHERE vault_id = @vault_id`,
+    );
+  }
+
+  createVault(args: { userId: string; name: string }): Vault {
+    const now = Date.now();
+    const vault: Vault = {
+      vaultId: `vlt_${nanoid()}`,
+      userId: args.userId,
+      name: args.name,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.insertVaultStmt.run({
+      vault_id: vault.vaultId,
+      user_id: vault.userId,
+      name: vault.name,
+      now,
+    });
+    return vault;
+  }
+
+  getVault(vaultId: string): Vault | undefined {
+    const row = this.getVaultStmt.get(vaultId) as
+      | { vault_id: string; user_id: string; name: string; created_at: number; updated_at: number }
+      | undefined;
+    if (!row) return undefined;
+    return {
+      vaultId: row.vault_id,
+      userId: row.user_id,
+      name: row.name,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  listVaults(filter?: { userId?: string }): Vault[] {
+    const rows = (filter?.userId
+      ? this.listVaultsByUserStmt.all(filter.userId)
+      : this.listVaultsStmt.all()) as Array<{
+      vault_id: string;
+      user_id: string;
+      name: string;
+      created_at: number;
+      updated_at: number;
+    }>;
+    return rows.map((r) => ({
+      vaultId: r.vault_id,
+      userId: r.user_id,
+      name: r.name,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
+  }
+
+  deleteVault(vaultId: string): boolean {
+    // Credentials cascade via FK ON DELETE CASCADE — see schema.
+    const info = this.deleteVaultStmt.run(vaultId);
+    return info.changes > 0;
+  }
+
+  addCredential(args: AddCredentialInput): VaultCredential | undefined {
+    if (!this.getVault(args.vaultId)) return undefined;
+    const now = Date.now();
+    const credentialId = `crd_${nanoid()}`;
+    // Encrypt at rest so a leaked SQLite file alone doesn't leak
+    // plaintext credentials. The master key lives in env
+    // (OPENCLAW_VAULT_KEY) or in kv_secrets — out-of-band from the
+    // vault_credentials table.
+    if (args.type === "static_bearer") {
+      const cred: VaultCredential = {
+        credentialId,
+        vaultId: args.vaultId,
+        name: args.name,
+        type: "static_bearer",
+        matchUrl: args.matchUrl,
+        token: args.token,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.insertCredStmt.run({
+        credential_id: credentialId,
+        vault_id: args.vaultId,
+        name: args.name,
+        cred_type: "static_bearer",
+        match_url: args.matchUrl,
+        token: this.crypto.encrypt(args.token),
+        token_endpoint: null,
+        client_id: null,
+        scopes_json: null,
+        expires_at: null,
+        now,
+      });
+      this.touchVaultStmt.run({ vault_id: args.vaultId, now });
+      return cred;
+    }
+    // mcp_oauth: store an encrypted JSON blob of the secret triple in
+    // the `token` column; public OAuth metadata goes in dedicated
+    // columns so refresh can read expires_at without decrypting.
+    const cred: VaultCredential = {
+      credentialId,
+      vaultId: args.vaultId,
+      name: args.name,
+      type: "mcp_oauth",
+      matchUrl: args.matchUrl,
+      accessToken: args.accessToken,
+      refreshToken: args.refreshToken,
+      expiresAt: args.expiresAt,
+      tokenEndpoint: args.tokenEndpoint,
+      clientId: args.clientId,
+      clientSecret: args.clientSecret,
+      scopes: args.scopes,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.insertCredStmt.run({
+      credential_id: credentialId,
+      vault_id: args.vaultId,
+      name: args.name,
+      cred_type: "mcp_oauth",
+      match_url: args.matchUrl,
+      token: this.crypto.encrypt(
+        JSON.stringify({
+          accessToken: args.accessToken,
+          refreshToken: args.refreshToken,
+          clientSecret: args.clientSecret,
+        }),
+      ),
+      token_endpoint: args.tokenEndpoint,
+      client_id: args.clientId,
+      scopes_json: args.scopes ? JSON.stringify(args.scopes) : null,
+      expires_at: args.expiresAt,
+      now,
+    });
+    this.touchVaultStmt.run({ vault_id: args.vaultId, now });
+    return cred;
+  }
+
+  getCredential(credentialId: string): VaultCredential | undefined {
+    const row = this.getCredStmt.get(credentialId) as VaultCredentialRow | undefined;
+    if (!row) return undefined;
+    return this.rowToCredential(row);
+  }
+
+  listCredentials(vaultId: string): VaultCredential[] {
+    const rows = this.listCredsStmt.all(vaultId) as VaultCredentialRow[];
+    return rows.map((r) => this.rowToCredential(r));
+  }
+
+  updateOAuthTokens(
+    credentialId: string,
+    args: { accessToken: string; refreshToken?: string; expiresAt: number },
+  ): VaultCredentialMcpOAuth | undefined {
+    const existing = this.getCredential(credentialId);
+    if (!existing || existing.type !== "mcp_oauth") return undefined;
+    const now = Date.now();
+    const newSecrets = {
+      accessToken: args.accessToken,
+      refreshToken: args.refreshToken ?? existing.refreshToken,
+      clientSecret: existing.clientSecret,
+    };
+    const info = this.updateOAuthTokensStmt.run({
+      credential_id: credentialId,
+      token: this.crypto.encrypt(JSON.stringify(newSecrets)),
+      expires_at: args.expiresAt,
+      now,
+    });
+    if (info.changes === 0) return undefined;
+    return {
+      ...existing,
+      accessToken: newSecrets.accessToken,
+      refreshToken: newSecrets.refreshToken,
+      expiresAt: args.expiresAt,
+      updatedAt: now,
+    };
+  }
+
+  /**
+   * Decode a stored row back into a typed VaultCredential. Decrypts
+   * the secret blob based on cred_type and splits OAuth public/secret
+   * columns back into one object.
+   */
+  private rowToCredential(r: VaultCredentialRow): VaultCredential {
+    const plain = this.decryptStored(r.token);
+    if (r.cred_type === "static_bearer") {
+      return {
+        credentialId: r.credential_id,
+        vaultId: r.vault_id,
+        name: r.name,
+        type: "static_bearer",
+        matchUrl: r.match_url,
+        token: plain,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+      };
+    }
+    // mcp_oauth: plain is a JSON blob of secrets.
+    let secrets: { accessToken: string; refreshToken: string; clientSecret: string };
+    try {
+      secrets = JSON.parse(plain);
+    } catch {
+      throw new Error(
+        `vault credential ${r.credential_id} is mcp_oauth but decrypted payload is not valid JSON`,
+      );
+    }
+    return {
+      credentialId: r.credential_id,
+      vaultId: r.vault_id,
+      name: r.name,
+      type: "mcp_oauth",
+      matchUrl: r.match_url,
+      accessToken: secrets.accessToken,
+      refreshToken: secrets.refreshToken,
+      expiresAt: r.expires_at ?? 0,
+      tokenEndpoint: r.token_endpoint ?? "",
+      clientId: r.client_id ?? "",
+      clientSecret: secrets.clientSecret,
+      scopes: r.scopes_json ? (JSON.parse(r.scopes_json) as string[]) : undefined,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    };
+  }
+
+  /**
+   * Decrypt a stored token, passing through values that pre-date the
+   * encryption-at-rest rollout. The boot-time migration in
+   * `migratePlaintextCredentials` re-encrypts any remaining plaintext,
+   * so this fallback is only hit during the rollout window itself.
+   * After migration runs, every row starts with `v1:`.
+   */
+  private decryptStored(stored: string): string {
+    if (!VaultCrypto.isCiphertext(stored)) return stored;
+    return this.crypto.decrypt(stored);
+  }
+
+  /**
+   * One-time migration: re-encrypt any credential still stored as
+   * plaintext (added before OPENCLAW_VAULT_KEY was wired up). Runs on
+   * store construction. Returns the number of rows migrated for
+   * visibility in startup logs.
+   */
+  migratePlaintextCredentials(): number {
+    const rows = this.dbRef
+      .prepare(`SELECT credential_id, token FROM vault_credentials`)
+      .all() as Array<{ credential_id: string; token: string }>;
+    const update = this.dbRef.prepare(
+      `UPDATE vault_credentials SET token = @token WHERE credential_id = @credential_id`,
+    );
+    let migrated = 0;
+    for (const r of rows) {
+      if (VaultCrypto.isCiphertext(r.token)) continue;
+      update.run({ credential_id: r.credential_id, token: this.crypto.encrypt(r.token) });
+      migrated++;
+    }
+    return migrated;
+  }
+
+  deleteCredential(credentialId: string): boolean {
+    const info = this.deleteCredStmt.run(credentialId);
+    return info.changes > 0;
+  }
+}
+
+class SqliteSecretStore implements SecretStore {
+  private readonly getStmt: Database.Statement;
+  private readonly upsertStmt: Database.Statement;
+
+  constructor(db: Database.Database) {
+    this.getStmt = db.prepare(`SELECT v FROM kv_secrets WHERE k = ?`);
+    // INSERT OR REPLACE so set() is idempotent — callers don't need to
+    // distinguish "first boot, generate" from "rotate, overwrite".
+    this.upsertStmt = db.prepare(
+      `INSERT INTO kv_secrets (k, v, updated_at) VALUES (@k, @v, @now)
+       ON CONFLICT(k) DO UPDATE SET v = excluded.v, updated_at = excluded.updated_at`,
+    );
+  }
+
+  get(key: string): Buffer | undefined {
+    const row = this.getStmt.get(key) as { v: Buffer } | undefined;
+    return row?.v;
+  }
+
+  set(key: string, value: Buffer): void {
+    this.upsertStmt.run({ k: key, v: value, now: Date.now() });
+  }
+}
+
+// ---------- Queue store ----------
+
+class SqliteQueueStore implements QueueStore {
+  private readonly insertStmt: Database.Statement;
+  private readonly peekStmt: Database.Statement;
+  private readonly deleteByIdStmt: Database.Statement;
+  private readonly countStmt: Database.Statement;
+  private readonly clearStmt: Database.Statement;
+  private readonly listSessionsStmt: Database.Statement;
+
+  constructor(db: Database.Database) {
+    this.insertStmt = db.prepare(
+      `INSERT INTO queued_events (session_id, content, model, thinking_level, enqueued_at)
+       VALUES (@session_id, @content, @model, @thinking_level, @enqueued_at)`,
+    );
+    // Head-of-queue is the lowest id for a session. Peek-then-delete is a
+    // two-statement shift; both run inside the same sync better-sqlite3
+    // call stack, so concurrent shifts from a single orchestrator process
+    // are naturally serialized. Cross-process contention is out of scope
+    // (the orchestrator is still single-process by design).
+    this.peekStmt = db.prepare(
+      `SELECT id, content, model, thinking_level, enqueued_at
+       FROM queued_events WHERE session_id = ?
+       ORDER BY id ASC LIMIT 1`,
+    );
+    this.deleteByIdStmt = db.prepare(`DELETE FROM queued_events WHERE id = ?`);
+    this.countStmt = db.prepare(
+      `SELECT COUNT(*) as n FROM queued_events WHERE session_id = ?`,
+    );
+    this.clearStmt = db.prepare(`DELETE FROM queued_events WHERE session_id = ?`);
+    this.listSessionsStmt = db.prepare(
+      `SELECT DISTINCT session_id FROM queued_events ORDER BY session_id ASC`,
+    );
+  }
+
+  enqueue(sessionId: string, event: QueuedEvent): void {
+    this.insertStmt.run({
+      session_id: sessionId,
+      content: event.content,
+      model: event.model ?? null,
+      thinking_level: event.thinkingLevel ?? null,
+      enqueued_at: event.enqueuedAt,
+    });
+  }
+
+  peek(sessionId: string): QueuedEvent | undefined {
+    const row = this.peekStmt.get(sessionId) as
+      | {
+          id: number;
+          content: string;
+          model: string | null;
+          thinking_level: string | null;
+          enqueued_at: number;
+        }
+      | undefined;
+    if (!row) return undefined;
+    return {
+      content: row.content,
+      model: row.model ?? undefined,
+      thinkingLevel: row.thinking_level ?? undefined,
+      enqueuedAt: row.enqueued_at,
+    };
+  }
+
+  shift(sessionId: string): QueuedEvent | undefined {
+    const row = this.peekStmt.get(sessionId) as
+      | {
+          id: number;
+          content: string;
+          model: string | null;
+          thinking_level: string | null;
+          enqueued_at: number;
+        }
+      | undefined;
+    if (!row) return undefined;
+    this.deleteByIdStmt.run(row.id);
+    return {
+      content: row.content,
+      model: row.model ?? undefined,
+      thinkingLevel: row.thinking_level ?? undefined,
+      enqueuedAt: row.enqueued_at,
+    };
+  }
+
+  size(sessionId: string): number {
+    const row = this.countStmt.get(sessionId) as { n: number };
+    return row.n;
+  }
+
+  clear(sessionId: string): number {
+    const info = this.clearStmt.run(sessionId);
+    return info.changes;
+  }
+
+  listSessionsWithQueued(): string[] {
+    const rows = this.listSessionsStmt.all() as Array<{ session_id: string }>;
+    return rows.map((r) => r.session_id);
+  }
+}
+
+// ---------- Session-container mapping store ----------
+
+class SqliteSessionContainerStore implements SessionContainerStore {
+  private readonly upsertStmt: Database.Statement;
+  private readonly getStmt: Database.Statement;
+  private readonly deleteStmt: Database.Statement;
+  private readonly listStmt: Database.Statement;
+
+  constructor(db: Database.Database) {
+    this.upsertStmt = db.prepare(
+      `INSERT INTO session_containers (
+         session_id, agent_id, container_id, container_name,
+         container_port, gateway_token, claimed_at,
+         config_signature, spawned_at,
+         boot_ms, pool_source
+       ) VALUES (
+         @session_id, @agent_id, @container_id, @container_name,
+         @container_port, @gateway_token, @claimed_at,
+         @config_signature, @spawned_at,
+         @boot_ms, @pool_source
+       )
+       ON CONFLICT(session_id) DO UPDATE SET
+         agent_id = excluded.agent_id,
+         container_id = excluded.container_id,
+         container_name = excluded.container_name,
+         container_port = excluded.container_port,
+         gateway_token = excluded.gateway_token,
+         claimed_at = excluded.claimed_at,
+         config_signature = excluded.config_signature,
+         spawned_at = excluded.spawned_at,
+         boot_ms = excluded.boot_ms,
+         pool_source = excluded.pool_source`,
+    );
+    this.getStmt = db.prepare(
+      `SELECT session_id, agent_id, container_id, container_name,
+              container_port, gateway_token, claimed_at,
+              config_signature, spawned_at, boot_ms, pool_source
+       FROM session_containers WHERE session_id = ?`,
+    );
+    this.deleteStmt = db.prepare(
+      `DELETE FROM session_containers WHERE session_id = ?`,
+    );
+    this.listStmt = db.prepare(
+      `SELECT session_id, agent_id, container_id, container_name,
+              container_port, gateway_token, claimed_at,
+              config_signature, spawned_at, boot_ms, pool_source
+       FROM session_containers`,
+    );
+  }
+
+  put(entry: SessionContainer): void {
+    this.upsertStmt.run({
+      session_id: entry.sessionId,
+      agent_id: entry.agentId,
+      container_id: entry.containerId,
+      container_name: entry.containerName,
+      container_port: entry.containerPort,
+      gateway_token: entry.gatewayToken,
+      claimed_at: entry.claimedAt,
+      config_signature: entry.configSignature,
+      spawned_at: entry.spawnedAt,
+      boot_ms: entry.bootMs,
+      pool_source: entry.poolSource,
+    });
+  }
+
+  get(sessionId: string): SessionContainer | undefined {
+    const row = this.getStmt.get(sessionId) as SessionContainerRow | undefined;
+    return row ? rowToSessionContainer(row) : undefined;
+  }
+
+  delete(sessionId: string): void {
+    this.deleteStmt.run(sessionId);
+  }
+
+  list(): SessionContainer[] {
+    const rows = this.listStmt.all() as SessionContainerRow[];
+    return rows.map(rowToSessionContainer);
+  }
+}
+
+type SessionContainerRow = {
+  session_id: string;
+  agent_id: string;
+  container_id: string;
+  container_name: string;
+  container_port: number;
+  gateway_token: string;
+  claimed_at: number;
+  config_signature: string | null;
+  spawned_at: number | null;
+  boot_ms: number | null;
+  pool_source: string | null;
+};
+
+function rowToSessionContainer(row: SessionContainerRow): SessionContainer {
+  // pool_source is NOT NULL in the schema for rows written after this
+  // migration lands, but pre-migration rows default to NULL. Coerce
+  // unknown/legacy values to "cold" — the only meaningful fallback for
+  // the "session was spawned once by some older build" case. The
+  // alternative ("adopt") would mis-attribute a real spawn as an
+  // orchestrator-restart reattach, which is the higher-impact lie.
+  const sourceRaw = row.pool_source;
+  const source: SessionContainer["poolSource"] =
+    sourceRaw === "warm" ||
+    sourceRaw === "cold" ||
+    sourceRaw === "limited" ||
+    sourceRaw === "adopt"
+      ? sourceRaw
+      : "cold";
+  return {
+    sessionId: row.session_id,
+    agentId: row.agent_id,
+    containerId: row.container_id,
+    containerName: row.container_name,
+    containerPort: row.container_port,
+    gatewayToken: row.gateway_token,
+    claimedAt: row.claimed_at,
+    configSignature: row.config_signature,
+    spawnedAt: row.spawned_at,
+    bootMs: row.boot_ms,
+    poolSource: source,
+  };
+}
+
+// ---------- Audit store ----------
+
+class SqliteAuditStore implements AuditStore {
+  private readonly insertStmt: Database.Statement;
+  private readonly baseSelect: string;
+  private readonly deleteOlderThanStmt: Database.Statement;
+
+  constructor(private readonly db: Database.Database) {
+    this.insertStmt = db.prepare(
+      `INSERT INTO audit_events (
+        ts, request_id, actor, action, target, outcome, metadata_json
+       ) VALUES (
+        @ts, @request_id, @actor, @action, @target, @outcome, @metadata_json
+       )`,
+    );
+    this.baseSelect = `SELECT id, ts, request_id, actor, action, target, outcome, metadata_json FROM audit_events`;
+    this.deleteOlderThanStmt = db.prepare(
+      `DELETE FROM audit_events WHERE ts < @before`,
+    );
+  }
+
+  record(event: Omit<AuditRecord, "id">): void {
+    this.insertStmt.run({
+      ts: event.ts,
+      request_id: event.requestId,
+      actor: event.actor,
+      action: event.action,
+      target: event.target,
+      outcome: event.outcome,
+      metadata_json: event.metadata ? JSON.stringify(event.metadata) : null,
+    });
+  }
+
+  list(filters: {
+    since?: number;
+    until?: number;
+    action?: string;
+    target?: string;
+    limit?: number;
+  }): AuditRecord[] {
+    // Dynamic WHERE construction — keep each predicate a single named
+    // parameter so the SQL stays parameterised (no injection risk even
+    // though `action` filters are operator-supplied).
+    const conditions: string[] = [];
+    const params: Record<string, unknown> = {};
+    if (filters.since !== undefined) {
+      conditions.push("ts >= @since");
+      params.since = filters.since;
+    }
+    if (filters.until !== undefined) {
+      conditions.push("ts <= @until");
+      params.until = filters.until;
+    }
+    if (filters.action !== undefined) {
+      // Support prefix match on action ("agent.*" etc.) via LIKE. If
+      // the caller didn't include a wildcard we treat it as exact match.
+      if (filters.action.includes("%")) {
+        conditions.push("action LIKE @action");
+        params.action = filters.action;
+      } else {
+        conditions.push("action = @action");
+        params.action = filters.action;
+      }
+    }
+    if (filters.target !== undefined) {
+      conditions.push("target = @target");
+      params.target = filters.target;
+    }
+    const where = conditions.length > 0 ? ` WHERE ${conditions.join(" AND ")}` : "";
+    const limit = Math.min(Math.max(filters.limit ?? 100, 1), 1000);
+    const sql = `${this.baseSelect}${where} ORDER BY ts DESC, id DESC LIMIT ${limit}`;
+    const rows = this.db.prepare(sql).all(params) as Array<{
+      id: number;
+      ts: number;
+      request_id: string | null;
+      actor: string;
+      action: string;
+      target: string | null;
+      outcome: string;
+      metadata_json: string | null;
+    }>;
+    return rows.map((r) => ({
+      id: r.id,
+      ts: r.ts,
+      requestId: r.request_id,
+      actor: r.actor,
+      action: r.action,
+      target: r.target,
+      outcome: r.outcome,
+      metadata: r.metadata_json
+        ? (JSON.parse(r.metadata_json) as Record<string, unknown>)
+        : null,
+    }));
+  }
+
+  deleteOlderThan(ts: number): number {
+    const info = this.deleteOlderThanStmt.run({ before: ts });
+    return info.changes;
+  }
+}
+
+// ---------- User store ----------
+
+class SqliteUserStore implements UserStore {
+  private readonly insertStmt: Database.Statement;
+  private readonly getByTokenStmt: Database.Statement;
+  private readonly getByGithubIdStmt: Database.Statement;
+  private readonly getStmt: Database.Statement;
+  private readonly deleteExpiredStmt: Database.Statement;
+  private readonly updateGithubStmt: Database.Statement;
+
+  constructor(private readonly db: Database.Database) {
+    this.insertStmt = db.prepare(
+      `INSERT INTO users (user_id, github_id, github_username, avatar_url, api_token, tier, created_at, expires_at)
+       VALUES (@user_id, @github_id, @github_username, @avatar_url, @api_token, @tier, @created_at, @expires_at)`,
+    );
+    this.getByTokenStmt = db.prepare(`SELECT * FROM users WHERE api_token = ?`);
+    this.getByGithubIdStmt = db.prepare(`SELECT * FROM users WHERE github_id = ?`);
+    this.getStmt = db.prepare(`SELECT * FROM users WHERE user_id = ?`);
+    this.deleteExpiredStmt = db.prepare(
+      `DELETE FROM users WHERE tier = 'anonymous' AND expires_at IS NOT NULL AND expires_at < ?`,
+    );
+    this.updateGithubStmt = db.prepare(
+      `UPDATE users SET github_id = @github_id, github_username = @github_username,
+       avatar_url = @avatar_url, tier = 'github', expires_at = NULL
+       WHERE user_id = @user_id`,
+    );
+  }
+
+  create(args: {
+    tier: UserTier;
+    githubId?: number;
+    githubUsername?: string;
+    avatarUrl?: string;
+  }): User {
+    const userId = `usr_${nanoid()}`;
+    const apiToken = `tok_${nanoid(32)}`;
+    const now = Date.now();
+    const expiresAt = args.tier === "anonymous" ? now + 24 * 60 * 60 * 1000 : null;
+    this.insertStmt.run({
+      user_id: userId,
+      github_id: args.githubId ?? null,
+      github_username: args.githubUsername ?? null,
+      avatar_url: args.avatarUrl ?? null,
+      api_token: apiToken,
+      tier: args.tier,
+      created_at: now,
+      expires_at: expiresAt,
+    });
+    return {
+      userId,
+      githubId: args.githubId ?? null,
+      githubUsername: args.githubUsername ?? null,
+      avatarUrl: args.avatarUrl ?? null,
+      apiToken,
+      tier: args.tier,
+      createdAt: now,
+      expiresAt,
+    };
+  }
+
+  getByToken(token: string): User | undefined {
+    const row = this.getByTokenStmt.get(token) as UserRow | undefined;
+    return row ? rowToUser(row) : undefined;
+  }
+
+  getByGithubId(githubId: number): User | undefined {
+    const row = this.getByGithubIdStmt.get(githubId) as UserRow | undefined;
+    return row ? rowToUser(row) : undefined;
+  }
+
+  get(userId: string): User | undefined {
+    const row = this.getStmt.get(userId) as UserRow | undefined;
+    return row ? rowToUser(row) : undefined;
+  }
+
+  deleteExpired(): number {
+    const info = this.deleteExpiredStmt.run(Date.now());
+    return info.changes;
+  }
+
+  updateGithub(
+    userId: string,
+    args: { githubId: number; githubUsername: string; avatarUrl: string },
+  ): User | undefined {
+    this.updateGithubStmt.run({
+      user_id: userId,
+      github_id: args.githubId,
+      github_username: args.githubUsername,
+      avatar_url: args.avatarUrl,
+    });
+    return this.get(userId);
+  }
+}
+
+type UserRow = {
+  user_id: string;
+  github_id: number | null;
+  github_username: string | null;
+  avatar_url: string | null;
+  api_token: string;
+  tier: string;
+  created_at: number;
+  expires_at: number | null;
+};
+
+function rowToUser(r: UserRow): User {
+  return {
+    userId: r.user_id,
+    githubId: r.github_id,
+    githubUsername: r.github_username,
+    avatarUrl: r.avatar_url,
+    apiToken: r.api_token,
+    tier: r.tier as UserTier,
+    createdAt: r.created_at,
+    expiresAt: r.expires_at,
+  };
+}
+
+// ---------- Bundle ----------
+
+export class SqliteStore implements Store {
+  readonly agents: AgentStore;
+  readonly environments: EnvironmentStore;
+  readonly sessions: SessionStore;
+  readonly secrets: SecretStore;
+  readonly queue: QueueStore;
+  readonly audit: AuditStore;
+  readonly vaults: VaultStore;
+  readonly sessionContainers: SessionContainerStore;
+  readonly users: UserStore;
+  /** Number of vault credentials re-encrypted during boot migration.
+   *  Surfaced via src/index.ts startup log when > 0. */
+  readonly migratedVaultCredentials: number = 0;
+  /** "env" if OPENCLAW_VAULT_KEY was set, "restored" if loaded from a
+   *  previous boot's persisted key, "generated" if this boot minted a
+   *  fresh one. */
+  readonly vaultKeySource: "env" | "restored" | "generated" = "generated";
+  private readonly db: Database.Database;
+  private closed = false;
+
+  constructor(path: string, opts?: { vaultKeyEnv?: string }) {
+    this.db = new Database(path);
+    // WAL gives concurrent readers while one writer is active, which matters
+    // as soon as more than one orchestrator thread/worker is introduced.
+    this.db.pragma("journal_mode = WAL");
+    this.db.pragma("synchronous = NORMAL");
+    // Enforce foreign-key constraints at the SQLite level so cascading
+    // deletes and referential integrity actually happen.
+    this.db.pragma("foreign_keys = ON");
+    this.db.exec(SCHEMA);
+
+    // Additive migrations. CREATE TABLE IF NOT EXISTS above is a no-op for
+    // existing databases, so columns added after the initial schema need
+    // an explicit ALTER. Check existence via PRAGMA table_info before
+    // running each migration so startup is idempotent.
+    const sessionsCols = this.db.pragma("table_info(sessions)") as Array<{
+      name: string;
+    }>;
+    if (!sessionsCols.some((c) => c.name === "environment_id")) {
+      this.db.exec(
+        "ALTER TABLE sessions ADD COLUMN environment_id TEXT",
+      );
+    }
+    if (!sessionsCols.some((c) => c.name === "ephemeral")) {
+      // Item 8: ephemeral sessions are auto-created by /v1/chat/completions
+      // for keyless calls and reaped with their container. Rows that pre-date
+      // Item 8 default to non-ephemeral (safe — they were never flagged for
+      // cleanup and all explicit /v1/sessions creates are non-ephemeral).
+      this.db.exec(
+        "ALTER TABLE sessions ADD COLUMN ephemeral INTEGER NOT NULL DEFAULT 0",
+      );
+    }
+    if (!sessionsCols.some((c) => c.name === "remaining_subagent_depth")) {
+      // Item 12-14: per-session remaining subagent depth. Rows that predate
+      // Item 12-14 default to 0 (no delegation allowed from existing
+      // sessions, which is a safe no-op for the call_agent feature).
+      this.db.exec(
+        "ALTER TABLE sessions ADD COLUMN remaining_subagent_depth INTEGER NOT NULL DEFAULT 0",
+      );
+    }
+    if (!sessionsCols.some((c) => c.name === "vault_id")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN vault_id TEXT");
+    }
+    if (!sessionsCols.some((c) => c.name === "turns")) {
+      this.db.exec(
+        "ALTER TABLE sessions ADD COLUMN turns INTEGER NOT NULL DEFAULT 0",
+      );
+    }
+    if (!sessionsCols.some((c) => c.name === "parent_session_id")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN parent_session_id TEXT");
+    }
+    if (!sessionsCols.some((c) => c.name === "user_id")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN user_id TEXT");
+    }
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id)",
+    );
+    // mcp_oauth columns on vault_credentials. Pre-migration rows are
+    // all static_bearer with these NULL, which matches their type.
+    const vaultCredsCols = this.db.pragma("table_info(vault_credentials)") as Array<{
+      name: string;
+    }>;
+    if (vaultCredsCols.length > 0 && !vaultCredsCols.some((c) => c.name === "token_endpoint")) {
+      this.db.exec("ALTER TABLE vault_credentials ADD COLUMN token_endpoint TEXT");
+    }
+    if (vaultCredsCols.length > 0 && !vaultCredsCols.some((c) => c.name === "client_id")) {
+      this.db.exec("ALTER TABLE vault_credentials ADD COLUMN client_id TEXT");
+    }
+    if (vaultCredsCols.length > 0 && !vaultCredsCols.some((c) => c.name === "scopes_json")) {
+      this.db.exec("ALTER TABLE vault_credentials ADD COLUMN scopes_json TEXT");
+    }
+    if (vaultCredsCols.length > 0 && !vaultCredsCols.some((c) => c.name === "expires_at")) {
+      this.db.exec("ALTER TABLE vault_credentials ADD COLUMN expires_at INTEGER");
+    }
+    const agentsCols = this.db.pragma("table_info(agents)") as Array<{
+      name: string;
+    }>;
+    if (!agentsCols.some((c) => c.name === "callable_agents_json")) {
+      // Item 12-14: allowlist of agent IDs this template may invoke via
+      // call_agent. NULL means no delegation (same as an empty array).
+      this.db.exec("ALTER TABLE agents ADD COLUMN callable_agents_json TEXT");
+    }
+    if (!agentsCols.some((c) => c.name === "max_subagent_depth")) {
+      this.db.exec(
+        "ALTER TABLE agents ADD COLUMN max_subagent_depth INTEGER NOT NULL DEFAULT 0",
+      );
+    }
+    if (!agentsCols.some((c) => c.name === "version")) {
+      this.db.exec("ALTER TABLE agents ADD COLUMN version INTEGER NOT NULL DEFAULT 1");
+    }
+    if (!agentsCols.some((c) => c.name === "updated_at")) {
+      this.db.exec("ALTER TABLE agents ADD COLUMN updated_at INTEGER");
+    }
+    if (!agentsCols.some((c) => c.name === "archived_at")) {
+      this.db.exec("ALTER TABLE agents ADD COLUMN archived_at INTEGER");
+    }
+    if (!agentsCols.some((c) => c.name === "permission_policy_json")) {
+      this.db.exec("ALTER TABLE agents ADD COLUMN permission_policy_json TEXT");
+    }
+    if (!agentsCols.some((c) => c.name === "mcp_servers_json")) {
+      // A2: agent template declares MCP servers; forwarded to the
+      // container as OPENCLAW_MCP_SERVERS_JSON. Pre-A2 rows default to
+      // NULL (no MCP servers), which is the safe no-op — existing
+      // sessions behave identically.
+      this.db.exec("ALTER TABLE agents ADD COLUMN mcp_servers_json TEXT");
+    }
+    if (!agentsCols.some((c) => c.name === "quota_json")) {
+      // B5: per-session quota caps (cost, tokens, wall duration).
+      // Pre-B5 rows default to NULL = no caps, matching pre-B5 behavior.
+      this.db.exec("ALTER TABLE agents ADD COLUMN quota_json TEXT");
+    }
+    if (!agentsCols.some((c) => c.name === "thinking_level")) {
+      // D1: Pi extended-thinking level ("off" | "low" | "medium" | "high"
+      // | "xhigh"). Pre-D1 rows default to NULL which rowToAgent maps to
+      // "off", matching pre-D1 behavior (no thinking blocks emitted).
+      this.db.exec("ALTER TABLE agents ADD COLUMN thinking_level TEXT");
+    }
+    if (!agentsCols.some((c) => c.name === "channels_json")) {
+      this.db.exec("ALTER TABLE agents ADD COLUMN channels_json TEXT");
+    }
+    if (!agentsCols.some((c) => c.name === "user_id")) {
+      this.db.exec("ALTER TABLE agents ADD COLUMN user_id TEXT");
+    }
+    const versionsCols = this.db.pragma("table_info(agent_versions)") as Array<{ name: string }>;
+    if (versionsCols.length > 0 && !versionsCols.some((c) => c.name === "permission_policy_json")) {
+      this.db.exec("ALTER TABLE agent_versions ADD COLUMN permission_policy_json TEXT");
+    }
+    if (versionsCols.length > 0 && !versionsCols.some((c) => c.name === "mcp_servers_json")) {
+      this.db.exec("ALTER TABLE agent_versions ADD COLUMN mcp_servers_json TEXT");
+    }
+    if (versionsCols.length > 0 && !versionsCols.some((c) => c.name === "quota_json")) {
+      this.db.exec("ALTER TABLE agent_versions ADD COLUMN quota_json TEXT");
+    }
+    if (versionsCols.length > 0 && !versionsCols.some((c) => c.name === "thinking_level")) {
+      this.db.exec("ALTER TABLE agent_versions ADD COLUMN thinking_level TEXT");
+    }
+    if (versionsCols.length > 0 && !versionsCols.some((c) => c.name === "channels_json")) {
+      this.db.exec("ALTER TABLE agent_versions ADD COLUMN channels_json TEXT");
+    }
+    // Pool telemetry on session_containers. Pre-migration rows predate the
+    // moment the orchestrator started recording where a container came
+    // from, so we can't retroactively backfill a true value. Leaving the
+    // column NULL is fine — rowToSessionContainer coerces NULL pool_source
+    // to "cold" and the bootMs=null signal shows as "boot —" in the UI.
+    const scCols = this.db.pragma("table_info(session_containers)") as Array<{
+      name: string;
+    }>;
+    if (scCols.length > 0 && !scCols.some((c) => c.name === "boot_ms")) {
+      this.db.exec("ALTER TABLE session_containers ADD COLUMN boot_ms INTEGER");
+    }
+    if (scCols.length > 0 && !scCols.some((c) => c.name === "pool_source")) {
+      this.db.exec("ALTER TABLE session_containers ADD COLUMN pool_source TEXT");
+    }
+    if (scCols.length > 0 && !scCols.some((c) => c.name === "config_signature")) {
+      this.db.exec("ALTER TABLE session_containers ADD COLUMN config_signature TEXT");
+    }
+    if (scCols.length > 0 && !scCols.some((c) => c.name === "spawned_at")) {
+      this.db.exec("ALTER TABLE session_containers ADD COLUMN spawned_at INTEGER");
+    }
+    const queueCols = this.db.pragma("table_info(queued_events)") as Array<{
+      name: string;
+    }>;
+    if (queueCols.length > 0 && !queueCols.some((c) => c.name === "thinking_level")) {
+      this.db.exec("ALTER TABLE queued_events ADD COLUMN thinking_level TEXT");
+    }
+    this.migrateSessionStatusConstraint();
+
+    const envCols = this.db.pragma("table_info(environments)") as Array<{
+      name: string;
+    }>;
+    if (envCols.length > 0 && !envCols.some((c) => c.name === "description")) {
+      this.db.exec(
+        "ALTER TABLE environments ADD COLUMN description TEXT NOT NULL DEFAULT ''",
+      );
+    }
+    if (envCols.length > 0 && !envCols.some((c) => c.name === "user_id")) {
+      this.db.exec("ALTER TABLE environments ADD COLUMN user_id TEXT");
+    }
+
+    this.agents = new SqliteAgentStore(this.db);
+    this.environments = new SqliteEnvironmentStore(this.db);
+    this.sessions = new SqliteSessionStore(this.db);
+    this.secrets = new SqliteSecretStore(this.db);
+    this.queue = new SqliteQueueStore(this.db);
+    this.audit = new SqliteAuditStore(this.db);
+    this.sessionContainers = new SqliteSessionContainerStore(this.db);
+    this.users = new SqliteUserStore(this.db);
+    // Resolve vault master key. Priority:
+    //   1. OPENCLAW_VAULT_KEY env (hex/base64/base64url 32 bytes)
+    //   2. Row in kv_secrets (persisted from a previous boot)
+    //   3. Generate + persist (first-boot default — logs warn at the
+    //      index.ts level so operators know to pin the key for prod)
+    const VAULT_KEY_SECRET = "vault_master_key";
+    let rawKey: Buffer;
+    if (opts?.vaultKeyEnv && opts.vaultKeyEnv.trim() !== "") {
+      rawKey = VaultCrypto.parseKey(opts.vaultKeyEnv);
+      this.vaultKeySource = "env";
+    } else {
+      const stored = this.secrets.get(VAULT_KEY_SECRET);
+      if (stored) {
+        rawKey = stored;
+        this.vaultKeySource = "restored";
+      } else {
+        rawKey = VaultCrypto.generateKey();
+        this.secrets.set(VAULT_KEY_SECRET, rawKey);
+        this.vaultKeySource = "generated";
+      }
+    }
+    const vaultCrypto = new VaultCrypto(rawKey);
+    const vaultsStore = new SqliteVaultStore(this.db, vaultCrypto);
+    this.vaults = vaultsStore;
+    // Lazy migration: re-encrypt any credentials that were stored
+    // plaintext before at-rest encryption was wired. Idempotent — a
+    // second pass on an already-encrypted DB is a no-op.
+    this.migratedVaultCredentials = vaultsStore.migratePlaintextCredentials();
+  }
+
+  private migrateSessionStatusConstraint(): void {
+    const row = this.db
+      .prepare(
+        `SELECT sql
+           FROM sqlite_master
+          WHERE type = 'table' AND name = 'sessions'`,
+      )
+      .get() as { sql: string | null } | undefined;
+    const sessionsSql = row?.sql ?? "";
+    if (sessionsSql.includes("'starting'")) return;
+
+    const fkWasEnabled =
+      (this.db.pragma("foreign_keys", { simple: true }) as number) === 1;
+    if (fkWasEnabled) {
+      this.db.pragma("foreign_keys = OFF");
+    }
+    try {
+      const migrate = this.db.transaction(() => {
+        this.db.exec(createSessionsTableSql("sessions_new"));
+        this.db.exec(`
+          INSERT INTO sessions_new (
+            session_id, agent_id, environment_id, status, ephemeral,
+            remaining_subagent_depth, turns, tokens_in, tokens_out, cost_usd,
+            error, created_at, last_event_at, vault_id, parent_session_id, user_id
+          )
+          SELECT
+            session_id, agent_id, environment_id, status, ephemeral,
+            remaining_subagent_depth, turns, tokens_in, tokens_out, cost_usd,
+            error, created_at, last_event_at, vault_id, parent_session_id, user_id
+          FROM sessions
+        `);
+        this.db.exec(
+          createSessionContainersTableSql(
+            "session_containers_new",
+            "sessions_new",
+          ),
+        );
+        this.db.exec(`
+          INSERT INTO session_containers_new (
+            session_id, agent_id, container_id, container_name, container_port,
+            gateway_token, claimed_at, config_signature, spawned_at, boot_ms, pool_source
+          )
+          SELECT
+            session_id, agent_id, container_id, container_name, container_port,
+            gateway_token, claimed_at, config_signature, spawned_at, boot_ms, pool_source
+          FROM session_containers
+        `);
+        this.db.exec("DROP TABLE session_containers");
+        this.db.exec("DROP TABLE sessions");
+        this.db.exec("ALTER TABLE sessions_new RENAME TO sessions");
+        this.db.exec(
+          "ALTER TABLE session_containers_new RENAME TO session_containers",
+        );
+        this.db.exec(
+          "CREATE INDEX IF NOT EXISTS idx_sessions_agent_id ON sessions(agent_id)",
+        );
+        this.db.exec(
+          "CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id)",
+        );
+        this.db.exec(
+          "CREATE INDEX IF NOT EXISTS idx_session_containers_container ON session_containers(container_id)",
+        );
+      });
+      migrate();
+    } finally {
+      if (fkWasEnabled) {
+        this.db.pragma("foreign_keys = ON");
+      }
+    }
+
+    const fkViolations = this.db.pragma(
+      "foreign_key_check",
+    ) as Array<Record<string, unknown>>;
+    if (fkViolations.length > 0) {
+      throw new Error(
+        `session status migration left foreign key violations: ${JSON.stringify(fkViolations)}`,
+      );
+    }
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.db.close();
+    this.closed = true;
+  }
+}

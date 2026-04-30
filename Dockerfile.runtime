@@ -1,0 +1,130 @@
+# Open Managed Agents — agent container image
+#
+# This image runs ONE OpenClaw gateway in API-only mode, serving a single agent
+# configured at container startup time via environment variables. The orchestrator
+# spawns one of these containers per agent. Session state lives on the mounted
+# volume so containers are disposable.
+#
+# Build:
+#   docker build -f Dockerfile.runtime -t open-managed-agents/openclaw-agent:latest .
+
+FROM node:22-slim
+
+# Minimal OS packages:
+#   - jq: used by the entrypoint script to build openclaw.json safely
+#   - ca-certificates, curl: for health-check and outbound HTTPS
+#   - tini: reap child processes cleanly
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        jq \
+        tini \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pin the OpenClaw CLI. Upgrade deliberately by bumping this version.
+ARG OPENCLAW_VERSION=2026.4.26
+
+# Install OpenClaw globally. The `openclaw` binary lands at /usr/local/bin/openclaw.
+# postinstall scripts are required — they install bundled plugins and skills.
+RUN npm install -g openclaw@${OPENCLAW_VERSION}
+
+# Non-root runtime user. OpenClaw uses $HOME/.openclaw by default, but we override
+# via OPENCLAW_STATE_DIR in the entrypoint.
+RUN groupadd -r openclaw && useradd -r -g openclaw -m -d /home/openclaw openclaw
+
+# Persistent state directory — mount a host volume here in production.
+RUN mkdir -p /workspace && chown -R openclaw:openclaw /workspace
+
+# Default environment. Overridden at container runtime by the orchestrator.
+#
+# Model ID format: "<provider>/<model-id>", where <provider> is any OpenClaw
+# provider plugin id (moonshot, openai, anthropic, bedrock, google, deepseek,
+# qwen, mistral, xai, together, openrouter, ...) and <model-id> is the catalog
+# id that provider exposes. Examples:
+#   moonshot/kimi-k2.5
+#   anthropic/claude-sonnet-4-6
+#   openai/gpt-5.4
+#   bedrock/anthropic.claude-sonnet-4-6
+#   google/gemini-2.5-pro
+# Parsing: /src/agents/model-selection-normalize.ts in openclaw/openclaw.
+#
+# OPENCLAW_PLUGIN selects which provider plugin the entrypoint enables in the
+# generated config. Leave it empty by default so the entrypoint derives it from
+# OPENCLAW_MODEL at runtime; hardcoding a default here makes non-Moonshot model
+# ids inherit the wrong plugin when the caller doesn't explicitly override it.
+#
+# The smoke default is moonshot/kimi-k2.5 because it works from any country
+# Moonshot supports with just a MOONSHOT_API_KEY env var, no cloud account
+# setup. Swap to any other provider by overriding both OPENCLAW_PLUGIN and
+# OPENCLAW_MODEL at `docker run -e`.
+ENV OPENCLAW_AGENT_ID="default" \
+    OPENCLAW_PLUGIN="" \
+    OPENCLAW_MODEL="moonshot/kimi-k2.5" \
+    OPENCLAW_THINKING_LEVEL="off" \
+    OPENCLAW_TOOLS="" \
+    OPENCLAW_INSTRUCTIONS="You are a helpful assistant." \
+    OPENCLAW_SESSION_ID="" \
+    OPENCLAW_STATE_DIR="/workspace" \
+    OPENCLAW_GATEWAY_PORT="18789" \
+    NODE_OPTIONS="--enable-source-maps"
+
+# Entrypoint script generates openclaw.json and execs the gateway.
+COPY docker/entrypoint.sh /usr/local/bin/openclaw-managed-entrypoint
+RUN chmod +x /usr/local/bin/openclaw-managed-entrypoint
+
+# Item 12-14: in-container CLI for delegating to another agent via the
+# orchestrator's existing HTTP API. The agent invokes it through its
+# built-in `exec` tool; the tool reads OPENCLAW_ORCHESTRATOR_URL and
+# OPENCLAW_ORCHESTRATOR_TOKEN from the container env (injected by the
+# orchestrator at spawn) to authenticate subagent session spawns.
+# The child session created by this CLI is a first-class HTTP resource
+# — observability via GET /v1/sessions/<id>/events?stream=true.
+COPY docker/call-agent.mjs /usr/local/bin/openclaw-call-agent
+RUN chmod +x /usr/local/bin/openclaw-call-agent
+
+# Item 19: tool confirmation plugin. Installed in the global extensions
+# directory so OpenClaw's plugin loader discovers it alongside bundled
+# plugins. Conditionally enabled by the entrypoint when the agent
+# template has `permissionPolicy: { type: "always_ask" }`. The plugin
+# registers a before_tool_call hook that returns requireApproval for
+# matching tools, pausing the agent until the orchestrator resolves it.
+# The plugin files are staged here at build time. The entrypoint copies
+# them to /workspace/extensions/ (the actual discovery path, which is
+# $OPENCLAW_STATE_DIR/extensions/) at startup, after the bind mount is
+# in place and owned by the openclaw user.
+COPY docker/confirm-tools-plugin/ /opt/openclaw-plugins/confirm-tools/
+
+# Category B provider catalog bootstrap. At container startup the entrypoint
+# runs this script with the generated openclaw.json path and the active
+# provider id; the script dynamic-imports the bundled openclaw extension's
+# catalog-builder (e.g. buildMoonshotProvider) and merges the full catalog
+# into config.models.providers.<id>. Replaces the earlier hand-mirrored
+# PROVIDER_BLOCK_JSON in entrypoint.sh — upstream catalog changes (new
+# models, revised prices — see openclaw/openclaw#67928) now flow through
+# automatically on the next image rebuild.
+COPY docker/apply-provider-config.mjs /opt/openclaw-plugins/apply-provider-config.mjs
+COPY docker/apply-zenmux-provider-config.mjs /opt/openclaw-plugins/apply-zenmux-provider-config.mjs
+COPY src/model-aliases.json /opt/openclaw-plugins/model-aliases.json
+
+# Real-world $/1M-token prices for providers whose openclaw-bundled
+# catalog ships $0 (currently Moonshot, tracked upstream in
+# openclaw/openclaw#67928). apply-provider-config.mjs reads this at
+# container start and patches cost blocks on matching model ids so
+# the session cost rollup reflects real spend instead of catalog-$0.
+# Sourced from each provider's own docs — see _meta.sources in the
+# JSON. Bump when upstream ships real prices (delete the provider
+# block to defer to upstream) or when a provider changes rates.
+COPY docker/provider-prices.json /opt/openclaw-plugins/provider-prices.json
+
+USER openclaw
+WORKDIR /workspace
+
+EXPOSE 18789
+
+# Docker HEALTHCHECK — orchestrator uses /readyz, but this is a safety net for
+# standalone runs.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
+    CMD curl --silent --fail "http://127.0.0.1:${OPENCLAW_GATEWAY_PORT}/readyz" || exit 1
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/openclaw-managed-entrypoint"]

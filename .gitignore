@@ -1,1 +1,30 @@
+node_modules/
+dist/
+*.log
+.env
+.env.local
+.DS_Store
+.pnpm-debug.log
+coverage/
+.idea/
+.vscode/
+*.tsbuildinfo
+data/
+.openclaw/
+
+# Local assistant instruction docs
+/CLAUDE.md
+/claude.md
+
+# Local strategy notes — gitignored by design (see docs/strategy.md)
 strategy.md
+docs/strategy.md
+
+# Local launch/community posting drafts
+docs/reddit-posting-kit.md
+
+# Playwright-MCP snapshots + ad-hoc debug screenshots that land at the
+# repo root during dev sessions. Production artifacts go in dist/ or
+# docs/ — these are transient working files.
+.playwright-mcp/
+/*.png

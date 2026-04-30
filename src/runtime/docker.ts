@@ -1,0 +1,480 @@
+import { randomBytes } from "node:crypto";
+import Docker from "dockerode";
+import type { Container, ContainerRuntime, SpawnOptions } from "./container.js";
+
+/**
+ * A container that was previously spawned by this orchestrator (labeled
+ * `managed-by=open-managed-agents`) and is still present on the
+ * Docker daemon after a restart. Populated from `docker inspect` so the
+ * startup adoption path can rebuild a Container struct without
+ * respawning.
+ */
+export type ManagedContainerInfo = {
+  id: string;
+  name: string;
+  role: "agent" | "egress-proxy" | "unknown";
+  baseUrl?: string;
+  token?: string;
+  sessionId: string | undefined;
+  agentId: string | undefined;
+  running: boolean;
+};
+
+type ContainerStateSnapshot = {
+  running: boolean;
+  status?: string;
+  exitCode?: number;
+  oomKilled?: boolean;
+  error?: string;
+};
+
+/**
+ * Docker backend for the managed runtime. Spawns one container per agent/session,
+ * attached to a shared Docker network so the orchestrator can reach it by name.
+ *
+ * MVP assumptions:
+ *   - Orchestrator and agent containers share a single Docker network
+ *     (configured via `OPENCLAW_DOCKER_NETWORK`, default "openclaw-net").
+ *   - Session state is mounted from a host path the orchestrator controls.
+ *   - Bedrock credentials are forwarded via env vars from the orchestrator.
+ */
+export class DockerContainerRuntime implements ContainerRuntime {
+  private readonly docker: Docker;
+  private readonly defaultNetwork: string;
+  private readonly spawnTimeoutMs: number;
+
+  constructor(opts: { socketPath?: string; network?: string; spawnTimeoutMs?: number } = {}) {
+    this.docker = new Docker(
+      opts.socketPath ? { socketPath: opts.socketPath } : {},
+    );
+    this.defaultNetwork = opts.network ?? "openclaw-net";
+    this.spawnTimeoutMs = opts.spawnTimeoutMs ?? 60_000;
+  }
+
+  async spawn(opts: SpawnOptions): Promise<Container> {
+    const name = opts.name ?? `openclaw-agt-${randomSuffix()}`;
+    const network = opts.network ?? this.defaultNetwork;
+
+    // Per-container shared-secret token. OpenClaw requires this to bind to
+    // non-loopback interfaces. We inject it as OPENCLAW_GATEWAY_TOKEN (picked
+    // up automatically by the openclaw gateway CLI via resolveGatewayAuth) and
+    // return it on the Container so the orchestrator can attach it as a
+    // Bearer header when calling the container's /v1/chat/completions.
+    const token = opts.env.OPENCLAW_GATEWAY_TOKEN ?? randomBytes(32).toString("hex");
+    const envWithToken: Record<string, string> = {
+      ...opts.env,
+      OPENCLAW_GATEWAY_TOKEN: token,
+    };
+
+    const envArray = Object.entries(envWithToken).map(([k, v]) => `${k}=${v}`);
+
+    const binds = opts.mounts.map((m) => {
+      const mode = m.readOnly ? "ro" : "rw";
+      return `${m.hostPath}:${m.containerPath}:${mode}`;
+    });
+
+    const labels = {
+      "managed-by": "open-managed-agents",
+      ...(opts.labels ?? {}),
+    };
+
+    try {
+      const container = await this.withSpawnTimeout(
+        "create",
+        this.docker.createContainer({
+          name,
+          Image: opts.image,
+          Env: envArray,
+          Labels: labels,
+          ExposedPorts: { [`${opts.containerPort}/tcp`]: {} },
+          HostConfig: {
+            Binds: binds,
+            // Don't publish ports to the host — the orchestrator reaches containers
+            // over the shared Docker network by name.
+            RestartPolicy: { Name: "no" },
+            // Sensible resource limits for a single agent worker.
+            Memory: 2 * 1024 * 1024 * 1024, // 2 GB
+            PidsLimit: 512,
+            // Override the container's /etc/resolv.conf when dns is supplied.
+            // Used by networking: limited agents to route all DNS through the
+            // egress-proxy sidecar's UDP 53 filter. Only the sidecar's IP
+            // ends up here — Docker does NOT also append its embedded resolver
+            // (127.0.0.11) when Dns is set, which is what we want: every
+            // hostname lookup from inside the agent goes through the filter.
+            Dns: opts.dns,
+          },
+          NetworkingConfig: {
+            EndpointsConfig: {
+              [network]: { Aliases: [name] },
+            },
+          },
+        }),
+      );
+
+      await this.withSpawnTimeout("start", container.start());
+
+      // Attach additional networks after boot — Docker's CreateContainer
+      // only accepts one primary NetworkMode at a time. For limited-
+      // networking sessions the agent joins confined+control-plane, and
+      // the sidecar joins confined+egress; the second network on each is
+      // wired here.
+      if (opts.additionalNetworks && opts.additionalNetworks.length > 0) {
+        for (const n of opts.additionalNetworks) {
+          await this.withSpawnTimeout(
+            `connect:${n}`,
+            this.docker.getNetwork(n).connect({
+              Container: container.id,
+              EndpointConfig: { Aliases: [name] },
+            }),
+          );
+        }
+      }
+
+      const networks = await this.withSpawnTimeout(
+        "inspect",
+        this.readNetworkIps(container.id),
+      );
+
+      const baseUrl = `http://${name}:${opts.containerPort}`;
+      return { id: container.id, name, baseUrl, token, networks };
+    } catch (err) {
+      await this.stop(name).catch(() => {
+        /* best-effort */
+      });
+      throw err;
+    }
+  }
+
+  private async withSpawnTimeout<T>(stage: string, promise: Promise<T>): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(
+              new Error(`docker spawn timed out during ${stage} after ${this.spawnTimeoutMs}ms`),
+            );
+          }, this.spawnTimeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private async readNetworkIps(
+    id: string,
+  ): Promise<Record<string, string> | undefined> {
+    try {
+      const info = await this.docker.getContainer(id).inspect();
+      const nets = info.NetworkSettings?.Networks;
+      if (!nets) return undefined;
+      const out: Record<string, string> = {};
+      for (const [name, cfg] of Object.entries(nets)) {
+        const ip = cfg?.IPAddress;
+        if (typeof ip === "string" && ip.length > 0) out[name] = ip;
+      }
+      return Object.keys(out).length > 0 ? out : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async stop(id: string): Promise<void> {
+    const c = this.docker.getContainer(id);
+    try {
+      await c.stop({ t: 5 });
+    } catch (err) {
+      // Already stopped — ignore.
+      if (!isNotRunningError(err)) throw err;
+    }
+    try {
+      await c.remove({ force: true });
+    } catch (err) {
+      if (!isNotFoundError(err)) throw err;
+    }
+  }
+
+  async logs(containerId: string, opts?: { tail?: number }): Promise<string> {
+    const c = this.docker.getContainer(containerId);
+    const tail = opts?.tail ?? 200;
+    // dockerode returns a Buffer when follow=false, not a stream. That
+    // buffer is the Docker log multiplexed format (8-byte header + payload
+    // per frame). Call with stream=false so we get one buffer, then strip
+    // the frame headers. Each frame header is 8 bytes: [stream_type, 0, 0,
+    // 0, size_0, size_1, size_2, size_3] (BE size). stream_type: 1=stdout,
+    // 2=stderr. We flatten stdout+stderr into one chronological text blob;
+    // separate streams is out of scope for the snapshot endpoint.
+    const raw = await c.logs({
+      stdout: true,
+      stderr: true,
+      tail,
+      follow: false,
+      timestamps: false,
+    });
+    const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(String(raw));
+    const parts: string[] = [];
+    let i = 0;
+    while (i + 8 <= buf.length) {
+      const size = buf.readUInt32BE(i + 4);
+      if (i + 8 + size > buf.length) break;
+      parts.push(buf.slice(i + 8, i + 8 + size).toString("utf8"));
+      i += 8 + size;
+    }
+    // If no frame headers were detected (non-TTY-less containers, or
+    // edge cases), fall back to raw text.
+    if (parts.length === 0) return buf.toString("utf8");
+    return parts.join("");
+  }
+
+  async waitForReady(container: Container, timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    let lastError: unknown = null;
+    while (Date.now() < deadline) {
+      try {
+        const res = await fetch(`${container.baseUrl}/readyz`, {
+          signal: AbortSignal.timeout(1500),
+        });
+        if (res.ok) return;
+        lastError = new Error(`/readyz returned ${res.status}`);
+      } catch (err) {
+        lastError = err;
+      }
+
+      const state = await this.inspectState(container.id);
+      if (state && !state.running) {
+        const tail = await this.logs(container.id, { tail: 120 }).catch(() => "");
+        throw new Error(
+          [
+            `container ${container.name} exited before ready`,
+            `(status=${state.status ?? "unknown"}`,
+            `exit_code=${state.exitCode ?? "unknown"}`,
+            `oom_killed=${state.oomKilled ?? false}`,
+            state.error ? `docker_error=${state.error}` : undefined,
+            `last_ready_error=${String(lastError)})`,
+            trimLogTail(tail),
+          ].filter(Boolean).join(" "),
+        );
+      }
+      await sleep(500);
+    }
+    throw new Error(
+      `container ${container.name} did not become ready within ${timeoutMs}ms: ${String(lastError)}`,
+    );
+  }
+
+  private async inspectState(id: string): Promise<ContainerStateSnapshot | undefined> {
+    try {
+      const info = await this.docker.getContainer(id).inspect();
+      const state = info.State;
+      if (!state) return undefined;
+      return {
+        running: Boolean(state.Running),
+        status: typeof state.Status === "string" ? state.Status : undefined,
+        exitCode: typeof state.ExitCode === "number" ? state.ExitCode : undefined,
+        oomKilled: Boolean(state.OOMKilled),
+        error: typeof state.Error === "string" && state.Error.length > 0
+          ? state.Error
+          : undefined,
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Idempotently create a Docker bridge network. Call this at
+   * orchestrator startup for shared networks (openclaw-net,
+   * openclaw-control-plane), and per-session for limited-networking
+   * confinement. When `internal: true`, the network has no external
+   * egress — Docker drops every packet headed for a non-member.
+   * Called with no args, creates the backend's default network.
+   */
+  async ensureNetwork(
+    name?: string,
+    opts?: { internal?: boolean },
+  ): Promise<void> {
+    const target = name ?? this.defaultNetwork;
+    const internal = opts?.internal ?? false;
+    const existing = await this.docker.listNetworks({
+      filters: { name: [target] },
+    });
+    const exact = existing.find((n) => n.Name === target);
+    if (exact) {
+      const inspect = await this.docker.getNetwork(exact.Id).inspect();
+      if (Boolean(inspect.Internal) !== internal) {
+        throw new Error(
+          `docker network ${target} already exists with Internal=${Boolean(inspect.Internal)}, expected Internal=${internal}`,
+        );
+      }
+      return;
+    }
+    await this.docker.createNetwork({
+      Name: target,
+      Driver: "bridge",
+      Internal: internal,
+    });
+  }
+
+  /**
+   * Remove a Docker network. Used to clean up per-session networks
+   * created for limited-networking sessions. Best-effort: silently
+   * tolerates "network not found" (already cleaned up) and does NOT
+   * force-disconnect attached containers (the caller is responsible
+   * for stopping them first).
+   */
+  async removeNetwork(name: string): Promise<void> {
+    try {
+      await this.docker.getNetwork(name).remove();
+    } catch (err) {
+      if (!isNotFoundError(err)) throw err;
+    }
+  }
+
+  /**
+   * Attach a running container to an additional network. Used when a
+   * container needs membership in more than one network — the Docker
+   * API's CreateContainer accepts one `NetworkMode` at boot, so any
+   * additional networks go via `network connect` post-spawn.
+   */
+  async connectNetwork(
+    containerId: string,
+    network: string,
+    opts?: { aliases?: string[] },
+  ): Promise<void> {
+    await this.docker.getNetwork(network).connect({
+      Container: containerId,
+      EndpointConfig: opts?.aliases ? { Aliases: opts.aliases } : undefined,
+    });
+  }
+
+  /**
+   * Enumerate every container previously spawned by this orchestrator
+   * (matched by the `managed-by=open-managed-agents` label) along
+   * with the metadata needed to adopt it without respawning: the
+   * gateway token (read from env), the session/agent ids (from
+   * labels), and the reconstructed in-network base URL. Consumed by
+   * the startup adoption path in src/index.ts to preserve warm
+   * containers across an orchestrator restart. Skips containers the
+   * daemon reports as missing between list and inspect (race with
+   * parallel teardown).
+   */
+  async listManaged(): Promise<ManagedContainerInfo[]> {
+    const [current, legacy] = await Promise.all([
+      this.docker.listContainers({
+        all: true,
+        filters: { label: ["managed-by=open-managed-agents"] },
+      }),
+      this.docker.listContainers({
+        all: true,
+        filters: { label: ["managed-by=openclaw-managed-runtime"] },
+      }),
+    ]);
+    const seen = new Set<string>();
+    const infos = [...current, ...legacy].filter((c) => {
+      if (seen.has(c.Id)) return false;
+      seen.add(c.Id);
+      return true;
+    });
+    const out: ManagedContainerInfo[] = [];
+    for (const info of infos) {
+      try {
+        const inspect = await this.docker.getContainer(info.Id).inspect();
+        const env = inspect.Config?.Env ?? [];
+        const labels = inspect.Config?.Labels ?? info.Labels ?? {};
+        const getEnv = (k: string): string | undefined => {
+          const prefix = `${k}=`;
+          const found = env.find((e) => e.startsWith(prefix));
+          return found ? found.slice(prefix.length) : undefined;
+        };
+        const token = getEnv("OPENCLAW_GATEWAY_TOKEN");
+        const portStr = getEnv("OPENCLAW_GATEWAY_PORT");
+        const name = (info.Names[0] ?? "").replace(/^\//, "");
+        if (!name) continue;
+        const role =
+          labels["openclaw-role"] === "egress-proxy"
+            ? "egress-proxy"
+            : token && portStr
+              ? "agent"
+              : "unknown";
+        const port = portStr ? Number.parseInt(portStr, 10) : NaN;
+        out.push({
+          id: info.Id,
+          name,
+          role,
+          baseUrl: Number.isFinite(port) ? `http://${name}:${port}` : undefined,
+          token,
+          sessionId:
+            labels["orchestrator-session-id"] ??
+            labels["openclaw-session-id"],
+          agentId: labels["orchestrator-agent-id"],
+          running: info.State === "running",
+        });
+      } catch {
+        // Container disappeared between list and inspect — skip.
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Legacy hard-reset: force-remove every container labelled as managed
+   * by this orchestrator. Kept for operators who want to wipe the
+   * host's runtime state (via a script) but NO LONGER CALLED on normal
+   * startup — the adoption path in src/index.ts preserves healthy
+   * containers across a restart instead of killing them. Returns the
+   * number reaped.
+   */
+  async cleanupOrphaned(): Promise<number> {
+    // Match both the current label AND the pre-rename label so containers
+    // spawned before the Item 16 rename are also cleaned up on startup.
+    const [current, legacy] = await Promise.all([
+      this.docker.listContainers({ all: true, filters: { label: ["managed-by=open-managed-agents"] } }),
+      this.docker.listContainers({ all: true, filters: { label: ["managed-by=openclaw-managed-runtime"] } }),
+    ]);
+    const seen = new Set<string>();
+    const infos = [...current, ...legacy].filter((c) => {
+      if (seen.has(c.Id)) return false;
+      seen.add(c.Id);
+      return true;
+    });
+    let reaped = 0;
+    for (const info of infos) {
+      try {
+        await this.docker.getContainer(info.Id).remove({ force: true });
+        reaped++;
+      } catch {
+        // Best-effort — a container might already be gone or belong to a
+        // parallel cleanup. Either way, move on.
+      }
+    }
+    return reaped;
+  }
+}
+
+function randomSuffix(): string {
+  return Math.random().toString(36).slice(2, 10);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function trimLogTail(logs: string): string | undefined {
+  const trimmed = logs.trim();
+  if (!trimmed) return undefined;
+  const max = 4000;
+  const tail = trimmed.length > max ? trimmed.slice(trimmed.length - max) : trimmed;
+  return `logs:\n${tail}`;
+}
+
+function isNotRunningError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /is not running|is already stopped|not running/i.test(msg);
+}
+
+function isNotFoundError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /no such container|not found/i.test(msg);
+}

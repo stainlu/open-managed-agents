@@ -1,0 +1,213 @@
+# Local development stack for Open Managed Agents.
+#
+# Brings up:
+#   - orchestrator: the managed-agent HTTP API on http://localhost:8080
+#   - openclaw-net: the shared Docker network the orchestrator and agent containers use
+#
+# The orchestrator mounts /var/run/docker.sock so dockerode can spawn per-agent
+# runtime containers on the host Docker daemon. Agent containers bind-mount
+# ./data/sessions as their persistent /workspace.
+#
+# Provider credentials are read from the host environment and forwarded into
+# agent containers by src/index.ts:collectPassthroughEnv(). Export whichever
+# key your chosen provider needs before `docker compose up`. Examples:
+#   export MOONSHOT_API_KEY=sk-...   # default: moonshot/kimi-k2.5
+#   export ANTHROPIC_API_KEY=sk-...  # anthropic/claude-sonnet-4-6
+#   export OPENAI_API_KEY=sk-...     # openai/gpt-5.4
+#   export GEMINI_API_KEY=...        # google/gemini-2.5-pro
+#   export AWS_PROFILE=openclaw      # bedrock/anthropic.claude-sonnet-4-6 (once allowlisted)
+
+services:
+  orchestrator:
+    # Production: images are pre-built by .github/workflows/publish-images.yaml
+    # on every push to main and published to GHCR as public packages. Deploy
+    # scripts run `docker compose pull`, then explicitly
+    # `docker pull ghcr.io/stainlu/open-managed-agents-egress-proxy:latest`,
+    # then `docker compose up -d` to skip the build step entirely — cuts
+    # Lightsail deploy time from ~12 min to ~3 min.
+    #
+    # Local dev: run `docker compose up --build` and compose will rebuild
+    # both images from the Dockerfiles below, tagging them with the same
+    # GHCR names. You do NOT need GHCR credentials for local builds; the
+    # image tag just happens to point at a public registry path.
+    image: ghcr.io/stainlu/open-managed-agents-orchestrator:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.orchestrator
+    container_name: open-managed-agents-orchestrator
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      OPENCLAW_DOCKER_NETWORK: openclaw-net
+      # Internal-only network for orchestrator↔agent traffic on
+      # networking:limited sessions. Declared in the networks block
+      # below with internal: true so it has no external egress.
+      OPENCLAW_CONTROL_PLANE_NETWORK: openclaw-control-plane
+      OPENCLAW_RUNTIME_IMAGE: ghcr.io/stainlu/open-managed-agents-openclaw-agent:latest
+      # Egress-proxy sidecar image for networking:limited sessions.
+      # Override to pin a sha-tagged release instead of latest.
+      OPENCLAW_EGRESS_PROXY_IMAGE: ghcr.io/stainlu/open-managed-agents-egress-proxy:latest
+      # HOST-side path to data/sessions (not the orchestrator's in-container
+      # view). The orchestrator passes this to dockerode when it spawns
+      # agent containers; the Docker daemon resolves the path against the
+      # host filesystem, so a container-relative path (e.g. /var/openclaw/
+      # sessions) would fail. ${PWD} is shell-evaluated at `docker compose
+      # up` time — IMPORTANT: always run compose from the repo root, or
+      # this resolves to the wrong directory and agent containers will
+      # bind-mount an empty/missing path.
+      OPENCLAW_HOST_STATE_ROOT: ${PWD}/data/sessions
+      OPENCLAW_GATEWAY_PORT: "18789"
+      # Hard timeout for Docker create/start/network-connect/inspect during
+      # session acquire. Without this, a resource-starved daemon can leave a
+      # session stuck forever in "booting..." before the container is even
+      # claimable.
+      OPENCLAW_SPAWN_TIMEOUT_MS: ${OPENCLAW_SPAWN_TIMEOUT_MS:-60000}
+      # 10 min container-ready timeout. Hetzner CAX11 fully boots Pi's
+      # SessionManager in ~60 s so this is unused there. Lightsail medium_3_0
+      # on burstable disk can take 3-5 min for the first cold spawn after
+      # deploy, and the orchestrator's container-ready wait was timing out
+      # at 120 s, failing turn 1 and forcing turn 2 to respawn (combined
+      # ~12 min user-visible latency before the first answer). This
+      # upper-bounds the grace period rather than tuning per-backend.
+      OPENCLAW_READY_TIMEOUT_MS: "600000"
+      OPENCLAW_RUN_TIMEOUT_MS: "600000"
+      # Bound the number of live session-owned containers. Old idle sessions
+      # become an LRU cache: when the cap is full, the oldest idle session is
+      # evicted before a new cold spawn starts. This prevents a small host
+      # from accumulating one immortal container per historical session.
+      OPENCLAW_MAX_ACTIVE_CONTAINERS: ${OPENCLAW_MAX_ACTIVE_CONTAINERS:-3}
+      # Warm-pool opt-in. Library default is 0 (library code in
+      # src/index.ts uses envInt("…", 0)) so a dev laptop that didn't
+      # set this never warms containers and doesn't burn CPU on idle
+      # pool members. Cloud deploy scripts write
+      # OPENCLAW_MAX_WARM_CONTAINERS=3 into the host .env, and this
+      # line is the bridge that forwards the value into the
+      # orchestrator container — without it, the .env value is
+      # invisible to the running process and the code falls back to 0.
+      # IMPORTANT: use ":-0" (matches library default) rather than
+      # ":-" (empty string). Empty-string env vars are *set*, and any
+      # downstream `process.env.X ?? default` will skip its fallback
+      # and feed "" to the consumer. For consumers that strictly
+      # validate their input (e.g. pino log level), "" crashes boot.
+      OPENCLAW_MAX_WARM_CONTAINERS: ${OPENCLAW_MAX_WARM_CONTAINERS:-0}
+      # Item 12-14: URL the in-container call_agent CLI uses to reach the
+      # orchestrator. Matches this service's container_name + port.
+      OPENCLAW_ORCHESTRATOR_URL: http://open-managed-agents-orchestrator:8080
+      # Persistent metadata store. SQLite is the default; override with
+      # OPENCLAW_STORE=memory to run without persistence (tests only).
+      OPENCLAW_STORE: ${OPENCLAW_STORE:-sqlite}
+      OPENCLAW_STORE_PATH: /var/openclaw/state/managed-runtime.db
+      # Baseline bearer-token auth for the public HTTP API. Unset or empty
+      # = auth disabled (localhost dev default). Set on any deploy where
+      # port 8080 is reachable beyond loopback. Clients then attach
+      # `Authorization: Bearer <this-value>` on every request. See README
+      # for the single-token model (matches Claude Managed Agents' API-key
+      # depth).
+      OPENCLAW_API_TOKEN: ${OPENCLAW_API_TOKEN:-}
+      # GitHub OAuth for user authentication. Create at
+      # github.com/settings/developers with callback URL:
+      # https://<your-host>/auth/github/callback
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      ZENMUX_API_KEY: ${ZENMUX_API_KEY:-}
+      # Master key for vault credential encryption-at-rest. 32 bytes as
+      # 64 hex chars (or base64 / base64url). Unset = orchestrator
+      # generates + persists in SQLite (fine for dev, but then key
+      # rotation requires DB access rather than env change).
+      OPENCLAW_VAULT_KEY: ${OPENCLAW_VAULT_KEY:-}
+      # AWS credential chain (Bedrock)
+      AWS_REGION: ${AWS_REGION:-}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_PROFILE: ${AWS_PROFILE:-}
+      AWS_BEARER_TOKEN_BEDROCK: ${AWS_BEARER_TOKEN_BEDROCK:-}
+      # Direct provider API keys (forwarded to agent containers as-is)
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      MOONSHOT_API_KEY: ${MOONSHOT_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      QWEN_API_KEY: ${QWEN_API_KEY:-}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      TOGETHER_API_KEY: ${TOGETHER_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      FIREWORKS_API_KEY: ${FIREWORKS_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      # Extend with custom provider env vars without recompiling:
+      OPENCLAW_PASSTHROUGH_ENV: ${OPENCLAW_PASSTHROUGH_ENV:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data/sessions:/var/openclaw/sessions
+      # Orchestrator metadata store (SQLite file). Survives orchestrator
+      # restart so sessions, agents, and events persist. Delete the host
+      # directory to reset the runtime's memory.
+      - ./data/state:/var/openclaw/state
+    networks:
+      - openclaw-net
+      - openclaw-control-plane
+    depends_on:
+      - ensure-agent-image
+
+  # Pulls the agent runtime image so it's available locally when the
+  # orchestrator (via dockerode) spawns per-session containers from it.
+  # For production deploys this is a pure pull; for local dev the `build:`
+  # block below rebuilds from Dockerfile.runtime when `docker compose up
+  # --build` is used. The service itself runs `true` and exits immediately —
+  # compose still pulls/builds the image and tags it for later use.
+  ensure-agent-image:
+    image: ghcr.io/stainlu/open-managed-agents-openclaw-agent:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.runtime
+    entrypoint: ["/bin/true"]
+    command: ["true"]
+    restart: "no"
+
+  # First-party Telegram adapter. Opt in with `docker compose
+  # --profile telegram up -d`. Needs TELEGRAM_BOT_TOKEN (from @BotFather)
+  # and OPENCLAW_TELEGRAM_AGENT_ID (the agt_... id of the agent you
+  # want the bot to route messages to — create it first via
+  # `POST /v1/agents`). Persists chat→session mappings at
+  # ./data/telegram-adapter/chats.json so conversations survive
+  # adapter restarts.
+  telegram-adapter:
+    image: ghcr.io/stainlu/open-managed-agents-telegram-adapter:latest
+    build:
+      context: .
+      dockerfile: docker/telegram-adapter/Dockerfile
+    container_name: openclaw-telegram-adapter
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      OPENCLAW_AGENT_ID: ${OPENCLAW_TELEGRAM_AGENT_ID:-}
+      OPENCLAW_ORCHESTRATOR_URL: http://open-managed-agents-orchestrator:8080
+      OPENCLAW_API_TOKEN: ${OPENCLAW_API_TOKEN:-}
+    volumes:
+      - ./data/telegram-adapter:/state
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    networks:
+      - openclaw-net
+    restart: unless-stopped
+    profiles: ["telegram"]
+
+networks:
+  openclaw-net:
+    name: openclaw-net
+    driver: bridge
+  # Internal-only network for orchestrator↔agent traffic on
+  # networking:limited sessions. `internal: true` means Docker drops
+  # every packet headed off-network, so an agent container on this
+  # network plus a --internal confined network has zero direct path to
+  # the internet. The only route out is the per-session egress-proxy
+  # sidecar which orchestrates its own hostname allowlist.
+  openclaw-control-plane:
+    name: openclaw-control-plane
+    driver: bridge
+    internal: true
