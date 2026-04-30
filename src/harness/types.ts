@@ -33,6 +33,13 @@ export type HarnessTurnResult = {
   model?: string;
 };
 
+export type HarnessStreamingTurnInvocationArgs = HarnessTurnInvocationArgs;
+
+export type HarnessStreamingTurn = {
+  chunks: AsyncGenerator<string, void, void>;
+  abort(reason?: string): Promise<void>;
+};
+
 export class HarnessInvocationError extends Error {
   constructor(message: string) {
     super(message);
@@ -46,4 +53,5 @@ export type HarnessAdapter = {
   buildSpawnOptions(args: HarnessSpawnOptionsArgs): SpawnOptions;
   shouldBypassWarmPool(session: Pick<Session, "environmentId" | "vaultId"> | undefined): boolean;
   invokeTurn(args: HarnessTurnInvocationArgs): Promise<HarnessTurnResult>;
+  invokeStreamingTurn(args: HarnessStreamingTurnInvocationArgs): Promise<HarnessStreamingTurn>;
 };

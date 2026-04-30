@@ -7,6 +7,7 @@ import {
 import {
   HarnessInvocationError,
   type HarnessAdapter,
+  type HarnessStreamingTurn,
   type HarnessTurnResult,
 } from "../harness/types.js";
 import { addContext, getLogger, withCapturedContext } from "../log.js";
@@ -703,93 +704,33 @@ export class AgentRouter {
       this.sessions.markRunning(args.sessionId);
       const beforeTurn = this.snapshotTurnProgress(agent.agentId, args.sessionId);
 
-      const canonicalSessionKey = `agent:main:${args.sessionId}`;
       const runEnd = sessionRunDurationSeconds.startTimer();
-      const res = await fetch(`${container.baseUrl}/v1/chat/completions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "text/event-stream",
-          Authorization: `Bearer ${container.token}`,
-          "x-openclaw-agent-id": "main",
-          "x-openclaw-session-key": canonicalSessionKey,
-        },
-        body: JSON.stringify({
-          model: "openclaw/main",
-          user: args.sessionId,
-          messages: [{ role: "user", content: args.content }],
-          stream: true,
-        }),
-        signal: AbortSignal.timeout(this.cfg.runTimeoutMs),
-      });
-
-      if (!res.ok) {
+      let stream: HarnessStreamingTurn;
+      try {
+        stream = await this.harness.invokeStreamingTurn({
+          baseUrl: container.baseUrl,
+          token: container.token,
+          content: args.content,
+          sessionId: args.sessionId,
+          timeoutMs: this.cfg.runTimeoutMs,
+        });
+      } catch (err) {
         runEnd();
-        const text = await res.text().catch(() => "");
-        throw new RouterError(
-          "chat_completions_failed",
-          `/v1/chat/completions returned ${res.status}: ${text}`,
-        );
-      }
-      if (!res.body) {
-        runEnd();
-        throw new RouterError(
-          "chat_completions_failed",
-          "/v1/chat/completions returned empty body",
-        );
+        if (err instanceof HarnessInvocationError) {
+          throw new RouterError("chat_completions_failed", err.message);
+        }
+        throw err;
       }
 
-      const reader = res.body.getReader();
-      let readerClosed = false;
       const chunks = (async function* (): AsyncGenerator<string, void, void> {
-        const decoder = new TextDecoder("utf-8");
-        let buf = "";
         try {
-          while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            buf += decoder.decode(value, { stream: true });
-            // SSE frames are separated by a blank line. We split eagerly
-            // so we can yield each complete frame the moment it arrives —
-            // partial frames stay in buf until the next read. This is the
-            // only parsing we do: the rest of the SSE body (the inner
-            // ChatCompletionChunk JSON) is opaque to the orchestrator;
-            // the client speaks OpenAI's chunk schema, we just relay it.
-            let sep: number;
-            // eslint-disable-next-line no-cond-assign
-            while ((sep = buf.indexOf("\n\n")) !== -1) {
-              const frame = buf.slice(0, sep);
-              buf = buf.slice(sep + 2);
-              const dataLines: string[] = [];
-              for (const line of frame.split("\n")) {
-                if (line.startsWith("data:")) {
-                  dataLines.push(line.slice(5).replace(/^ /, ""));
-                }
-              }
-              if (dataLines.length === 0) continue;
-              const data = dataLines.join("\n");
-              yield data;
-              if (data === "[DONE]") return;
-            }
+          for await (const chunk of stream.chunks) {
+            yield chunk;
           }
         } finally {
-          readerClosed = true;
           runEnd();
-          try {
-            reader.releaseLock();
-          } catch {
-            /* reader already released */
-          }
         }
       })();
-      const abort = async (reason?: string): Promise<void> => {
-        if (readerClosed) return;
-        try {
-          await reader.cancel(reason ?? "client disconnected");
-        } catch {
-          /* reader may already be closed or released */
-        }
-      };
 
       const router = this;
       const finalize = async (outcome: StreamOutcome): Promise<void> => {
@@ -828,7 +769,7 @@ export class AgentRouter {
         router.sessions.endRunFailure(args.sessionId, outcome.error);
       };
 
-      return { session: bumped, chunks, abort, finalize };
+      return { session: bumped, chunks, abort: stream.abort, finalize };
     } catch (err) {
       // Failure BEFORE we handed the stream to the caller — unwind the
       // beginRun transition ourselves. Evict the container because the

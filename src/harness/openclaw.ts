@@ -9,6 +9,8 @@ import type {
   HarnessAdapter,
   HarnessSessionContext,
   HarnessSpawnOptionsArgs,
+  HarnessStreamingTurn,
+  HarnessStreamingTurnInvocationArgs,
   HarnessTurnInvocationArgs,
   HarnessTurnResult,
 } from "./types.js";
@@ -143,40 +145,7 @@ export class OpenClawHarnessAdapter implements HarnessAdapter {
   }
 
   async invokeTurn(args: HarnessTurnInvocationArgs): Promise<HarnessTurnResult> {
-    const url = `${args.baseUrl}/v1/chat/completions`;
-    // OpenClaw's OpenAI-compatible endpoint validates the `model` field against
-    // either the literal "openclaw" or the "openclaw/<agentId>" pattern — it is
-    // a routing hint, not the inference model. The actual model is selected
-    // from the generated OpenClaw config baked at container spawn.
-    //
-    // Session continuity: use the canonical `agent:<agentId>:<stable-key>`
-    // key so OpenClaw's startup migrations do not rewrite it between turns.
-    const canonicalSessionKey = `agent:main:${args.sessionId}`;
-    const body = {
-      model: "openclaw/main",
-      user: args.sessionId,
-      messages: [{ role: "user", content: args.content }],
-      stream: false,
-    };
-
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${args.token}`,
-        "x-openclaw-agent-id": "main",
-        "x-openclaw-session-key": canonicalSessionKey,
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(args.timeoutMs),
-    });
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new HarnessInvocationError(
-        `/v1/chat/completions returned ${res.status}: ${text}`,
-      );
-    }
+    const res = await this.fetchChatCompletions(args, false);
 
     const data = (await res.json()) as ChatCompletionResponse;
     const output = data.choices?.[0]?.message?.content ?? "";
@@ -192,6 +161,72 @@ export class OpenClawHarnessAdapter implements HarnessAdapter {
       tokensIn: usage.tokensIn,
       tokensOut: usage.tokensOut,
     };
+  }
+
+  async invokeStreamingTurn(
+    args: HarnessStreamingTurnInvocationArgs,
+  ): Promise<HarnessStreamingTurn> {
+    const res = await this.fetchChatCompletions(args, true);
+    if (!res.body) {
+      throw new HarnessInvocationError("/v1/chat/completions returned empty body");
+    }
+
+    const reader = res.body.getReader();
+    let readerClosed = false;
+    const chunks = decodeOpenAiSseChunks(reader, () => {
+      readerClosed = true;
+    });
+    const abort = async (reason?: string): Promise<void> => {
+      if (readerClosed) return;
+      try {
+        await reader.cancel(reason ?? "client disconnected");
+      } catch {
+        /* reader may already be closed or released */
+      }
+    };
+    return { chunks, abort };
+  }
+
+  private async fetchChatCompletions(
+    args: HarnessTurnInvocationArgs,
+    stream: boolean,
+  ): Promise<Response> {
+    const url = `${args.baseUrl}/v1/chat/completions`;
+    // OpenClaw's OpenAI-compatible endpoint validates the `model` field against
+    // either the literal "openclaw" or the "openclaw/<agentId>" pattern — it is
+    // a routing hint, not the inference model. The actual model is selected
+    // from the generated OpenClaw config baked at container spawn.
+    //
+    // Session continuity: use the canonical `agent:<agentId>:<stable-key>`
+    // key so OpenClaw's startup migrations do not rewrite it between turns.
+    const canonicalSessionKey = `agent:main:${args.sessionId}`;
+    const body = {
+      model: "openclaw/main",
+      user: args.sessionId,
+      messages: [{ role: "user", content: args.content }],
+      stream,
+    };
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(stream ? { Accept: "text/event-stream" } : {}),
+        Authorization: `Bearer ${args.token}`,
+        "x-openclaw-agent-id": "main",
+        "x-openclaw-session-key": canonicalSessionKey,
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(args.timeoutMs),
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new HarnessInvocationError(
+        `/v1/chat/completions returned ${res.status}: ${text}`,
+      );
+    }
+    return res;
   }
 
   private prepareWorkspace(agentId: string, sessionId: string): void {
@@ -270,6 +305,44 @@ export function isOpenClawFailureContent(content: string): boolean {
   if (content === "No response from OpenClaw.") return true;
   if (content.startsWith("⚠️")) return true;
   return false;
+}
+
+async function* decodeOpenAiSseChunks(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  onClosed: () => void,
+): AsyncGenerator<string, void, void> {
+  const decoder = new TextDecoder("utf-8");
+  let buf = "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let sep: number;
+      // eslint-disable-next-line no-cond-assign
+      while ((sep = buf.indexOf("\n\n")) !== -1) {
+        const frame = buf.slice(0, sep);
+        buf = buf.slice(sep + 2);
+        const dataLines: string[] = [];
+        for (const line of frame.split("\n")) {
+          if (line.startsWith("data:")) {
+            dataLines.push(line.slice(5).replace(/^ /, ""));
+          }
+        }
+        if (dataLines.length === 0) continue;
+        const data = dataLines.join("\n");
+        yield data;
+        if (data === "[DONE]") return;
+      }
+    }
+  } finally {
+    onClosed();
+    try {
+      reader.releaseLock();
+    } catch {
+      /* reader already released */
+    }
+  }
 }
 
 type ChatCompletionResponse = {

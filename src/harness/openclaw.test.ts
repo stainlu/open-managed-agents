@@ -197,6 +197,45 @@ describe("OpenClawHarnessAdapter", () => {
     });
   });
 
+  it("invokes streaming OpenClaw turns and yields OpenAI SSE data frames", async () => {
+    const { adapter } = makeAdapter();
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"delta"'));
+        controller.enqueue(encoder.encode(':"one"}\n\n'));
+        controller.enqueue(encoder.encode("event: ignored\ndata: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    const fetchMock = vi.fn().mockResolvedValue(new Response(body, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const stream = await adapter.invokeStreamingTurn({
+      baseUrl: "http://container.test",
+      token: "gateway-token",
+      sessionId: "ses_1",
+      content: "hello",
+      timeoutMs: 1000,
+    });
+    const chunks: string[] = [];
+    for await (const chunk of stream.chunks) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toEqual(['{"delta":"one"}', "[DONE]"]);
+    const [_url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.headers).toMatchObject({
+      Accept: "text/event-stream",
+      Authorization: "Bearer gateway-token",
+      "x-openclaw-session-key": "agent:main:ses_1",
+    });
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      stream: true,
+      messages: [{ role: "user", content: "hello" }],
+    });
+  });
+
   it("does not change model names when ZenMux is not configured", () => {
     expect(normalizeModelForRuntime("deepseek/deepseek-v4-pro", {})).toBe(
       "deepseek/deepseek-v4-pro",
