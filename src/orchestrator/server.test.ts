@@ -1,11 +1,29 @@
 import { describe, expect, it } from "vitest";
 
+import { HarnessRegistry } from "../harness/registry.js";
+import type { HarnessAdapter, HarnessCapabilities } from "../harness/types.js";
 import { ParentTokenMinter } from "../runtime/parent-token.js";
 import { InMemoryStore } from "../store/memory.js";
 import { RouterError } from "./router.js";
 import { buildApp, type ServerDeps } from "./server.js";
 import { clearZenMuxCatalogCache } from "./zenmux-pricing.js";
 import type { Event, Session } from "./types.js";
+
+const TEST_HARNESS_CAPABILITIES = {
+  start_turn: { support: "supported", detail: "test" },
+  streaming: { support: "supported", detail: "test" },
+  native_session_resume: { support: "supported", detail: "test" },
+  cancellation: { support: "supported", detail: "test" },
+  interruption: { support: "unsupported", detail: "test" },
+  dynamic_model_patch: { support: "supported", detail: "test" },
+  compaction: { support: "unsupported", detail: "test" },
+  tool_approvals: { support: "partial", detail: "test" },
+  permission_deny: { support: "partial", detail: "test" },
+  mcp: { support: "unsupported", detail: "test" },
+  managed_event_log: { support: "supported", detail: "test" },
+  usage: { support: "supported", detail: "test" },
+  subagents: { support: "unsupported", detail: "test" },
+} satisfies HarnessCapabilities;
 
 function makeApp(opts: {
   passthroughEnv?: Record<string, string>;
@@ -195,6 +213,20 @@ function makeApp(opts: {
     audit: store.audit,
     vaults: store.vaults,
     router: router as ServerDeps["router"],
+    harnesses: new HarnessRegistry({
+      adapters: [
+        {
+          id: "openclaw",
+          displayName: "OpenClaw",
+          capabilities: TEST_HARNESS_CAPABILITIES,
+        } as HarnessAdapter,
+        {
+          id: "hermes",
+          displayName: "Hermes",
+          capabilities: TEST_HARNESS_CAPABILITIES,
+        } as HarnessAdapter,
+      ],
+    }),
     apiToken: "admin-secret",
     users: store.users,
     tokenMinter: new ParentTokenMinter(),
@@ -225,6 +257,35 @@ function createAgent(store: InMemoryStore) {
     maxSubagentDepth: 0,
   });
 }
+
+describe("harness catalog API", () => {
+  it("surfaces concrete harness capabilities", async () => {
+    const { app } = makeApp();
+
+    const res = await req(app, "/v1/harnesses", { token: "admin-secret" });
+    const body = res.body as {
+      default_harness_id?: string;
+      count?: number;
+      harnesses?: Array<{
+        harness_id: string;
+        name: string;
+        capabilities: HarnessCapabilities;
+      }>;
+    };
+
+    expect(res.status).toBe(200);
+    expect(body.default_harness_id).toBe("openclaw");
+    expect(body.count).toBe(2);
+    expect(body.harnesses?.map((h) => h.harness_id)).toEqual([
+      "openclaw",
+      "hermes",
+    ]);
+    expect(body.harnesses?.[0]?.capabilities.tool_approvals).toEqual({
+      support: "partial",
+      detail: "test",
+    });
+  });
+});
 
 async function req(
   app: ReturnType<typeof buildApp>,

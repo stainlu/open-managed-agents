@@ -7,6 +7,8 @@ import { writeAudit } from "../audit.js";
 import { addContext, getLogger, withContext } from "../log.js";
 import { createRateLimitMiddleware } from "../rate-limit.js";
 import type { ManagedEventLog } from "../events/types.js";
+import type { HarnessRegistry } from "../harness/registry.js";
+import type { HarnessAdapter } from "../harness/types.js";
 import {
   agentsCreatedTotal,
   httpRequestDurationSeconds,
@@ -109,6 +111,7 @@ export type ServerDeps = {
   audit: AuditStore;
   vaults: VaultStore;
   router: AgentRouter;
+  harnesses: HarnessRegistry;
   /**
    * Baseline bearer-token auth. Undefined or empty string → auth
    * disabled (localhost dev default). Any non-empty string → every
@@ -239,6 +242,14 @@ function environmentResponse(env: EnvironmentConfig) {
     packages: env.packages,
     networking: env.networking,
     created_at: env.createdAt,
+  };
+}
+
+function harnessResponse(harness: HarnessAdapter) {
+  return {
+    harness_id: harness.id,
+    name: harness.displayName,
+    capabilities: harness.capabilities,
   };
 }
 
@@ -714,6 +725,9 @@ export function buildApp(deps: ServerDeps): Hono {
           compact: "POST /v1/sessions/:sessionId/compact",
           logs: "GET /v1/sessions/:sessionId/logs?tail=<n>",
         },
+        harnesses: {
+          list: "GET /v1/harnesses",
+        },
         openai_compat: {
           models: "GET /v1/models",
           chat_completions: "POST /v1/chat/completions",
@@ -743,6 +757,15 @@ export function buildApp(deps: ServerDeps): Hono {
       uptime_ms: now - deps.startTs,
       max_warm: deps.maxWarmContainers,
       max_active: deps.maxActiveContainers,
+    });
+  });
+
+  app.get("/v1/harnesses", (c) => {
+    const harnesses = deps.harnesses.list().map(harnessResponse);
+    return c.json({
+      default_harness_id: deps.harnesses.defaultId,
+      harnesses,
+      count: harnesses.length,
     });
   });
 

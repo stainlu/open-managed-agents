@@ -12,6 +12,7 @@ import {
 } from "./adapter-server-client.js";
 import {
   type HarnessAdapter,
+  type HarnessCapabilities,
   type HarnessApprovalRequest,
   type HarnessApprovalResolution,
   type HarnessSpawnOptionsArgs,
@@ -35,6 +36,60 @@ export type HermesHarnessAdapterConfig = {
 export class HermesHarnessAdapter implements HarnessAdapter {
   readonly id = "hermes";
   readonly displayName = "Hermes";
+  readonly capabilities = {
+    start_turn: {
+      support: "supported",
+      detail: "Adapter server imports Hermes AIAgent and runs one managed turn.",
+    },
+    streaming: {
+      support: "supported",
+      detail: "Adapter server emits SSE frames from Hermes callbacks.",
+    },
+    native_session_resume: {
+      support: "supported",
+      detail: "Hermes SessionDB is persisted under the mounted workspace.",
+    },
+    cancellation: {
+      support: "supported",
+      detail: "Adapter calls AIAgent.interrupt for the active turn.",
+    },
+    interruption: {
+      support: "partial",
+      detail: "Cancel/interrupt map to AIAgent.interrupt; steer/send is not exposed yet.",
+    },
+    dynamic_model_patch: {
+      support: "partial",
+      detail: "Adapter patches the live AIAgent runtime fields; full native validation is still thin.",
+    },
+    compaction: {
+      support: "unsupported",
+      detail: "Hermes compaction is not wired through oma.adapter.v1 yet.",
+    },
+    tool_approvals: {
+      support: "partial",
+      detail: "Only Hermes terminal dangerous-command approval is bridged today.",
+    },
+    permission_deny: {
+      support: "partial",
+      detail: "Deny maps to Hermes disabled toolsets, not individual tool-call policy.",
+    },
+    mcp: {
+      support: "unsupported",
+      detail: "Hermes MCP config is not passed through by this adapter yet.",
+    },
+    managed_event_log: {
+      support: "partial",
+      detail: "Adapter emits normalized events from callbacks and turn results; coverage is not full native trace parity yet.",
+    },
+    usage: {
+      support: "supported",
+      detail: "Adapter maps Hermes result token/cost fields when present.",
+    },
+    subagents: {
+      support: "unsupported",
+      detail: "Managed subagent delegation is not injected into Hermes yet.",
+    },
+  } satisfies HarnessCapabilities;
   readonly controlPlane = adapterServerControlPlane(this.id);
 
   constructor(private readonly cfg: HermesHarnessAdapterConfig) {}

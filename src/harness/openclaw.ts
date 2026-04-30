@@ -11,6 +11,7 @@ import type {
   HarnessApprovalRequest,
   HarnessApprovalResolution,
   HarnessAdapter,
+  HarnessCapabilities,
   HarnessSessionContext,
   HarnessSpawnOptionsArgs,
   HarnessStreamingTurn,
@@ -65,6 +66,60 @@ type OpenClawControlClient = {
 export class OpenClawHarnessAdapter implements HarnessAdapter {
   readonly id = "openclaw";
   readonly displayName = "OpenClaw";
+  readonly capabilities = {
+    start_turn: {
+      support: "supported",
+      detail: "OpenAI-compatible gateway turn endpoint.",
+    },
+    streaming: {
+      support: "supported",
+      detail: "Proxies OpenClaw gateway SSE chunks.",
+    },
+    native_session_resume: {
+      support: "supported",
+      detail: "OpenClaw rebuilds AgentSession from the mounted JSONL event log.",
+    },
+    cancellation: {
+      support: "supported",
+      detail: "Gateway WebSocket sessions.abort.",
+    },
+    interruption: {
+      support: "partial",
+      detail: "OpenClaw gateway has steer/send, but the public managed API only exposes cancel today.",
+    },
+    dynamic_model_patch: {
+      support: "supported",
+      detail: "Gateway WebSocket sessions.patch with model/thinking fields.",
+    },
+    compaction: {
+      support: "supported",
+      detail: "Gateway WebSocket sessions.compact.",
+    },
+    tool_approvals: {
+      support: "supported",
+      detail: "confirm-tools plugin gates selected or all OpenClaw tools.",
+    },
+    permission_deny: {
+      support: "supported",
+      detail: "OPENCLAW_DENIED_TOOLS blocks configured tools in the runtime config.",
+    },
+    mcp: {
+      support: "supported",
+      detail: "MCP server config is passed through to OpenClaw.",
+    },
+    managed_event_log: {
+      support: "supported",
+      detail: "OpenClaw/Pi JSONL is mapped into the managed event shape.",
+    },
+    usage: {
+      support: "supported",
+      detail: "Provider usage/cost is read from OpenClaw JSONL and rolled up by session.",
+    },
+    subagents: {
+      support: "supported",
+      detail: "Injected openclaw-call-agent creates first-class managed child sessions.",
+    },
+  } satisfies HarnessCapabilities;
   readonly controlPlane = createOpenClawControlPlane();
 
   constructor(private readonly cfg: OpenClawHarnessAdapterConfig) {}

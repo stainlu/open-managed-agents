@@ -811,6 +811,7 @@ async function main(): Promise<void> {
       audit: store.audit,
       vaults: store.vaults,
       router,
+      harnesses,
       tokenMinter,
       version,
       apiToken: apiToken || undefined,

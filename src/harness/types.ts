@@ -72,6 +72,29 @@ export type HarnessTurnStateEvent = {
   errorMessage?: string;
 };
 
+export type HarnessCapabilitySupport = "supported" | "partial" | "unsupported";
+
+export type HarnessCapability = {
+  support: HarnessCapabilitySupport;
+  detail: string;
+};
+
+export type HarnessCapabilities = {
+  start_turn: HarnessCapability;
+  streaming: HarnessCapability;
+  native_session_resume: HarnessCapability;
+  cancellation: HarnessCapability;
+  interruption: HarnessCapability;
+  dynamic_model_patch: HarnessCapability;
+  compaction: HarnessCapability;
+  tool_approvals: HarnessCapability;
+  permission_deny: HarnessCapability;
+  mcp: HarnessCapability;
+  managed_event_log: HarnessCapability;
+  usage: HarnessCapability;
+  subagents: HarnessCapability;
+};
+
 export class HarnessInvocationError extends Error {
   constructor(message: string) {
     super(message);
@@ -92,6 +115,7 @@ export class HarnessControlError extends Error {
 export type HarnessAdapter = {
   readonly id: HarnessId;
   readonly displayName: string;
+  readonly capabilities: HarnessCapabilities;
   readonly controlPlane?: ContainerControlPlane;
   buildSpawnOptions(args: HarnessSpawnOptionsArgs): SpawnOptions;
   shouldBypassWarmPool(session: Pick<Session, "environmentId" | "vaultId"> | undefined): boolean;
