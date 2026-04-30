@@ -6,6 +6,7 @@ import {
   normalizeModelForRuntime,
 } from "../harness/openclaw.js";
 import { OpenClawJsonlEventLog } from "../harness/openclaw-events.js";
+import { HarnessRegistry } from "../harness/registry.js";
 import type { GatewayWebSocketClient } from "../runtime/gateway-ws.js";
 import { ParentTokenMinter } from "../runtime/parent-token.js";
 import type { SessionContainerPool } from "../runtime/pool.js";
@@ -42,21 +43,22 @@ function makeRouter(opts: {
   const pool = (opts.poolStub ?? {}) as SessionContainerPool;
   const eventReader = (opts.eventReaderStub ??
     new OpenClawJsonlEventLog("/tmp/does-not-exist")) as ManagedEventLog;
+  const harness = new OpenClawHarnessAdapter({
+    runtimeImage: "test-image",
+    hostStateRoot: "/tmp/test-state",
+    stateRoot: eventReader.stateRoot,
+    network: "test-net",
+    gatewayPort: 18789,
+    passthroughEnv: opts.passthroughEnv ?? {},
+    orchestratorUrl: "http://orchestrator-test:8080",
+    tokenMinter: new ParentTokenMinter(),
+    environments: store.environments,
+    vaults: store.vaults,
+  });
   const cfg: RouterConfig = {
     passthroughEnv: opts.passthroughEnv ?? {},
     runTimeoutMs: 60_000,
-    harness: new OpenClawHarnessAdapter({
-      runtimeImage: "test-image",
-      hostStateRoot: "/tmp/test-state",
-      stateRoot: eventReader.stateRoot,
-      network: "test-net",
-      gatewayPort: 18789,
-      passthroughEnv: opts.passthroughEnv ?? {},
-      orchestratorUrl: "http://orchestrator-test:8080",
-      tokenMinter: new ParentTokenMinter(),
-      environments: store.environments,
-      vaults: store.vaults,
-    }),
+    harnesses: new HarnessRegistry({ adapters: [harness] }),
   };
   const router = new AgentRouter(
     store.agents,
@@ -153,6 +155,26 @@ describe("AgentRouter.createSession", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(RouterError);
       expect((err as RouterError).code).toBe("agent_archived");
+    }
+  });
+
+  it("throws unsupported_harness when the agent targets an unregistered harness", () => {
+    const { router, store } = makeRouter();
+    const agent = store.agents.create({
+      model: "m",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+    });
+    (agent as { harnessId: string }).harnessId = "missing";
+    try {
+      router.createSession(agent.agentId);
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(RouterError);
+      expect((err as RouterError).code).toBe("unsupported_harness");
     }
   });
 
@@ -1365,31 +1387,44 @@ class FakeApprovalWs {
 }
 
 describe("AgentRouter approval flow", () => {
+  function createApprovalSession(router: AgentRouter, store: InMemoryStore): string {
+    const agent = store.agents.create({
+      model: "m",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_ask" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+    });
+    return router.createSession(agent.agentId).sessionId;
+  }
+
   it("keeps a pending approval when approvalResolve fails", async () => {
     const fakeWs = new FakeApprovalWs();
     fakeWs.resolveImpl = async () => {
       throw new Error("ws down");
     };
-    const { router } = makeRouter({
+    const { router, store } = makeRouter({
       poolStub: {
         getWsClient: () => fakeWs as unknown as GatewayWebSocketClient,
       },
     });
-    (router as any).pendingApprovals.set("ses_1", [{
+    const sessionId = createApprovalSession(router, store);
+    (router as any).pendingApprovals.set(sessionId, [{
       approvalId: "ap_1",
-      sessionId: "ses_1",
+      sessionId,
       toolName: "write",
       toolCallId: "call_1",
       description: "write file?",
       arrivedAt: 1,
     }]);
 
-    await expect(router.confirmTool("ses_1", "ap_1", "allow")).rejects.toMatchObject({
+    await expect(router.confirmTool(sessionId, "ap_1", "allow")).rejects.toMatchObject({
       name: "RouterError",
       code: "confirm_tool_failed",
     });
-    expect(router.getPendingApprovals("ses_1")).toHaveLength(1);
-    expect(router.getPendingApprovals("ses_1")[0]?.approvalId).toBe("ap_1");
+    expect(router.getPendingApprovals(sessionId)).toHaveLength(1);
+    expect(router.getPendingApprovals(sessionId)[0]?.approvalId).toBe("ap_1");
   });
 
   it("rehydrates pending approvals from the gateway list with toolCallId metadata", async () => {
@@ -1403,16 +1438,17 @@ describe("AgentRouter approval flow", () => {
         description: "The agent wants to write a file.",
       },
     }];
-    const { router } = makeRouter();
+    const { router, store } = makeRouter();
+    const sessionId = createApprovalSession(router, store);
 
     await (router as any).ensureApprovalSubscriptions(
-      "ses_1",
+      sessionId,
       fakeWs as unknown as GatewayWebSocketClient,
     );
 
-    expect(router.getPendingApprovals("ses_1")).toEqual([{
+    expect(router.getPendingApprovals(sessionId)).toEqual([{
       approvalId: "ap_1",
-      sessionId: "ses_1",
+      sessionId,
       toolName: "write",
       toolCallId: "call_1",
       description: "The agent wants to write a file.",
@@ -1422,14 +1458,15 @@ describe("AgentRouter approval flow", () => {
 
   it("deduplicates approval listeners per session and clears on resolved events", async () => {
     const fakeWs = new FakeApprovalWs();
-    const { router } = makeRouter();
+    const { router, store } = makeRouter();
+    const sessionId = createApprovalSession(router, store);
 
     await (router as any).ensureApprovalSubscriptions(
-      "ses_1",
+      sessionId,
       fakeWs as unknown as GatewayWebSocketClient,
     );
     await (router as any).ensureApprovalSubscriptions(
-      "ses_1",
+      sessionId,
       fakeWs as unknown as GatewayWebSocketClient,
     );
 
@@ -1457,10 +1494,10 @@ describe("AgentRouter approval flow", () => {
       },
     });
 
-    expect(router.getPendingApprovals("ses_1")).toHaveLength(1);
-    expect(router.getPendingApprovals("ses_1")[0]?.toolCallId).toBe("call_1");
+    expect(router.getPendingApprovals(sessionId)).toHaveLength(1);
+    expect(router.getPendingApprovals(sessionId)[0]?.toolCallId).toBe("call_1");
 
     fakeWs.emit("plugin.approval.resolved", { id: "ap_1", decision: "allow-once" });
-    expect(router.getPendingApprovals("ses_1")).toEqual([]);
+    expect(router.getPendingApprovals(sessionId)).toEqual([]);
   });
 });

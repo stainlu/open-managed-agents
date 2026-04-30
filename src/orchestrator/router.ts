@@ -7,6 +7,7 @@ import {
   type HarnessStreamingTurn,
   type HarnessTurnResult,
 } from "../harness/types.js";
+import type { HarnessRegistry } from "../harness/registry.js";
 import type { ManagedEventLog } from "../events/types.js";
 import { addContext, getLogger, withCapturedContext } from "../log.js";
 import {
@@ -43,8 +44,8 @@ export type RouterConfig = {
   passthroughEnv: Record<string, string>;
   /** Max time to wait for the agent task to complete end-to-end (ms). */
   runTimeoutMs: number;
-  /** Harness adapter selected by the composition root. */
-  harness: HarnessAdapter;
+  /** Harness adapters selected by the composition root. */
+  harnesses: HarnessRegistry;
 };
 
 export type RunEventArgs = {
@@ -146,8 +147,6 @@ export class AgentRouter {
    * acquiring and aborts before posting to the container.
    */
   private readonly cancelledDuringAcquire = new Set<string>();
-  private readonly harness: HarnessAdapter;
-
   constructor(
     private readonly agents: AgentStore,
     private readonly environments: EnvironmentStore,
@@ -157,22 +156,50 @@ export class AgentRouter {
     private readonly queue: QueueStore,
     private readonly vaults: VaultStore,
     private readonly cfg: RouterConfig,
-  ) {
-    this.harness = cfg.harness;
-  }
+  ) {}
 
   /** Return any pending approval requests for a session (non-destructive). */
   getPendingApprovals(sessionId: string): PendingApproval[] {
     return this.pendingApprovals.get(sessionId) ?? [];
   }
 
-  private assertAgentHarness(agent: AgentConfig): void {
-    const harnessId = agent.harnessId ?? this.harness.id;
-    if (harnessId === this.harness.id) return;
+  private harnessForId(harnessId: string): HarnessAdapter {
+    const harness = this.cfg.harnesses.get(harnessId);
+    if (harness) return harness;
     throw new RouterError(
       "unsupported_harness",
-      `agent ${agent.agentId} uses harness ${harnessId}, but this router is configured for ${this.harness.id}`,
+      `unsupported harness ${harnessId}`,
     );
+  }
+
+  private harnessForAgent(agent: AgentConfig): HarnessAdapter {
+    const harnessId = agent.harnessId ?? this.cfg.harnesses.defaultId;
+    const harness = this.cfg.harnesses.get(harnessId);
+    if (harness) return harness;
+    throw new RouterError(
+      "unsupported_harness",
+      `agent ${agent.agentId} uses unsupported harness ${harnessId}`,
+    );
+  }
+
+  private harnessForSession(session: Session): HarnessAdapter {
+    const agent = this.agents.get(session.agentId);
+    if (agent) return this.harnessForAgent(agent);
+    // Legacy/deleted-agent sessions predate session-level harness metadata.
+    // With only OpenClaw registered this preserves existing control-plane
+    // behavior for active sessions whose template was deleted.
+    return this.harnessForId(this.cfg.harnesses.defaultId);
+  }
+
+  private harnessForSessionId(sessionId: string): HarnessAdapter {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new RouterError(
+        "session_not_found",
+        `session ${sessionId} does not exist`,
+      );
+    }
+    return this.harnessForSession(session);
   }
 
   private replacePendingApprovals(sessionId: string, approvals: PendingApproval[]): void {
@@ -224,7 +251,8 @@ export class AgentRouter {
     controlClient: unknown,
   ): Promise<void> {
     try {
-      const approvals = await this.harness.listApprovals(controlClient, sessionId);
+      const harness = this.harnessForSessionId(sessionId);
+      const approvals = await harness.listApprovals(controlClient, sessionId);
       this.replacePendingApprovals(sessionId, approvals);
     } catch (err) {
       log.warn(
@@ -245,7 +273,8 @@ export class AgentRouter {
     }
     this.clearApprovalSubscriptions(sessionId);
 
-    const unsubscribeRequested = this.harness.subscribeApprovalRequested(
+    const harness = this.harnessForSessionId(sessionId);
+    const unsubscribeRequested = harness.subscribeApprovalRequested(
       controlClient,
       sessionId,
       (approval: HarnessApprovalRequest) => {
@@ -262,7 +291,7 @@ export class AgentRouter {
       },
     );
 
-    const unsubscribeResolved = this.harness.subscribeApprovalResolved(
+    const unsubscribeResolved = harness.subscribeApprovalResolved(
       controlClient,
       (resolution) => {
         this.removePendingApproval(sessionId, resolution.approvalId);
@@ -350,7 +379,7 @@ export class AgentRouter {
     if (agent.archivedAt) {
       throw new RouterError("agent_archived", `agent ${agentId} is archived`);
     }
-    this.assertAgentHarness(agent);
+    this.harnessForAgent(agent);
     if (opts?.vaultId && !this.vaults.getVault(opts.vaultId)) {
       throw new RouterError(
         "vault_not_found",
@@ -391,7 +420,7 @@ export class AgentRouter {
     // boot config is also template-level. Skip the background warm when
     // this session needs its own container config (vault creds, limited
     // networking, package preinstalls).
-    if (this.shouldBypassWarmPool(session)) {
+    if (this.shouldBypassWarmPool(session, agent)) {
       return;
     }
     // Delegate to warmForAgent so session-create / agent-create / startup
@@ -422,7 +451,7 @@ export class AgentRouter {
   async warmForAgent(agentId: string): Promise<void> {
     const agent = this.agents.get(agentId);
     if (!agent) return;
-    this.assertAgentHarness(agent);
+    this.harnessForAgent(agent);
     if (agent.callableAgents.length > 0 || agent.maxSubagentDepth > 0) {
       return;
     }
@@ -503,6 +532,7 @@ export class AgentRouter {
         `agent ${session.agentId} does not exist`,
       );
     }
+    this.harnessForAgent(agent);
 
     // Quotas are checked BEFORE the busy-session queue path: we refuse
     // to even enqueue a run for a session that's already out of budget.
@@ -583,6 +613,7 @@ export class AgentRouter {
         `session ${args.sessionId} is busy; wait for the current run to complete before streaming`,
       );
     }
+    const harness = this.harnessForAgent(agent);
     this.assertQuota(session, agent);
 
     const running = this.sessions.beginRun(args.sessionId) ?? session;
@@ -608,7 +639,7 @@ export class AgentRouter {
         spawnOptions,
         agentId: agent.agentId,
         networking,
-        bypassWarmPool: this.shouldBypassWarmPool(running),
+        bypassWarmPool: this.shouldBypassWarmPool(running, agent),
       });
 
       if (agent.permissionPolicy.type === "always_ask") {
@@ -630,7 +661,7 @@ export class AgentRouter {
         if (args.model) patch.model = args.model;
         if (effectiveThinking) patch.thinkingLevel = effectiveThinking;
         try {
-          await this.harness.patchSession(controlClient, args.sessionId, patch);
+          await harness.patchSession(controlClient, args.sessionId, patch);
         } catch (patchErr) {
           log.warn(
             { session_id: args.sessionId, err: patchErr },
@@ -645,7 +676,7 @@ export class AgentRouter {
       const runEnd = sessionRunDurationSeconds.startTimer();
       let stream: HarnessStreamingTurn;
       try {
-        stream = await this.harness.invokeStreamingTurn({
+        stream = await harness.invokeStreamingTurn({
           baseUrl: container.baseUrl,
           token: container.token,
           content: args.content,
@@ -685,7 +716,7 @@ export class AgentRouter {
           const tokensIn = latest?.tokensIn ?? 0;
           const tokensOut = latest?.tokensOut ?? 0;
           const costUsd = await router.resolveRunCostUsd(
-            latest?.model ?? router.harness.modelForUsage(agent.model),
+            latest?.model ?? harness.modelForUsage(agent.model),
             tokensIn,
             tokensOut,
             latest?.costUsd,
@@ -755,6 +786,7 @@ export class AgentRouter {
         `session ${sessionId} is running; wait for it to finish before compacting`,
       );
     }
+    const harness = this.harnessForSession(session);
     const controlClient = this.pool.getWsClient(sessionId);
     if (!controlClient) {
       throw new RouterError(
@@ -763,7 +795,7 @@ export class AgentRouter {
       );
     }
     try {
-      await this.harness.compactSession(controlClient, sessionId);
+      await harness.compactSession(controlClient, sessionId);
     } catch (err) {
       throw wrapHarnessControlError(err, "compact_failed");
     }
@@ -1094,6 +1126,7 @@ export class AgentRouter {
         `session ${sessionId} is not currently running`,
       );
     }
+    const harness = this.harnessForSession(session);
     const controlClient = this.pool.getWsClient(sessionId);
     if (!controlClient) {
       // Session is running but no container yet — still in the acquire
@@ -1107,7 +1140,7 @@ export class AgentRouter {
       return this.sessions.endRunCancelled(sessionId) ?? session;
     }
     try {
-      await this.harness.abortSession(controlClient, sessionId);
+      await harness.abortSession(controlClient, sessionId);
     } catch (err) {
       throw wrapHarnessControlError(err, "cancel_failed");
     }
@@ -1127,6 +1160,7 @@ export class AgentRouter {
     approvalId: string,
     decision: "allow" | "deny",
   ): Promise<void> {
+    const harness = this.harnessForSessionId(sessionId);
     const controlClient = this.pool.getWsClient(sessionId);
     if (!controlClient) {
       throw new RouterError(
@@ -1135,7 +1169,7 @@ export class AgentRouter {
       );
     }
     try {
-      await this.harness.resolveApproval(controlClient, approvalId, decision);
+      await harness.resolveApproval(controlClient, approvalId, decision);
       this.removePendingApproval(sessionId, approvalId);
     } catch (err) {
       throw wrapHarnessControlError(err, "confirm_tool_failed");
@@ -1170,8 +1204,16 @@ export class AgentRouter {
    * container boot depends on session-specific inputs must bypass warm
    * reuse and cold-spawn its own container.
    */
-  private shouldBypassWarmPool(session: Session | undefined): boolean {
-    return this.harness.shouldBypassWarmPool(session);
+  private shouldBypassWarmPool(
+    session: Session | undefined,
+    agent?: AgentConfig,
+  ): boolean {
+    const harness = agent
+      ? this.harnessForAgent(agent)
+      : session
+        ? this.harnessForSession(session)
+        : this.harnessForId(this.cfg.harnesses.defaultId);
+    return harness.shouldBypassWarmPool(session);
   }
 
   private buildSpawnOptions(
@@ -1183,8 +1225,8 @@ export class AgentRouter {
       thinkingLevel?: string;
     },
   ): SpawnOptions {
-    this.assertAgentHarness(agent);
-    return this.harness.buildSpawnOptions({
+    const harness = this.harnessForAgent(agent);
+    return harness.buildSpawnOptions({
       sessionId,
       agent,
       session,
@@ -1204,6 +1246,7 @@ export class AgentRouter {
     const tick = (label: string, from: number) => ({ [label + "_ms"]: Date.now() - from });
     let cursor = t0;
     const currentSession = this.sessions.get(sessionId);
+    const harness = this.harnessForAgent(agent);
     await this.refreshExpiringOAuthCredentials(agent, currentSession?.vaultId ?? null);
     const timings: Record<string, number> = { ...tick("oauth_refresh", cursor) };
     cursor = Date.now();
@@ -1263,6 +1306,7 @@ export class AgentRouter {
     // the request body, so retrying would duplicate the user message.
     const runEnd = sessionRunDurationSeconds.startTimer();
     const completion = await this.invokeChatCompletions({
+      harness,
       baseUrl: container.baseUrl,
       token: container.token,
       content,
@@ -1280,13 +1324,14 @@ export class AgentRouter {
       beforeTurn,
       {
         ...completion,
-        model: this.harness.modelForUsage(agent.model),
+        model: harness.modelForUsage(agent.model),
       },
+      harness,
     );
     const tokensIn = latestAgent?.tokensIn ?? completion.tokensIn;
     const tokensOut = latestAgent?.tokensOut ?? completion.tokensOut;
     const costUsd = await this.resolveRunCostUsd(
-      latestAgent?.model ?? this.harness.modelForUsage(agent.model),
+      latestAgent?.model ?? harness.modelForUsage(agent.model),
       tokensIn,
       tokensOut,
       latestAgent?.costUsd,
@@ -1345,6 +1390,7 @@ export class AgentRouter {
     if (!session) return;
     const agent = this.agents.get(session.agentId);
     if (!agent) return;
+    const harness = this.harnessForAgent(agent);
 
     let finalized = false;
     let unsubscribe: (() => void) | undefined;
@@ -1362,7 +1408,7 @@ export class AgentRouter {
       if (agent.permissionPolicy.type === "always_ask") {
         await this.ensureApprovalSubscriptions(sessionId, controlClient);
       }
-      unsubscribe = this.harness.subscribeTurnState(controlClient, sessionId, (event) => {
+      unsubscribe = harness.subscribeTurnState(controlClient, sessionId, (event) => {
         // State "delta" is per-token progress — not a completion signal.
         // We only care about terminal states.
         if (event.state === "final") {
@@ -1413,7 +1459,7 @@ export class AgentRouter {
       const tokensIn = latest?.tokensIn ?? 0;
       const tokensOut = latest?.tokensOut ?? 0;
       const costUsd = await this.resolveRunCostUsd(
-        latest?.model ?? this.harness.modelForUsage(agent.model),
+        latest?.model ?? this.harnessForAgent(agent).modelForUsage(agent.model),
         tokensIn,
         tokensOut,
         latest?.costUsd,
@@ -1525,6 +1571,7 @@ export class AgentRouter {
     sessionId: string,
     before: TurnProgressSnapshot,
     completion?: CompletionResult,
+    harness?: HarnessAdapter,
   ): Promise<Event | undefined> {
     const deadline = Date.now() + turnAdvanceWaitMs();
     let lastErr: unknown;
@@ -1548,7 +1595,7 @@ export class AgentRouter {
     const afterUserTurns = this.events.countUserTurns(agentId, sessionId);
     const userTurnIsDurable =
       Number.isFinite(afterUserTurns) && afterUserTurns > before.userTurns;
-    if (completion && userTurnIsDurable && !this.harness.isFailureOutput(completion.output)) {
+    if (completion && userTurnIsDurable && !harness?.isFailureOutput(completion.output)) {
       log.warn(
         {
           session_id: sessionId,
@@ -1627,6 +1674,7 @@ export class AgentRouter {
   ): Promise<Container> {
     const MAX_INFRA_RETRIES = 2;
     let lastError: unknown;
+    const harness = this.harnessForAgent(agent);
 
     for (let attempt = 0; attempt < MAX_INFRA_RETRIES; attempt++) {
       try {
@@ -1635,7 +1683,7 @@ export class AgentRouter {
           spawnOptions,
           agentId: agent.agentId,
           networking: currentSession ? this.resolveNetworking(currentSession) : undefined,
-          bypassWarmPool: this.shouldBypassWarmPool(currentSession),
+          bypassWarmPool: this.shouldBypassWarmPool(currentSession, agent),
         });
 
         if (agent.permissionPolicy.type === "always_ask") {
@@ -1665,7 +1713,7 @@ export class AgentRouter {
           if (modelOverride) patch.model = modelOverride;
           if (effectiveThinking) patch.thinkingLevel = effectiveThinking;
           try {
-            await this.harness.patchSession(controlClient, sessionId, patch);
+            await harness.patchSession(controlClient, sessionId, patch);
           } catch (patchErr) {
             log.warn(
               { session_id: sessionId, err: patchErr },
@@ -1722,13 +1770,14 @@ export class AgentRouter {
   }
 
   private async invokeChatCompletions(args: {
+    harness: HarnessAdapter;
     baseUrl: string;
     token: string;
     content: string;
     sessionKey: string;
   }): Promise<CompletionResult> {
     try {
-      return await this.harness.invokeTurn({
+      return await args.harness.invokeTurn({
         baseUrl: args.baseUrl,
         token: args.token,
         content: args.content,

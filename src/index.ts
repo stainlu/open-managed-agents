@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { OpenClawJsonlEventLog } from "./harness/openclaw-events.js";
 import { OpenClawHarnessAdapter } from "./harness/openclaw.js";
+import { HarnessRegistry } from "./harness/registry.js";
 import { getLogger, rootLogger } from "./log.js";
 import {
   containerBootDurationSeconds,
@@ -407,7 +408,7 @@ async function main(): Promise<void> {
   const routerCfg: RouterConfig = {
     passthroughEnv,
     runTimeoutMs,
-    harness,
+    harnesses: new HarnessRegistry({ adapters: [harness] }),
   };
 
   const router = new AgentRouter(
