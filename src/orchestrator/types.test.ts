@@ -1,6 +1,19 @@
 import { describe, expect, it } from "vitest";
 
-import { CreateEnvironmentRequestSchema, NetworkingSchema } from "./types.js";
+import {
+  CreateAgentRequestSchema,
+  CreateEnvironmentRequestSchema,
+  NetworkingSchema,
+} from "./types.js";
+
+describe("CreateAgentRequestSchema", () => {
+  it("defaults harnessId to openclaw", () => {
+    const parsed = CreateAgentRequestSchema.parse({
+      model: "moonshot/kimi-k2.5",
+    });
+    expect(parsed.harnessId).toBe("openclaw");
+  });
+});
 
 describe("NetworkingSchema", () => {
   it("accepts the default unrestricted case", () => {

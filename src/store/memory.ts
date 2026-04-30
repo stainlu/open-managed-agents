@@ -1,4 +1,5 @@
 import { customAlphabet } from "nanoid";
+import { DEFAULT_HARNESS_ID } from "../harness/ids.js";
 import type {
   AgentConfig,
   CreateAgentRequest,
@@ -44,6 +45,7 @@ class InMemoryAgentStore implements AgentStore {
     const now = Date.now();
     const agent: AgentConfig = {
       agentId: `agt_${nanoid()}`,
+      harnessId: req.harnessId ?? DEFAULT_HARNESS_ID,
       model: req.model,
       tools: req.tools,
       instructions: req.instructions,
@@ -84,6 +86,7 @@ class InMemoryAgentStore implements AgentStore {
     const now = Date.now();
     const updated: AgentConfig = {
       ...current,
+      harnessId: req.harnessId ?? current.harnessId,
       model: req.model ?? current.model,
       tools: req.tools === null ? [] : (req.tools ?? current.tools),
       instructions: req.instructions === null ? "" : (req.instructions ?? current.instructions),
@@ -100,6 +103,7 @@ class InMemoryAgentStore implements AgentStore {
     };
     if (
       updated.model === current.model &&
+      updated.harnessId === current.harnessId &&
       JSON.stringify(updated.tools) === JSON.stringify(current.tools) &&
       updated.instructions === current.instructions &&
       JSON.stringify(updated.permissionPolicy) === JSON.stringify(current.permissionPolicy) &&

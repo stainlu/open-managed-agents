@@ -1,5 +1,6 @@
 export interface Agent {
   agent_id: string;
+  harness_id: HarnessId;
   model: string;
   tools: string[];
   instructions: string;
@@ -23,6 +24,8 @@ export type PermissionPolicy =
   | { type: "always_ask"; tools?: string[] };
 
 export type ThinkingLevel = "off" | "low" | "medium" | "high" | "xhigh";
+
+export type HarnessId = "openclaw";
 
 export interface Quota {
   maxCostUsdPerSession?: number;

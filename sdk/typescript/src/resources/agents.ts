@@ -2,6 +2,7 @@ import type { HttpClient } from "../http.js";
 import type {
   Agent,
   Channels,
+  HarnessId,
   McpServers,
   PermissionPolicy,
   Quota,
@@ -11,6 +12,7 @@ import type {
 } from "../types.js";
 
 export interface CreateAgentParams {
+  harnessId?: HarnessId;
   model: string;
   instructions?: string;
   tools?: string[];
@@ -26,6 +28,7 @@ export interface CreateAgentParams {
 
 export interface UpdateAgentParams {
   version: number;
+  harnessId?: HarnessId;
   model?: string;
   instructions?: string | null;
   tools?: string[] | null;
@@ -52,6 +55,7 @@ export class Agents {
       model: params.model,
       instructions: params.instructions ?? "",
     };
+    if (params.harnessId !== undefined) body["harnessId"] = params.harnessId;
     if (params.tools !== undefined) body["tools"] = params.tools;
     if (params.name !== undefined) body["name"] = params.name;
     if (params.permissionPolicy !== undefined) body["permissionPolicy"] = params.permissionPolicy;
@@ -75,6 +79,7 @@ export class Agents {
 
   update(agentId: string, params: UpdateAgentParams): Promise<Agent> {
     const body: Record<string, unknown> = { version: params.version };
+    if (params.harnessId !== undefined) body["harnessId"] = params.harnessId;
     if (params.model !== undefined) body["model"] = params.model;
     if (params.instructions !== undefined) body["instructions"] = params.instructions;
     if (params.tools !== undefined) body["tools"] = params.tools;

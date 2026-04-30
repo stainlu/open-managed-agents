@@ -1,4 +1,9 @@
 import { z } from "zod";
+import {
+  DEFAULT_HARNESS_ID,
+  HARNESS_IDS,
+  type HarnessId,
+} from "../harness/ids.js";
 
 // ---------- Agent (reusable template) ----------
 
@@ -85,7 +90,10 @@ export type Channels = z.infer<typeof ChannelsSchema>;
 export const ThinkingLevelSchema = z.enum(["off", "low", "medium", "high", "xhigh"]);
 export type ThinkingLevel = z.infer<typeof ThinkingLevelSchema>;
 
+export const HarnessIdSchema = z.enum(HARNESS_IDS);
+
 export const CreateAgentRequestSchema = z.object({
+  harnessId: HarnessIdSchema.default(DEFAULT_HARNESS_ID),
   model: z.string().min(1, "model is required"),
   tools: z.array(z.string()).default([]),
   instructions: z.string().default(""),
@@ -143,6 +151,7 @@ export type CreateAgentRequest = z.infer<typeof CreateAgentRequestSchema>;
 
 export const UpdateAgentRequestSchema = z.object({
   version: z.number().int().min(1, "version is required for optimistic concurrency"),
+  harnessId: HarnessIdSchema.optional(),
   model: z.string().min(1).optional(),
   tools: z.array(z.string()).nullable().optional(),
   instructions: z.string().nullable().optional(),
@@ -163,6 +172,7 @@ export type UpdateAgentRequest = z.infer<typeof UpdateAgentRequestSchema>;
 
 export type AgentConfig = {
   agentId: string;
+  harnessId: HarnessId;
   model: string;
   tools: string[];
   instructions: string;

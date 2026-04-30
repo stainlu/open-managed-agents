@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { customAlphabet } from "nanoid";
 import { VaultCrypto } from "../crypto/vault-crypto.js";
+import { DEFAULT_HARNESS_ID, type HarnessId } from "../harness/ids.js";
 import type {
   AgentConfig,
   CreateAgentRequest,
@@ -46,6 +47,7 @@ const SESSION_STATUS_VALUES_SQL = `'idle', 'starting', 'running', 'failed'`;
 
 type AgentRow = {
   agent_id: string;
+  harness_id: string | null;
   model: string;
   tools_json: string;
   instructions: string;
@@ -101,6 +103,7 @@ function hasAnyChannelEnabled(channels: AgentConfig["channels"]): boolean {
 function rowToAgent(r: AgentRow): AgentConfig {
   return {
     agentId: r.agent_id,
+    harnessId: (r.harness_id as HarnessId | null) ?? DEFAULT_HARNESS_ID,
     model: r.model,
     tools: JSON.parse(r.tools_json) as string[],
     instructions: r.instructions,
@@ -223,6 +226,7 @@ CREATE TABLE ${tableName} (
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS agents (
   agent_id TEXT PRIMARY KEY,
+  harness_id TEXT NOT NULL DEFAULT 'openclaw',
   model TEXT NOT NULL,
   tools_json TEXT NOT NULL,
   instructions TEXT NOT NULL,
@@ -242,6 +246,7 @@ CREATE TABLE IF NOT EXISTS agents (
 CREATE TABLE IF NOT EXISTS agent_versions (
   agent_id TEXT NOT NULL,
   version INTEGER NOT NULL,
+  harness_id TEXT NOT NULL DEFAULT 'openclaw',
   model TEXT NOT NULL,
   tools_json TEXT NOT NULL,
   instructions TEXT NOT NULL,
@@ -434,12 +439,12 @@ class SqliteAgentStore implements AgentStore {
   constructor(private readonly db: Database.Database) {
     this.insertStmt = db.prepare(
       `INSERT INTO agents (
-        agent_id, model, tools_json, instructions, permission_policy_json,
+        agent_id, harness_id, model, tools_json, instructions, permission_policy_json,
         name, created_at, updated_at, archived_at, version,
         callable_agents_json, max_subagent_depth, mcp_servers_json, quota_json,
         thinking_level, channels_json
        ) VALUES (
-        @agent_id, @model, @tools_json, @instructions, @permission_policy_json,
+        @agent_id, @harness_id, @model, @tools_json, @instructions, @permission_policy_json,
         @name, @created_at, @updated_at, NULL, 1,
         @callable_agents_json, @max_subagent_depth, @mcp_servers_json, @quota_json,
         @thinking_level, @channels_json
@@ -447,12 +452,12 @@ class SqliteAgentStore implements AgentStore {
     );
     this.insertVersionStmt = db.prepare(
       `INSERT INTO agent_versions (
-        agent_id, version, model, tools_json, instructions,
+        agent_id, version, harness_id, model, tools_json, instructions,
         permission_policy_json, name,
         callable_agents_json, max_subagent_depth, mcp_servers_json, quota_json,
         thinking_level, channels_json, created_at
        ) VALUES (
-        @agent_id, @version, @model, @tools_json, @instructions,
+        @agent_id, @version, @harness_id, @model, @tools_json, @instructions,
         @permission_policy_json, @name,
         @callable_agents_json, @max_subagent_depth, @mcp_servers_json, @quota_json,
         @thinking_level, @channels_json, @created_at
@@ -464,6 +469,7 @@ class SqliteAgentStore implements AgentStore {
     this.deleteVersionsStmt = db.prepare(`DELETE FROM agent_versions WHERE agent_id = ?`);
     this.updateStmt = db.prepare(
       `UPDATE agents SET
+        harness_id = @harness_id,
         model = @model, tools_json = @tools_json, instructions = @instructions,
         permission_policy_json = @permission_policy_json,
         name = @name, callable_agents_json = @callable_agents_json,
@@ -477,6 +483,7 @@ class SqliteAgentStore implements AgentStore {
     );
     this.listVersionsStmt = db.prepare(
       `SELECT agent_id, version, model, tools_json, instructions,
+              harness_id,
               permission_policy_json, name,
               callable_agents_json, max_subagent_depth, mcp_servers_json,
               quota_json, thinking_level, channels_json,
@@ -492,6 +499,7 @@ class SqliteAgentStore implements AgentStore {
   private agentToRow(agent: AgentConfig) {
     return {
       agent_id: agent.agentId,
+      harness_id: agent.harnessId,
       model: agent.model,
       tools_json: JSON.stringify(agent.tools),
       instructions: agent.instructions,
@@ -519,6 +527,7 @@ class SqliteAgentStore implements AgentStore {
     const now = Date.now();
     const agent: AgentConfig = {
       agentId: `agt_${nanoid()}`,
+      harnessId: req.harnessId ?? DEFAULT_HARNESS_ID,
       model: req.model,
       tools: req.tools,
       instructions: req.instructions,
@@ -563,6 +572,7 @@ class SqliteAgentStore implements AgentStore {
     const now = Date.now();
     const updated: AgentConfig = {
       ...current,
+      harnessId: req.harnessId ?? current.harnessId,
       model: req.model ?? current.model,
       tools: req.tools === null ? [] : (req.tools ?? current.tools),
       instructions: req.instructions === null ? "" : (req.instructions ?? current.instructions),
@@ -579,6 +589,7 @@ class SqliteAgentStore implements AgentStore {
     };
     if (
       updated.model === current.model &&
+      updated.harnessId === current.harnessId &&
       JSON.stringify(updated.tools) === JSON.stringify(current.tools) &&
       updated.instructions === current.instructions &&
       JSON.stringify(updated.permissionPolicy) === JSON.stringify(current.permissionPolicy) &&
@@ -1803,6 +1814,11 @@ export class SqliteStore implements Store {
     const agentsCols = this.db.pragma("table_info(agents)") as Array<{
       name: string;
     }>;
+    if (!agentsCols.some((c) => c.name === "harness_id")) {
+      this.db.exec(
+        "ALTER TABLE agents ADD COLUMN harness_id TEXT NOT NULL DEFAULT 'openclaw'",
+      );
+    }
     if (!agentsCols.some((c) => c.name === "callable_agents_json")) {
       // Item 12-14: allowlist of agent IDs this template may invoke via
       // call_agent. NULL means no delegation (same as an empty array).
@@ -1850,6 +1866,11 @@ export class SqliteStore implements Store {
       this.db.exec("ALTER TABLE agents ADD COLUMN user_id TEXT");
     }
     const versionsCols = this.db.pragma("table_info(agent_versions)") as Array<{ name: string }>;
+    if (versionsCols.length > 0 && !versionsCols.some((c) => c.name === "harness_id")) {
+      this.db.exec(
+        "ALTER TABLE agent_versions ADD COLUMN harness_id TEXT NOT NULL DEFAULT 'openclaw'",
+      );
+    }
     if (versionsCols.length > 0 && !versionsCols.some((c) => c.name === "permission_policy_json")) {
       this.db.exec("ALTER TABLE agent_versions ADD COLUMN permission_policy_json TEXT");
     }

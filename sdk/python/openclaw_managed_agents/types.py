@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 @dataclass
 class Agent:
     agent_id: str
+    harness_id: str
     model: str
     tools: List[str]
     instructions: str

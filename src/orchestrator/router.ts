@@ -166,6 +166,15 @@ export class AgentRouter {
     return this.pendingApprovals.get(sessionId) ?? [];
   }
 
+  private assertAgentHarness(agent: AgentConfig): void {
+    const harnessId = agent.harnessId ?? this.harness.id;
+    if (harnessId === this.harness.id) return;
+    throw new RouterError(
+      "unsupported_harness",
+      `agent ${agent.agentId} uses harness ${harnessId}, but this router is configured for ${this.harness.id}`,
+    );
+  }
+
   private replacePendingApprovals(sessionId: string, approvals: PendingApproval[]): void {
     if (approvals.length === 0) {
       this.pendingApprovals.delete(sessionId);
@@ -341,6 +350,7 @@ export class AgentRouter {
     if (agent.archivedAt) {
       throw new RouterError("agent_archived", `agent ${agentId} is archived`);
     }
+    this.assertAgentHarness(agent);
     if (opts?.vaultId && !this.vaults.getVault(opts.vaultId)) {
       throw new RouterError(
         "vault_not_found",
@@ -412,6 +422,7 @@ export class AgentRouter {
   async warmForAgent(agentId: string): Promise<void> {
     const agent = this.agents.get(agentId);
     if (!agent) return;
+    this.assertAgentHarness(agent);
     if (agent.callableAgents.length > 0 || agent.maxSubagentDepth > 0) {
       return;
     }
@@ -1172,6 +1183,7 @@ export class AgentRouter {
       thinkingLevel?: string;
     },
   ): SpawnOptions {
+    this.assertAgentHarness(agent);
     return this.harness.buildSpawnOptions({
       sessionId,
       agent,
@@ -1745,6 +1757,7 @@ function turnAdvanceWaitMs(): number {
 export type RouterErrorCode =
   | "agent_not_found"
   | "agent_archived"
+  | "unsupported_harness"
   | "session_not_found"
   | "session_busy"
   | "session_not_running"

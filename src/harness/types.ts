@@ -1,7 +1,8 @@
 import type { SpawnOptions } from "../runtime/container.js";
 import type { AgentConfig, Session } from "../orchestrator/types.js";
+import type { HarnessId } from "./ids.js";
 
-export type HarnessId = "openclaw";
+export type { HarnessId } from "./ids.js";
 
 export type HarnessSessionContext = Pick<
   Session,

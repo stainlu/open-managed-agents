@@ -173,6 +173,7 @@ export type ServerDeps = {
 function agentResponse(agent: AgentConfig) {
   return {
     agent_id: agent.agentId,
+    harness_id: agent.harnessId,
     model: agent.model,
     tools: agent.tools,
     instructions: agent.instructions,
@@ -503,7 +504,7 @@ function routerErrorReply(err: unknown): JsonReply {
     if (err.code === "capacity_exceeded") {
       return { status: 503, body: { error: err.code, message: err.message } };
     }
-    if (err.code === "invalid_path") {
+    if (err.code === "invalid_path" || err.code === "unsupported_harness") {
       return { status: 400, body: { error: err.code, message: err.message } };
     }
     if (err.code === "quota_exceeded") {

@@ -12,6 +12,7 @@ from ..types import Agent
 def _parse_agent(data: Dict[str, Any]) -> Agent:
     return Agent(
         agent_id=data["agent_id"],
+        harness_id=data.get("harness_id", "openclaw"),
         model=data["model"],
         tools=data.get("tools", []),
         instructions=data.get("instructions", ""),
@@ -38,6 +39,7 @@ class Agents:
         self,
         *,
         model: str,
+        harness_id: Optional[str] = None,
         instructions: str = "",
         tools: Optional[List[str]] = None,
         name: Optional[str] = None,
@@ -50,6 +52,8 @@ class Agents:
         channels: Optional[Dict[str, Any]] = None,
     ) -> Agent:
         body: Dict[str, Any] = {"model": model, "instructions": instructions}
+        if harness_id is not None:
+            body["harnessId"] = harness_id
         if tools is not None:
             body["tools"] = tools
         if name is not None:
@@ -87,6 +91,7 @@ class Agents:
         agent_id: str,
         *,
         version: int,
+        harness_id: Optional[str] = None,
         model: Optional[str] = None,
         instructions: Optional[str] = None,
         tools: Optional[List[str]] = None,
@@ -100,6 +105,8 @@ class Agents:
         channels: Optional[Dict[str, Any]] = None,
     ) -> Agent:
         body: Dict[str, Any] = {"version": version}
+        if harness_id is not None:
+            body["harnessId"] = harness_id
         if model is not None:
             body["model"] = model
         if instructions is not None:
