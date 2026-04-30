@@ -391,27 +391,23 @@ async function main(): Promise<void> {
   }
   const tokenMinter = new ParentTokenMinter(parentSecret);
 
-  const routerCfg: RouterConfig = {
+  const harness = new OpenClawHarnessAdapter({
     runtimeImage,
     hostStateRoot,
+    stateRoot,
     network,
     gatewayPort,
     passthroughEnv,
-    runTimeoutMs,
     orchestratorUrl,
     tokenMinter,
-    harness: new OpenClawHarnessAdapter({
-      runtimeImage,
-      hostStateRoot,
-      stateRoot,
-      network,
-      gatewayPort,
-      passthroughEnv,
-      orchestratorUrl,
-      tokenMinter,
-      environments: store.environments,
-      vaults: store.vaults,
-    }),
+    environments: store.environments,
+    vaults: store.vaults,
+  });
+
+  const routerCfg: RouterConfig = {
+    passthroughEnv,
+    runTimeoutMs,
+    harness,
   };
 
   const router = new AgentRouter(

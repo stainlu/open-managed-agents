@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ManagedEventLog } from "../events/types.js";
-import { normalizeModelForRuntime } from "../harness/openclaw.js";
+import {
+  OpenClawHarnessAdapter,
+  normalizeModelForRuntime,
+} from "../harness/openclaw.js";
 import { OpenClawJsonlEventLog } from "../harness/openclaw-events.js";
 import type { GatewayWebSocketClient } from "../runtime/gateway-ws.js";
 import { ParentTokenMinter } from "../runtime/parent-token.js";
@@ -40,14 +43,20 @@ function makeRouter(opts: {
   const eventReader = (opts.eventReaderStub ??
     new OpenClawJsonlEventLog("/tmp/does-not-exist")) as ManagedEventLog;
   const cfg: RouterConfig = {
-    runtimeImage: "test-image",
-    hostStateRoot: "/tmp/test-state",
-    network: "test-net",
-    gatewayPort: 18789,
     passthroughEnv: opts.passthroughEnv ?? {},
     runTimeoutMs: 60_000,
-    orchestratorUrl: "http://orchestrator-test:8080",
-    tokenMinter: new ParentTokenMinter(),
+    harness: new OpenClawHarnessAdapter({
+      runtimeImage: "test-image",
+      hostStateRoot: "/tmp/test-state",
+      stateRoot: eventReader.stateRoot,
+      network: "test-net",
+      gatewayPort: 18789,
+      passthroughEnv: opts.passthroughEnv ?? {},
+      orchestratorUrl: "http://orchestrator-test:8080",
+      tokenMinter: new ParentTokenMinter(),
+      environments: store.environments,
+      vaults: store.vaults,
+    }),
   };
   const router = new AgentRouter(
     store.agents,

@@ -1,5 +1,4 @@
 import { join } from "node:path";
-import { OpenClawHarnessAdapter } from "../harness/openclaw.js";
 import {
   HarnessControlError,
   HarnessInvocationError,
@@ -20,7 +19,6 @@ import type {
   NetworkingSpec,
   SpawnOptions,
 } from "../runtime/container.js";
-import type { ParentTokenMinter } from "../runtime/parent-token.js";
 import { PoolCapacityError, type SessionContainerPool } from "../runtime/pool.js";
 import type {
   AgentStore,
@@ -41,37 +39,12 @@ function isSessionInflight(session: Session | undefined): boolean {
 }
 
 export type RouterConfig = {
-  /** Image reference for the OpenClaw agent container. */
-  runtimeImage: string;
-  /** Host path mounted into each agent container as /workspace for session state. */
-  hostStateRoot: string;
-  /** Docker network the spawned containers join. */
-  network: string;
-  /** Gateway port inside the container (must match Dockerfile.runtime). */
-  gatewayPort: number;
-  /** Environment variables passed through to every spawned container (AWS creds, region, etc.). */
+  /** Provider env used by the cost fallback until pricing moves fully behind adapters. */
   passthroughEnv: Record<string, string>;
   /** Max time to wait for the agent task to complete end-to-end (ms). */
   runTimeoutMs: number;
-  /**
-   * Item 12-14: URL that the in-container `call_agent` CLI tool uses to
-   * reach back to the orchestrator's HTTP API. Usually the orchestrator's
-   * Docker service name + port (e.g. `http://open-managed-agents-orchestrator:8080`).
-   * Injected into every spawned container as OPENCLAW_ORCHESTRATOR_URL.
-   */
-  orchestratorUrl: string;
-  /**
-   * Item 12-14: token minter for per-container parent tokens. The router
-   * mints a token scoped to each session's agent template + remaining
-   * depth at container spawn time, injected as OPENCLAW_ORCHESTRATOR_TOKEN.
-   */
-  tokenMinter: ParentTokenMinter;
-  /**
-   * Harness adapter. Optional during the first extraction so existing
-   * tests/helpers that construct RouterConfig keep working; production
-   * wires it explicitly from index.ts.
-   */
-  harness?: HarnessAdapter;
+  /** Harness adapter selected by the composition root. */
+  harness: HarnessAdapter;
 };
 
 export type RunEventArgs = {
@@ -185,20 +158,7 @@ export class AgentRouter {
     private readonly vaults: VaultStore,
     private readonly cfg: RouterConfig,
   ) {
-    this.harness =
-      cfg.harness ??
-      new OpenClawHarnessAdapter({
-        runtimeImage: cfg.runtimeImage,
-        hostStateRoot: cfg.hostStateRoot,
-        stateRoot: events.stateRoot,
-        network: cfg.network,
-        gatewayPort: cfg.gatewayPort,
-        passthroughEnv: cfg.passthroughEnv,
-        orchestratorUrl: cfg.orchestratorUrl,
-        tokenMinter: cfg.tokenMinter,
-        environments,
-        vaults,
-      });
+    this.harness = cfg.harness;
   }
 
   /** Return any pending approval requests for a session (non-destructive). */
