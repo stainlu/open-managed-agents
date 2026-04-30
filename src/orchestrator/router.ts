@@ -794,6 +794,12 @@ export class AgentRouter {
       );
     }
     const harness = this.harnessForSession(session);
+    if (harness.capabilities.compaction.support === "unsupported") {
+      throw new RouterError(
+        "unsupported_capability",
+        `harness ${harness.id} does not support compaction: ${harness.capabilities.compaction.detail}`,
+      );
+    }
     const controlClient = this.pool.getWsClient(sessionId);
     if (!controlClient) {
       throw new RouterError(
@@ -1850,6 +1856,7 @@ export type RouterErrorCode =
   | "agent_not_found"
   | "agent_archived"
   | "unsupported_harness"
+  | "unsupported_capability"
   | "session_not_found"
   | "session_busy"
   | "session_not_running"

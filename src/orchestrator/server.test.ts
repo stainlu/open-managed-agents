@@ -9,20 +9,30 @@ import { buildApp, type ServerDeps } from "./server.js";
 import { clearZenMuxCatalogCache } from "./zenmux-pricing.js";
 import type { Event, Session } from "./types.js";
 
-const TEST_HARNESS_CAPABILITIES = {
+const TEST_OPENCLAW_CAPABILITIES = {
   start_turn: { support: "supported", detail: "test" },
   streaming: { support: "supported", detail: "test" },
   native_session_resume: { support: "supported", detail: "test" },
   cancellation: { support: "supported", detail: "test" },
-  interruption: { support: "unsupported", detail: "test" },
+  interruption: { support: "partial", detail: "test" },
   dynamic_model_patch: { support: "supported", detail: "test" },
-  compaction: { support: "unsupported", detail: "test" },
-  tool_approvals: { support: "partial", detail: "test" },
-  permission_deny: { support: "partial", detail: "test" },
-  mcp: { support: "unsupported", detail: "test" },
+  compaction: { support: "supported", detail: "test" },
+  tool_approvals: { support: "supported", detail: "test" },
+  permission_deny: { support: "supported", detail: "test" },
+  mcp: { support: "supported", detail: "test" },
   managed_event_log: { support: "supported", detail: "test" },
   usage: { support: "supported", detail: "test" },
-  subagents: { support: "unsupported", detail: "test" },
+  subagents: { support: "supported", detail: "test" },
+} satisfies HarnessCapabilities;
+
+const TEST_HERMES_CAPABILITIES = {
+  ...TEST_OPENCLAW_CAPABILITIES,
+  compaction: { support: "unsupported", detail: "test hermes compaction" },
+  tool_approvals: { support: "partial", detail: "test hermes approvals" },
+  permission_deny: { support: "partial", detail: "test hermes deny" },
+  mcp: { support: "unsupported", detail: "test hermes mcp" },
+  managed_event_log: { support: "partial", detail: "test hermes events" },
+  subagents: { support: "unsupported", detail: "test hermes subagents" },
 } satisfies HarnessCapabilities;
 
 function makeApp(opts: {
@@ -218,12 +228,12 @@ function makeApp(opts: {
         {
           id: "openclaw",
           displayName: "OpenClaw",
-          capabilities: TEST_HARNESS_CAPABILITIES,
+          capabilities: TEST_OPENCLAW_CAPABILITIES,
         } as HarnessAdapter,
         {
           id: "hermes",
           displayName: "Hermes",
-          capabilities: TEST_HARNESS_CAPABILITIES,
+          capabilities: TEST_HERMES_CAPABILITIES,
         } as HarnessAdapter,
       ],
     }),
@@ -280,9 +290,10 @@ describe("harness catalog API", () => {
       "openclaw",
       "hermes",
     ]);
-    expect(body.harnesses?.[0]?.capabilities.tool_approvals).toEqual({
-      support: "partial",
-      detail: "test",
+    const hermes = body.harnesses?.find((h) => h.harness_id === "hermes");
+    expect(hermes?.capabilities.mcp).toEqual({
+      support: "unsupported",
+      detail: "test hermes mcp",
     });
   });
 });
@@ -523,6 +534,56 @@ describe("model catalog API", () => {
       globalThis.fetch = originalFetch;
       clearZenMuxCatalogCache();
     }
+  });
+});
+
+describe("agent harness capability validation", () => {
+  it("rejects Hermes agent configs for unsupported managed features", async () => {
+    const { app, store } = makeApp();
+
+    const mcpRes = await req(app, "/v1/agents", {
+      method: "POST",
+      token: "admin-secret",
+      body: {
+        harnessId: "hermes",
+        model: "deepseek/deepseek-v4-pro",
+        tools: [],
+        instructions: "",
+        permissionPolicy: { type: "always_allow" },
+        mcpServers: {
+          github: { command: "npx", args: ["-y", "@modelcontextprotocol/server-github"] },
+        },
+      },
+    });
+
+    expect(mcpRes.status).toBe(400);
+    expect(mcpRes.body).toMatchObject({
+      error: "unsupported_harness_capability",
+      harness_id: "hermes",
+      capability: "mcp",
+    });
+
+    const subagentRes = await req(app, "/v1/agents", {
+      method: "POST",
+      token: "admin-secret",
+      body: {
+        harnessId: "hermes",
+        model: "deepseek/deepseek-v4-pro",
+        tools: [],
+        instructions: "",
+        permissionPolicy: { type: "always_allow" },
+        callableAgents: ["agt_child"],
+        maxSubagentDepth: 1,
+      },
+    });
+
+    expect(subagentRes.status).toBe(400);
+    expect(subagentRes.body).toMatchObject({
+      error: "unsupported_harness_capability",
+      harness_id: "hermes",
+      capability: "subagents",
+    });
+    expect(store.agents.list()).toHaveLength(0);
   });
 });
 

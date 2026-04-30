@@ -253,6 +253,75 @@ function harnessResponse(harness: HarnessAdapter) {
   };
 }
 
+type AgentHarnessCapabilityInput = Pick<
+  AgentConfig,
+  "harnessId" | "permissionPolicy" | "callableAgents" | "maxSubagentDepth" | "mcpServers"
+>;
+
+function unsupportedHarnessCapabilityBody(
+  harness: HarnessAdapter,
+  capability: string,
+  detail: string,
+) {
+  return {
+    error: "unsupported_harness_capability",
+    message: `harness ${harness.id} does not support ${capability}: ${detail}`,
+    harness_id: harness.id,
+    capability,
+  };
+}
+
+function validateAgentHarnessCapabilities(
+  harnesses: HarnessRegistry,
+  agent: AgentHarnessCapabilityInput,
+): Record<string, unknown> | undefined {
+  const harness = harnesses.get(agent.harnessId);
+  if (!harness) {
+    return {
+      error: "unsupported_harness",
+      message: `unsupported harness ${agent.harnessId}`,
+      harness_id: agent.harnessId,
+    };
+  }
+  const caps = harness.capabilities;
+  const callableAgents = agent.callableAgents ?? [];
+  const maxSubagentDepth = agent.maxSubagentDepth ?? 0;
+  const mcpServers = agent.mcpServers ?? {};
+  if (
+    (callableAgents.length > 0 || maxSubagentDepth > 0) &&
+    caps.subagents.support === "unsupported"
+  ) {
+    return unsupportedHarnessCapabilityBody(harness, "subagents", caps.subagents.detail);
+  }
+  if (
+    Object.keys(mcpServers).length > 0 &&
+    caps.mcp.support === "unsupported"
+  ) {
+    return unsupportedHarnessCapabilityBody(harness, "mcp", caps.mcp.detail);
+  }
+  if (
+    agent.permissionPolicy.type === "deny" &&
+    caps.permission_deny.support === "unsupported"
+  ) {
+    return unsupportedHarnessCapabilityBody(
+      harness,
+      "permission_deny",
+      caps.permission_deny.detail,
+    );
+  }
+  if (
+    agent.permissionPolicy.type === "always_ask" &&
+    caps.tool_approvals.support === "unsupported"
+  ) {
+    return unsupportedHarnessCapabilityBody(
+      harness,
+      "tool_approvals",
+      caps.tool_approvals.detail,
+    );
+  }
+  return undefined;
+}
+
 type ModelCatalogItem = {
   id: string;
   provider: string;
@@ -516,7 +585,11 @@ function routerErrorReply(err: unknown): JsonReply {
     if (err.code === "capacity_exceeded") {
       return { status: 503, body: { error: err.code, message: err.message } };
     }
-    if (err.code === "invalid_path" || err.code === "unsupported_harness") {
+    if (
+      err.code === "invalid_path" ||
+      err.code === "unsupported_harness" ||
+      err.code === "unsupported_capability"
+    ) {
       return { status: 400, body: { error: err.code, message: err.message } };
     }
     if (err.code === "quota_exceeded") {
@@ -808,6 +881,22 @@ export function buildApp(deps: ServerDeps): Hono {
       });
       return c.json({ error: "invalid_request", details: parsed.error.format() }, 400);
     }
+    const capabilityError = validateAgentHarnessCapabilities(
+      deps.harnesses,
+      parsed.data,
+    );
+    if (capabilityError) {
+      writeAudit(deps.audit, c, {
+        action: "agent.create",
+        target: null,
+        outcome: String(capabilityError.error ?? "unsupported_harness_capability"),
+        metadata: {
+          harness_id: parsed.data.harnessId,
+          capability: capabilityError.capability,
+        },
+      });
+      return c.json(capabilityError, 400);
+    }
     const modelValidation = await validateAndCanonicalizeModel(
       parsed.data.model,
       deps.passthroughEnv,
@@ -926,6 +1015,31 @@ export function buildApp(deps: ServerDeps): Hono {
         return c.json(modelValidation.body, modelValidation.status);
       }
       patch.model = modelValidation.model;
+    }
+    const candidate: AgentHarnessCapabilityInput = {
+      harnessId: patch.harnessId ?? agent.harnessId,
+      permissionPolicy: patch.permissionPolicy ?? agent.permissionPolicy,
+      callableAgents: patch.callableAgents === null
+        ? []
+        : (patch.callableAgents ?? agent.callableAgents),
+      maxSubagentDepth: patch.maxSubagentDepth ?? agent.maxSubagentDepth,
+      mcpServers: patch.mcpServers === null ? {} : (patch.mcpServers ?? agent.mcpServers),
+    };
+    const capabilityError = validateAgentHarnessCapabilities(
+      deps.harnesses,
+      candidate,
+    );
+    if (capabilityError) {
+      writeAudit(deps.audit, c, {
+        action: "agent.update",
+        target: agentId,
+        outcome: String(capabilityError.error ?? "unsupported_harness_capability"),
+        metadata: {
+          harness_id: candidate.harnessId,
+          capability: capabilityError.capability,
+        },
+      });
+      return c.json(capabilityError, 400);
     }
     const updated = deps.agents.update(agentId, patch);
     if (!updated) {
