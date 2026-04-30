@@ -22,14 +22,28 @@ from typing import Optional
 
 from .resources.agents import Agents
 from .resources.environments import Environments
+from .resources.harnesses import Harnesses
 from .resources.sessions import Sessions
 from .resources.vaults import Vaults
-from .types import Agent, Environment, Event, Session, Vault, VaultCredential
+from .types import (
+    Agent,
+    Environment,
+    Event,
+    Harness,
+    HarnessCapability,
+    HarnessCatalog,
+    Session,
+    Vault,
+    VaultCredential,
+)
 
 __all__ = [
     "OpenClawClient",
     "Agent",
     "Environment",
+    "Harness",
+    "HarnessCapability",
+    "HarnessCatalog",
     "Session",
     "Event",
     "Vault",
@@ -72,6 +86,7 @@ class OpenClawClient:
         )
         self.agents = Agents(self._client)
         self.environments = Environments(self._client)
+        self.harnesses = Harnesses(self._client)
         self.sessions = Sessions(self._client)
         self.vaults = Vaults(self._client)
 

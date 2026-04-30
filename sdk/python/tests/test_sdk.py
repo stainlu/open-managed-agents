@@ -25,6 +25,7 @@ def _client(handler: Callable[[httpx.Request], httpx.Response]) -> OpenClawClien
 def _agent(**overrides: Any) -> Dict[str, Any]:
     data: Dict[str, Any] = {
         "agent_id": "agt_123",
+        "harness_id": "openclaw",
         "model": "openai/gpt-5.5",
         "tools": ["exec"],
         "instructions": "Be useful.",
@@ -49,6 +50,7 @@ def _session(**overrides: Any) -> Dict[str, Any]:
     data: Dict[str, Any] = {
         "session_id": "ses_123",
         "agent_id": "agt_123",
+        "harness_id": "openclaw",
         "status": "idle",
         "tokens": {"input": 11, "output": 7},
         "cost_usd": 0.001,
@@ -99,6 +101,56 @@ def test_client_sends_bearer_token() -> None:
         assert client.agents.list() == []
 
     assert seen["authorization"] == "Bearer secret"
+
+
+def test_harnesses_resource_exposes_capabilities() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/v1/harnesses"
+        return httpx.Response(
+            200,
+            json={
+                "default_harness_id": "openclaw",
+                "count": 2,
+                "harnesses": [
+                    {
+                        "harness_id": "openclaw",
+                        "name": "OpenClaw",
+                        "capabilities": {
+                            "start_turn": {
+                                "support": "supported",
+                                "detail": "native OpenAI-compatible turn API",
+                            },
+                            "subagents": {
+                                "support": "supported",
+                                "detail": "openclaw-call-agent",
+                            },
+                        },
+                    },
+                    {
+                        "harness_id": "hermes",
+                        "name": "Hermes",
+                        "capabilities": {
+                            "start_turn": {
+                                "support": "supported",
+                                "detail": "adapter server turn API",
+                            },
+                            "mcp": {
+                                "support": "unsupported",
+                                "detail": "not wired",
+                            },
+                        },
+                    },
+                ],
+            },
+        )
+
+    with _client(handler) as client:
+        catalog = client.harnesses.catalog()
+        assert catalog.default_harness_id == "openclaw"
+        assert catalog.count == 2
+        assert catalog.harnesses[1].harness_id == "hermes"
+        assert catalog.harnesses[1].capabilities["mcp"].support == "unsupported"
 
 
 def test_agents_resource_round_trips_payloads() -> None:

@@ -7,6 +7,26 @@ from typing import Any, Dict, List, Optional
 
 
 @dataclass
+class HarnessCapability:
+    support: str
+    detail: str
+
+
+@dataclass
+class Harness:
+    harness_id: str
+    name: str
+    capabilities: Dict[str, HarnessCapability]
+
+
+@dataclass
+class HarnessCatalog:
+    default_harness_id: str
+    harnesses: List[Harness]
+    count: int
+
+
+@dataclass
 class Agent:
     agent_id: str
     harness_id: str

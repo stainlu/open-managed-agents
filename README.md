@@ -42,6 +42,7 @@ Working today:
 - OpenAI-compatible `/v1/chat/completions` shim.
 - Tool permission policies and approvals for the OpenClaw adapter.
 - Generic `HarnessAdapter` interface.
+- Public `/v1/harnesses` capability catalog.
 - Managed JSONL event log abstraction.
 - Experimental Hermes adapter runtime via direct `AIAgent` integration.
 - Limited networking sidecar.

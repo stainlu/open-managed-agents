@@ -5,7 +5,7 @@ info:
   license:
     name: MIT
     identifier: MIT
-  description: API-first managed agent runtime built on OpenClaw.
+  description: API-first managed-agent layer for OpenClaw, Hermes, and future agent harnesses.
 servers:
   - url: http://localhost:8080
 security:
@@ -24,6 +24,26 @@ paths:
       responses:
         "200":
           description: Model catalog
+  /v1/harnesses:
+    get:
+      summary: List registered harness adapters and capability support
+      responses:
+        "200":
+          description: Harness catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [default_harness_id, harnesses, count]
+                properties:
+                  default_harness_id:
+                    $ref: "#/components/schemas/HarnessId"
+                  harnesses:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Harness"
+                  count:
+                    type: integer
   /v1/agents:
     post:
       summary: Create agent
@@ -378,10 +398,12 @@ components:
   schemas:
     Agent:
       type: object
-      required: [agent_id, model, tools, instructions, permission_policy, version, created_at, updated_at]
+      required: [agent_id, harness_id, model, tools, instructions, permission_policy, version, created_at, updated_at]
       properties:
         agent_id:
           type: string
+        harness_id:
+          $ref: "#/components/schemas/HarnessId"
         model:
           type: string
         tools:
@@ -424,6 +446,8 @@ components:
       type: object
       required: [model]
       properties:
+        harnessId:
+          $ref: "#/components/schemas/HarnessId"
         model:
           type: string
         instructions:
@@ -461,6 +485,8 @@ components:
         version:
           type: integer
           minimum: 1
+        harnessId:
+          $ref: "#/components/schemas/HarnessId"
         model:
           type: string
         instructions:
@@ -526,6 +552,71 @@ components:
     ThinkingLevel:
       type: string
       enum: [off, low, medium, high, xhigh]
+    HarnessId:
+      type: string
+      enum: [openclaw, hermes]
+    HarnessCapability:
+      type: object
+      required: [support, detail]
+      properties:
+        support:
+          type: string
+          enum: [supported, partial, unsupported]
+        detail:
+          type: string
+    HarnessCapabilities:
+      type: object
+      required:
+        - start_turn
+        - streaming
+        - native_session_resume
+        - cancellation
+        - interruption
+        - dynamic_model_patch
+        - compaction
+        - tool_approvals
+        - permission_deny
+        - mcp
+        - managed_event_log
+        - usage
+        - subagents
+      properties:
+        start_turn:
+          $ref: "#/components/schemas/HarnessCapability"
+        streaming:
+          $ref: "#/components/schemas/HarnessCapability"
+        native_session_resume:
+          $ref: "#/components/schemas/HarnessCapability"
+        cancellation:
+          $ref: "#/components/schemas/HarnessCapability"
+        interruption:
+          $ref: "#/components/schemas/HarnessCapability"
+        dynamic_model_patch:
+          $ref: "#/components/schemas/HarnessCapability"
+        compaction:
+          $ref: "#/components/schemas/HarnessCapability"
+        tool_approvals:
+          $ref: "#/components/schemas/HarnessCapability"
+        permission_deny:
+          $ref: "#/components/schemas/HarnessCapability"
+        mcp:
+          $ref: "#/components/schemas/HarnessCapability"
+        managed_event_log:
+          $ref: "#/components/schemas/HarnessCapability"
+        usage:
+          $ref: "#/components/schemas/HarnessCapability"
+        subagents:
+          $ref: "#/components/schemas/HarnessCapability"
+    Harness:
+      type: object
+      required: [harness_id, name, capabilities]
+      properties:
+        harness_id:
+          $ref: "#/components/schemas/HarnessId"
+        name:
+          type: string
+        capabilities:
+          $ref: "#/components/schemas/HarnessCapabilities"
     Quota:
       type: object
       properties:
@@ -640,6 +731,8 @@ components:
           type: string
         agent_id:
           type: string
+        harness_id:
+          $ref: "#/components/schemas/HarnessId"
         environment_id:
           type: [string, "null"]
         status:

@@ -1,6 +1,7 @@
 import { HttpClient } from "./http.js";
 import { Agents } from "./resources/agents.js";
 import { Environments } from "./resources/environments.js";
+import { Harnesses } from "./resources/harnesses.js";
 import { Sessions } from "./resources/sessions.js";
 import { Vaults } from "./resources/vaults.js";
 
@@ -59,6 +60,7 @@ export interface OpenClawClientConfig {
 export class OpenClawClient {
   readonly agents: Agents;
   readonly environments: Environments;
+  readonly harnesses: Harnesses;
   readonly sessions: Sessions;
   readonly vaults: Vaults;
 
@@ -71,6 +73,7 @@ export class OpenClawClient {
     });
     this.agents = new Agents(http);
     this.environments = new Environments(http);
+    this.harnesses = new Harnesses(http);
     this.sessions = new Sessions(http);
     this.vaults = new Vaults(http);
   }

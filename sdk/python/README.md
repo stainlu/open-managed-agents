@@ -41,5 +41,6 @@ for event in client.sessions.stream(session.session_id):
 
 - `client.agents` — create, get, list, update, archive, delete, list_versions, warm, run
 - `client.environments` — create, get, list, delete
+- `client.harnesses` — catalog, list
 - `client.sessions` — create, get, list, delete, send, cancel, compact, logs, events, stream, confirm_tool
 - `client.vaults` — create, get, list, delete, add_static_bearer_credential, add_mcp_oauth_credential, list_credentials, delete_credential

@@ -25,7 +25,42 @@ export type PermissionPolicy =
 
 export type ThinkingLevel = "off" | "low" | "medium" | "high" | "xhigh";
 
-export type HarnessId = "openclaw";
+export type HarnessId = "openclaw" | "hermes";
+
+export type HarnessCapabilitySupport = "supported" | "partial" | "unsupported";
+
+export interface HarnessCapability {
+  support: HarnessCapabilitySupport;
+  detail: string;
+}
+
+export interface HarnessCapabilities {
+  start_turn: HarnessCapability;
+  streaming: HarnessCapability;
+  native_session_resume: HarnessCapability;
+  cancellation: HarnessCapability;
+  interruption: HarnessCapability;
+  dynamic_model_patch: HarnessCapability;
+  compaction: HarnessCapability;
+  tool_approvals: HarnessCapability;
+  permission_deny: HarnessCapability;
+  mcp: HarnessCapability;
+  managed_event_log: HarnessCapability;
+  usage: HarnessCapability;
+  subagents: HarnessCapability;
+}
+
+export interface Harness {
+  harness_id: HarnessId;
+  name: string;
+  capabilities: HarnessCapabilities;
+}
+
+export interface HarnessCatalog {
+  default_harness_id: HarnessId;
+  harnesses: Harness[];
+  count: number;
+}
 
 export interface Quota {
   maxCostUsdPerSession?: number;
