@@ -40,10 +40,39 @@ export type HarnessStreamingTurn = {
   abort(reason?: string): Promise<void>;
 };
 
+export type HarnessApprovalRequest = {
+  approvalId: string;
+  sessionId: string;
+  toolName: string;
+  toolCallId?: string;
+  description: string;
+  arrivedAt: number;
+};
+
+export type HarnessApprovalResolution = {
+  approvalId: string;
+  decision?: string;
+};
+
+export type HarnessTurnStateEvent = {
+  state: string;
+  errorMessage?: string;
+};
+
 export class HarnessInvocationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "HarnessInvocationError";
+  }
+}
+
+export class HarnessControlError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "HarnessControlError";
   }
 }
 
@@ -54,4 +83,34 @@ export type HarnessAdapter = {
   shouldBypassWarmPool(session: Pick<Session, "environmentId" | "vaultId"> | undefined): boolean;
   invokeTurn(args: HarnessTurnInvocationArgs): Promise<HarnessTurnResult>;
   invokeStreamingTurn(args: HarnessStreamingTurnInvocationArgs): Promise<HarnessStreamingTurn>;
+  patchSession(
+    controlClient: unknown,
+    sessionId: string,
+    fields: { model?: string; thinkingLevel?: string },
+  ): Promise<void>;
+  abortSession(controlClient: unknown, sessionId: string): Promise<void>;
+  compactSession(controlClient: unknown, sessionId: string): Promise<void>;
+  resolveApproval(
+    controlClient: unknown,
+    approvalId: string,
+    decision: "allow" | "deny",
+  ): Promise<void>;
+  listApprovals(
+    controlClient: unknown,
+    sessionId: string,
+  ): Promise<HarnessApprovalRequest[]>;
+  subscribeApprovalRequested(
+    controlClient: unknown,
+    sessionId: string,
+    handler: (approval: HarnessApprovalRequest) => void,
+  ): () => void;
+  subscribeApprovalResolved(
+    controlClient: unknown,
+    handler: (resolution: HarnessApprovalResolution) => void,
+  ): () => void;
+  subscribeTurnState(
+    controlClient: unknown,
+    sessionId: string,
+    handler: (event: HarnessTurnStateEvent) => void,
+  ): () => void;
 };

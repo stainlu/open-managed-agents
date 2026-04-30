@@ -236,6 +236,111 @@ describe("OpenClawHarnessAdapter", () => {
     });
   });
 
+  it("maps managed control-plane calls to the OpenClaw gateway protocol", async () => {
+    const { adapter } = makeAdapter();
+    const calls: unknown[] = [];
+    const listeners = new Map<string, Set<(payload: unknown) => void>>();
+    const control = {
+      async patch(key: string, fields: Record<string, unknown>) {
+        calls.push({ method: "patch", key, fields });
+      },
+      async abort(key: string) {
+        calls.push({ method: "abort", key });
+      },
+      async compact(key: string) {
+        calls.push({ method: "compact", key });
+      },
+      async approvalResolve(id: string, decision: string) {
+        calls.push({ method: "approvalResolve", id, decision });
+      },
+      async approvalList() {
+        return [{
+          id: "ap_1",
+          createdAtMs: 123,
+          request: {
+            toolName: "write",
+            toolCallId: "call_1",
+            description: "write?",
+          },
+        }];
+      },
+      onEvent(eventName: string, handler: (payload: unknown) => void) {
+        const set = listeners.get(eventName) ?? new Set<(payload: unknown) => void>();
+        set.add(handler);
+        listeners.set(eventName, set);
+        return () => {
+          set.delete(handler);
+          if (set.size === 0) listeners.delete(eventName);
+        };
+      },
+    };
+    const emit = (eventName: string, payload: unknown): void => {
+      for (const handler of listeners.get(eventName) ?? []) handler(payload);
+    };
+
+    await adapter.patchSession(control, "ses_1", {
+      model: "provider/model-x",
+      thinkingLevel: "high",
+    });
+    await adapter.abortSession(control, "ses_1");
+    await adapter.compactSession(control, "ses_1");
+    await adapter.resolveApproval(control, "ap_1", "allow");
+
+    expect(calls).toEqual([
+      {
+        method: "patch",
+        key: "agent:main:ses_1",
+        fields: { model: "zenmux/provider/model-x", thinkingLevel: "high" },
+      },
+      { method: "abort", key: "agent:main:ses_1" },
+      { method: "compact", key: "agent:main:ses_1" },
+      { method: "approvalResolve", id: "ap_1", decision: "allow-once" },
+    ]);
+
+    await expect(adapter.listApprovals(control, "ses_1")).resolves.toEqual([{
+      approvalId: "ap_1",
+      sessionId: "ses_1",
+      toolName: "write",
+      toolCallId: "call_1",
+      description: "write?",
+      arrivedAt: 123,
+    }]);
+
+    const requested: unknown[] = [];
+    const resolved: unknown[] = [];
+    const states: unknown[] = [];
+    const unsubscribeRequested = adapter.subscribeApprovalRequested(
+      control,
+      "ses_1",
+      (approval) => requested.push(approval),
+    );
+    adapter.subscribeApprovalResolved(control, (resolution) => resolved.push(resolution));
+    adapter.subscribeTurnState(control, "ses_1", (event) => states.push(event));
+
+    emit("plugin.approval.requested", {
+      id: "ap_2",
+      createdAtMs: 456,
+      request: { toolName: "exec", description: "run command" },
+    });
+    emit("plugin.approval.resolved", { id: "ap_2", decision: "deny" });
+    emit("chat", { sessionKey: "agent:main:other", state: "final" });
+    emit("chat", { sessionKey: "agent:main:ses_1", state: "error", errorMessage: "failed" });
+
+    expect(requested).toEqual([{
+      approvalId: "ap_2",
+      sessionId: "ses_1",
+      toolName: "exec",
+      toolCallId: undefined,
+      description: "run command",
+      arrivedAt: 456,
+    }]);
+    expect(resolved).toEqual([{ approvalId: "ap_2", decision: "deny" }]);
+    expect(states).toEqual([{ state: "error", errorMessage: "failed" }]);
+
+    unsubscribeRequested();
+    expect(listeners.get("plugin.approval.requested")).toBeUndefined();
+  });
+
   it("does not change model names when ZenMux is not configured", () => {
     expect(normalizeModelForRuntime("deepseek/deepseek-v4-pro", {})).toBe(
       "deepseek/deepseek-v4-pro",

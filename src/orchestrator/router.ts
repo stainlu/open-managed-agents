@@ -5,8 +5,10 @@ import {
   normalizeModelForRuntime,
 } from "../harness/openclaw.js";
 import {
+  HarnessControlError,
   HarnessInvocationError,
   type HarnessAdapter,
+  type HarnessApprovalRequest,
   type HarnessStreamingTurn,
   type HarnessTurnResult,
 } from "../harness/types.js";
@@ -22,7 +24,6 @@ import type {
   NetworkingSpec,
   SpawnOptions,
 } from "../runtime/container.js";
-import { GatewayWebSocketClient, GatewayWsError } from "../runtime/gateway-ws.js";
 import type { ParentTokenMinter } from "../runtime/parent-token.js";
 import { PoolCapacityError, type SessionContainerPool } from "../runtime/pool.js";
 import type {
@@ -143,6 +144,12 @@ export type PendingApproval = {
   arrivedAt: number;
 };
 
+type HarnessControlSubscription = {
+  controlClient: unknown;
+  unsubscribeRequested: () => void;
+  unsubscribeResolved: () => void;
+};
+
 type TurnProgressSnapshot = {
   userTurns: number;
   latestAgentOutcomeId?: string;
@@ -162,11 +169,7 @@ export class AgentRouter {
   /** One plugin-approval WS subscription pair per active session. */
   private readonly approvalSubscriptions = new Map<
     string,
-    {
-      wsClient: GatewayWebSocketClient;
-      unsubscribeRequested: () => void;
-      unsubscribeResolved: () => void;
-    }
+    HarnessControlSubscription
   >();
   /**
    * Sessions whose cancel was requested while the background task was
@@ -252,44 +255,12 @@ export class AgentRouter {
     this.approvalSubscriptions.delete(sessionId);
   }
 
-  private parsePendingApproval(
-    sessionId: string,
-    payload: unknown,
-  ): PendingApproval | undefined {
-    const root = isRecord(payload) ? payload : undefined;
-    const request = isRecord(root?.request) ? root.request : undefined;
-    const approvalId = asNonEmptyString(root?.id);
-    if (!approvalId) return undefined;
-    return {
-      approvalId,
-      sessionId,
-      toolName:
-        asNonEmptyString(request?.toolName) ??
-        asNonEmptyString(root?.toolName) ??
-        asNonEmptyString(request?.title) ??
-        asNonEmptyString(root?.title) ??
-        "",
-      toolCallId:
-        asNonEmptyString(request?.toolCallId) ??
-        asNonEmptyString(root?.toolCallId) ??
-        undefined,
-      description:
-        asNonEmptyString(request?.description) ??
-        asNonEmptyString(root?.description) ??
-        "",
-      arrivedAt: asFiniteNumber(root?.createdAtMs) ?? Date.now(),
-    };
-  }
-
   private async syncPendingApprovals(
     sessionId: string,
-    wsClient: GatewayWebSocketClient,
+    controlClient: unknown,
   ): Promise<void> {
     try {
-      const records = await wsClient.approvalList();
-      const approvals = records
-        .map((record) => this.parsePendingApproval(sessionId, record))
-        .filter((approval): approval is PendingApproval => approval !== undefined);
+      const approvals = await this.harness.listApprovals(controlClient, sessionId);
       this.replacePendingApprovals(sessionId, approvals);
     } catch (err) {
       log.warn(
@@ -301,47 +272,53 @@ export class AgentRouter {
 
   private async ensureApprovalSubscriptions(
     sessionId: string,
-    wsClient: GatewayWebSocketClient,
+    controlClient: unknown,
   ): Promise<void> {
     const existing = this.approvalSubscriptions.get(sessionId);
-    if (existing?.wsClient === wsClient) {
-      await this.syncPendingApprovals(sessionId, wsClient);
+    if (existing?.controlClient === controlClient) {
+      await this.syncPendingApprovals(sessionId, controlClient);
       return;
     }
     this.clearApprovalSubscriptions(sessionId);
 
-    const unsubscribeRequested = wsClient.onEvent("plugin.approval.requested", (payload) => {
-      const approval = this.parsePendingApproval(sessionId, payload);
-      if (!approval) return;
-      this.upsertPendingApproval(sessionId, approval);
-      log.info(
-        {
-          session_id: sessionId,
-          tool_name: approval.toolName,
-          tool_call_id: approval.toolCallId,
-          approval_id: approval.approvalId,
-        },
-        "tool approval requested",
-      );
-    });
+    const unsubscribeRequested = this.harness.subscribeApprovalRequested(
+      controlClient,
+      sessionId,
+      (approval: HarnessApprovalRequest) => {
+        this.upsertPendingApproval(sessionId, approval);
+        log.info(
+          {
+            session_id: sessionId,
+            tool_name: approval.toolName,
+            tool_call_id: approval.toolCallId,
+            approval_id: approval.approvalId,
+          },
+          "tool approval requested",
+        );
+      },
+    );
 
-    const unsubscribeResolved = wsClient.onEvent("plugin.approval.resolved", (payload) => {
-      const root = isRecord(payload) ? payload : undefined;
-      const approvalId = asNonEmptyString(root?.id);
-      if (!approvalId) return;
-      this.removePendingApproval(sessionId, approvalId);
-      log.info(
-        { session_id: sessionId, approval_id: approvalId, decision: asNonEmptyString(root?.decision) ?? "" },
-        "tool approval resolved",
-      );
-    });
+    const unsubscribeResolved = this.harness.subscribeApprovalResolved(
+      controlClient,
+      (resolution) => {
+        this.removePendingApproval(sessionId, resolution.approvalId);
+        log.info(
+          {
+            session_id: sessionId,
+            approval_id: resolution.approvalId,
+            decision: resolution.decision ?? "",
+          },
+          "tool approval resolved",
+        );
+      },
+    );
 
     this.approvalSubscriptions.set(sessionId, {
-      wsClient,
+      controlClient,
       unsubscribeRequested,
       unsubscribeResolved,
     });
-    await this.syncPendingApprovals(sessionId, wsClient);
+    await this.syncPendingApprovals(sessionId, controlClient);
   }
 
   /**
@@ -669,30 +646,25 @@ export class AgentRouter {
       });
 
       if (agent.permissionPolicy.type === "always_ask") {
-        const wsClient = this.pool.getWsClient(args.sessionId);
-        if (wsClient) {
-          await this.ensureApprovalSubscriptions(args.sessionId, wsClient);
+        const controlClient = this.pool.getWsClient(args.sessionId);
+        if (controlClient) {
+          await this.ensureApprovalSubscriptions(args.sessionId, controlClient);
         }
       }
 
       if ((args.model || effectiveThinking) && !streamIsFirstTurn) {
-        const wsClient = this.pool.getWsClient(args.sessionId);
-        if (!wsClient) {
+        const controlClient = this.pool.getWsClient(args.sessionId);
+        if (!controlClient) {
           throw new RouterError(
             "no_active_container",
             `session ${args.sessionId} has no WS client for patch`,
           );
         }
-        const patch: Record<string, string> = {};
-        if (args.model) {
-          patch.model = normalizeModelForRuntime(
-            args.model,
-            this.cfg.passthroughEnv,
-          );
-        }
+        const patch: { model?: string; thinkingLevel?: string } = {};
+        if (args.model) patch.model = args.model;
         if (effectiveThinking) patch.thinkingLevel = effectiveThinking;
         try {
-          await wsClient.patch(`agent:main:${args.sessionId}`, patch);
+          await this.harness.patchSession(controlClient, args.sessionId, patch);
         } catch (patchErr) {
           log.warn(
             { session_id: args.sessionId, err: patchErr },
@@ -817,18 +789,17 @@ export class AgentRouter {
         `session ${sessionId} is running; wait for it to finish before compacting`,
       );
     }
-    const wsClient = this.pool.getWsClient(sessionId);
-    if (!wsClient) {
+    const controlClient = this.pool.getWsClient(sessionId);
+    if (!controlClient) {
       throw new RouterError(
         "no_active_container",
         `session ${sessionId} has no active container to compact (post an event first)`,
       );
     }
-    const canonicalKey = `agent:main:${sessionId}`;
     try {
-      await wsClient.compact(canonicalKey);
+      await this.harness.compactSession(controlClient, sessionId);
     } catch (err) {
-      throw wrapWsError(err, "compact_failed");
+      throw wrapHarnessControlError(err, "compact_failed");
     }
     return session;
   }
@@ -1157,8 +1128,8 @@ export class AgentRouter {
         `session ${sessionId} is not currently running`,
       );
     }
-    const wsClient = this.pool.getWsClient(sessionId);
-    if (!wsClient) {
+    const controlClient = this.pool.getWsClient(sessionId);
+    if (!controlClient) {
       // Session is running but no container yet — still in the acquire
       // phase. Set a flag so executeInBackground aborts after acquire
       // returns, and transition the session to idle immediately so the
@@ -1169,11 +1140,10 @@ export class AgentRouter {
       this.pendingApprovals.delete(sessionId);
       return this.sessions.endRunCancelled(sessionId) ?? session;
     }
-    const canonicalKey = `agent:main:${sessionId}`;
     try {
-      await wsClient.abort(canonicalKey);
+      await this.harness.abortSession(controlClient, sessionId);
     } catch (err) {
-      throw wrapWsError(err, "cancel_failed");
+      throw wrapHarnessControlError(err, "cancel_failed");
     }
     this.queue.clear(sessionId);
     this.pendingApprovals.delete(sessionId);
@@ -1191,19 +1161,18 @@ export class AgentRouter {
     approvalId: string,
     decision: "allow" | "deny",
   ): Promise<void> {
-    const wsClient = this.pool.getWsClient(sessionId);
-    if (!wsClient) {
+    const controlClient = this.pool.getWsClient(sessionId);
+    if (!controlClient) {
       throw new RouterError(
         "no_active_container",
         `session ${sessionId} has no live container for tool confirmation`,
       );
     }
-    const wsDecision = decision === "allow" ? "allow-once" : "deny";
     try {
-      await wsClient.approvalResolve(approvalId, wsDecision);
+      await this.harness.resolveApproval(controlClient, approvalId, decision);
       this.removePendingApproval(sessionId, approvalId);
     } catch (err) {
-      throw wrapWsError(err, "confirm_tool_failed");
+      throw wrapHarnessControlError(err, "confirm_tool_failed");
     }
   }
 
@@ -1421,25 +1390,20 @@ export class AgentRouter {
 
     // Subscribe BEFORE the fast-path check so an event that fires during
     // the check still lands on us. `unsubscribe` guards against double-fire.
-    const wsClient = this.pool.getWsClient(sessionId);
-    if (wsClient) {
+    const controlClient = this.pool.getWsClient(sessionId);
+    if (controlClient) {
       if (agent.permissionPolicy.type === "always_ask") {
-        await this.ensureApprovalSubscriptions(sessionId, wsClient);
+        await this.ensureApprovalSubscriptions(sessionId, controlClient);
       }
-      const canonicalKey = `agent:main:${sessionId}`;
-      unsubscribe = wsClient.onEvent("chat", (payload) => {
-        const p = payload as
-          | { sessionKey?: string; state?: string; errorMessage?: string }
-          | undefined;
-        if (!p || p.sessionKey !== canonicalKey) return;
+      unsubscribe = this.harness.subscribeTurnState(controlClient, sessionId, (event) => {
         // State "delta" is per-token progress — not a completion signal.
         // We only care about terminal states.
-        if (p.state === "final") {
+        if (event.state === "final") {
           void handleFinal({ ok: true });
-        } else if (p.state === "error") {
+        } else if (event.state === "error") {
           void handleFinal({
             ok: false,
-            error: p.errorMessage ?? "run failed (observed post-restart)",
+            error: event.errorMessage ?? "run failed (observed post-restart)",
           });
         }
       });
@@ -1708,9 +1672,9 @@ export class AgentRouter {
         });
 
         if (agent.permissionPolicy.type === "always_ask") {
-          const wsClient = this.pool.getWsClient(sessionId);
-          if (wsClient) {
-            await this.ensureApprovalSubscriptions(sessionId, wsClient);
+          const controlClient = this.pool.getWsClient(sessionId);
+          if (controlClient) {
+            await this.ensureApprovalSubscriptions(sessionId, controlClient);
           }
         }
 
@@ -1723,24 +1687,18 @@ export class AgentRouter {
         // turns have a key and patch instantly.
         const isFirstTurn = currentSession ? currentSession.turns <= 1 : true;
         if (needsPatch && !isFirstTurn) {
-          const wsClient = this.pool.getWsClient(sessionId);
-          if (!wsClient) {
+          const controlClient = this.pool.getWsClient(sessionId);
+          if (!controlClient) {
             throw new RouterError(
               "no_active_container",
               `session ${sessionId} has no WS client for patch`,
             );
           }
-          const canonicalKey = `agent:main:${sessionId}`;
-          const patch: Record<string, string> = {};
-          if (modelOverride) {
-            patch.model = normalizeModelForRuntime(
-              modelOverride,
-              this.cfg.passthroughEnv,
-            );
-          }
+          const patch: { model?: string; thinkingLevel?: string } = {};
+          if (modelOverride) patch.model = modelOverride;
           if (effectiveThinking) patch.thinkingLevel = effectiveThinking;
           try {
-            await wsClient.patch(canonicalKey, patch);
+            await this.harness.patchSession(controlClient, sessionId, patch);
           } catch (patchErr) {
             log.warn(
               { session_id: sessionId, err: patchErr },
@@ -1829,18 +1787,6 @@ function turnAdvanceWaitMs(): number {
   return DEFAULT_TURN_ADVANCE_WAIT_MS;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function asNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-
-function asFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 export type RouterErrorCode =
   | "agent_not_found"
   | "agent_archived"
@@ -1887,8 +1833,11 @@ function isConnectError(err: unknown): boolean {
   return false;
 }
 
-function wrapWsError(err: unknown, fallbackCode: RouterErrorCode): RouterError {
-  if (err instanceof GatewayWsError) {
+function wrapHarnessControlError(
+  err: unknown,
+  fallbackCode: RouterErrorCode,
+): RouterError {
+  if (err instanceof HarnessControlError) {
     return new RouterError(fallbackCode, `${err.code}: ${err.message}`);
   }
   const msg = err instanceof Error ? err.message : String(err);

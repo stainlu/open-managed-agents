@@ -2,19 +2,23 @@ import { chownSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import rawModelAliases from "../model-aliases.json" with { type: "json" };
 import type { Mount, SpawnOptions } from "../runtime/container.js";
+import { GatewayWsError } from "../runtime/gateway-ws.js";
 import type { ParentTokenMinter } from "../runtime/parent-token.js";
 import type { EnvironmentStore, VaultStore } from "../store/types.js";
 import type { AgentConfig, Session } from "../orchestrator/types.js";
 import type {
+  HarnessApprovalRequest,
+  HarnessApprovalResolution,
   HarnessAdapter,
   HarnessSessionContext,
   HarnessSpawnOptionsArgs,
   HarnessStreamingTurn,
   HarnessStreamingTurnInvocationArgs,
+  HarnessTurnStateEvent,
   HarnessTurnInvocationArgs,
   HarnessTurnResult,
 } from "./types.js";
-import { HarnessInvocationError } from "./types.js";
+import { HarnessControlError, HarnessInvocationError } from "./types.js";
 
 // UID of the non-root `openclaw` user inside the agent runtime image,
 // created by `useradd -r` in Dockerfile.runtime. Docker daemon on Linux
@@ -46,6 +50,15 @@ export type OpenClawHarnessAdapterConfig = {
   tokenMinter: ParentTokenMinter;
   environments: EnvironmentStore;
   vaults: VaultStore;
+};
+
+type OpenClawControlClient = {
+  abort(sessionKey: string): Promise<unknown>;
+  patch(sessionKey: string, fields: Record<string, unknown>): Promise<unknown>;
+  compact(sessionKey: string): Promise<unknown>;
+  approvalResolve(id: string, decision: "allow-once" | "deny"): Promise<unknown>;
+  approvalList(): Promise<unknown[]>;
+  onEvent(eventName: string, handler: (payload: unknown) => void): () => void;
 };
 
 export class OpenClawHarnessAdapter implements HarnessAdapter {
@@ -187,6 +200,88 @@ export class OpenClawHarnessAdapter implements HarnessAdapter {
     return { chunks, abort };
   }
 
+  async patchSession(
+    controlClient: unknown,
+    sessionId: string,
+    fields: { model?: string; thinkingLevel?: string },
+  ): Promise<void> {
+    const ws = openClawControlClient(controlClient, ["patch"]);
+    const patch: Record<string, string> = {};
+    if (fields.model) {
+      patch.model = normalizeModelForRuntime(fields.model, this.cfg.passthroughEnv);
+    }
+    if (fields.thinkingLevel) patch.thinkingLevel = fields.thinkingLevel;
+    if (Object.keys(patch).length === 0) return;
+    await runControl(() => ws.patch(openClawSessionKey(sessionId), patch));
+  }
+
+  async abortSession(controlClient: unknown, sessionId: string): Promise<void> {
+    const ws = openClawControlClient(controlClient, ["abort"]);
+    await runControl(() => ws.abort(openClawSessionKey(sessionId)));
+  }
+
+  async compactSession(controlClient: unknown, sessionId: string): Promise<void> {
+    const ws = openClawControlClient(controlClient, ["compact"]);
+    await runControl(() => ws.compact(openClawSessionKey(sessionId)));
+  }
+
+  async resolveApproval(
+    controlClient: unknown,
+    approvalId: string,
+    decision: "allow" | "deny",
+  ): Promise<void> {
+    const ws = openClawControlClient(controlClient, ["approvalResolve"]);
+    const openClawDecision = decision === "allow" ? "allow-once" : "deny";
+    await runControl(() => ws.approvalResolve(approvalId, openClawDecision));
+  }
+
+  async listApprovals(
+    controlClient: unknown,
+    sessionId: string,
+  ): Promise<HarnessApprovalRequest[]> {
+    const ws = openClawControlClient(controlClient, ["approvalList"]);
+    const records = await runControlWithResult(() => ws.approvalList());
+    return records
+      .map((record) => parseOpenClawApproval(sessionId, record))
+      .filter((approval): approval is HarnessApprovalRequest => approval !== undefined);
+  }
+
+  subscribeApprovalRequested(
+    controlClient: unknown,
+    sessionId: string,
+    handler: (approval: HarnessApprovalRequest) => void,
+  ): () => void {
+    const ws = openClawControlClient(controlClient, ["onEvent"]);
+    return ws.onEvent("plugin.approval.requested", (payload) => {
+      const approval = parseOpenClawApproval(sessionId, payload);
+      if (approval) handler(approval);
+    });
+  }
+
+  subscribeApprovalResolved(
+    controlClient: unknown,
+    handler: (resolution: HarnessApprovalResolution) => void,
+  ): () => void {
+    const ws = openClawControlClient(controlClient, ["onEvent"]);
+    return ws.onEvent("plugin.approval.resolved", (payload) => {
+      const resolution = parseOpenClawApprovalResolution(payload);
+      if (resolution) handler(resolution);
+    });
+  }
+
+  subscribeTurnState(
+    controlClient: unknown,
+    sessionId: string,
+    handler: (event: HarnessTurnStateEvent) => void,
+  ): () => void {
+    const ws = openClawControlClient(controlClient, ["onEvent"]);
+    const sessionKey = openClawSessionKey(sessionId);
+    return ws.onEvent("chat", (payload) => {
+      const event = parseOpenClawTurnState(sessionKey, payload);
+      if (event) handler(event);
+    });
+  }
+
   private async fetchChatCompletions(
     args: HarnessTurnInvocationArgs,
     stream: boolean,
@@ -199,7 +294,7 @@ export class OpenClawHarnessAdapter implements HarnessAdapter {
     //
     // Session continuity: use the canonical `agent:<agentId>:<stable-key>`
     // key so OpenClaw's startup migrations do not rewrite it between turns.
-    const canonicalSessionKey = `agent:main:${args.sessionId}`;
+    const canonicalSessionKey = openClawSessionKey(args.sessionId);
     const body = {
       model: "openclaw/main",
       user: args.sessionId,
@@ -298,6 +393,112 @@ export class OpenClawHarnessAdapter implements HarnessAdapter {
     }
     return out;
   }
+}
+
+function openClawSessionKey(sessionId: string): string {
+  return `agent:main:${sessionId}`;
+}
+
+function openClawControlClient(
+  client: unknown,
+  required: (keyof OpenClawControlClient)[],
+): OpenClawControlClient {
+  if (!isRecord(client)) {
+    throw new HarnessControlError("invalid_control_client", "missing OpenClaw control client");
+  }
+  for (const name of required) {
+    if (typeof client[name] !== "function") {
+      throw new HarnessControlError(
+        "invalid_control_client",
+        `OpenClaw control client is missing ${name}`,
+      );
+    }
+  }
+  return client as OpenClawControlClient;
+}
+
+async function runControl(action: () => Promise<unknown>): Promise<void> {
+  await runControlWithResult(action);
+}
+
+async function runControlWithResult<T>(action: () => Promise<T>): Promise<T> {
+  try {
+    return await action();
+  } catch (err) {
+    throw mapControlError(err);
+  }
+}
+
+function mapControlError(err: unknown): HarnessControlError {
+  if (err instanceof HarnessControlError) return err;
+  if (err instanceof GatewayWsError) {
+    return new HarnessControlError(err.code, err.message);
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return new HarnessControlError("control_failed", message);
+}
+
+function parseOpenClawApproval(
+  sessionId: string,
+  payload: unknown,
+): HarnessApprovalRequest | undefined {
+  const root = isRecord(payload) ? payload : undefined;
+  const request = isRecord(root?.request) ? root.request : undefined;
+  const approvalId = asNonEmptyString(root?.id);
+  if (!approvalId) return undefined;
+  return {
+    approvalId,
+    sessionId,
+    toolName:
+      asNonEmptyString(request?.toolName) ??
+      asNonEmptyString(root?.toolName) ??
+      asNonEmptyString(request?.title) ??
+      asNonEmptyString(root?.title) ??
+      "",
+    toolCallId:
+      asNonEmptyString(request?.toolCallId) ??
+      asNonEmptyString(root?.toolCallId) ??
+      undefined,
+    description:
+      asNonEmptyString(request?.description) ??
+      asNonEmptyString(root?.description) ??
+      "",
+    arrivedAt: asFiniteNumber(root?.createdAtMs) ?? Date.now(),
+  };
+}
+
+function parseOpenClawApprovalResolution(
+  payload: unknown,
+): HarnessApprovalResolution | undefined {
+  const root = isRecord(payload) ? payload : undefined;
+  const approvalId = asNonEmptyString(root?.id);
+  if (!approvalId) return undefined;
+  return {
+    approvalId,
+    decision: asNonEmptyString(root?.decision),
+  };
+}
+
+function parseOpenClawTurnState(
+  sessionKey: string,
+  payload: unknown,
+): HarnessTurnStateEvent | undefined {
+  const root = isRecord(payload) ? payload : undefined;
+  if (!root || root.sessionKey !== sessionKey) return undefined;
+  const state = asNonEmptyString(root.state);
+  if (!state) return undefined;
+  return {
+    state,
+    errorMessage: asNonEmptyString(root.errorMessage),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 export function isOpenClawFailureContent(content: string): boolean {
