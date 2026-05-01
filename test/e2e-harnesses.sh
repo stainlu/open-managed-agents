@@ -4,7 +4,8 @@
 #
 # This is intentionally separate from test/e2e.sh. The default E2E verifies
 # the OpenClaw-backed product path. This script verifies that Codex and Claude
-# Agent SDK can run through the same managed Agent -> Session -> Event API.
+# Agent SDK can run through the same managed Agent -> Session -> Event API,
+# including a second same-session turn that proves context/native resume.
 #
 # Prerequisites when a harness is enabled:
 #   - docker compose up -d (orchestrator on localhost:8080 by default)
@@ -136,10 +137,38 @@ assert_harness_registered() {
     || die "harness ${harness} is not registered by /v1/harnesses"
 }
 
+post_turn_and_wait() {
+  local session_id="$1"
+  local label="$2"
+  local content="$3"
+  local event_body
+  event_body="$(jq -n --arg c "${content}" '{type: "user.message", content: $c}')"
+  api POST "/v1/sessions/${session_id}/events" -d "${event_body}" >/dev/null
+  poll_session "${session_id}" "${label}" >/dev/null
+}
+
+assert_message_contains() {
+  local harness="$1"
+  local session_id="$2"
+  local output="$3"
+  local expected="$4"
+
+  if ! echo "${output}" | grep -Fq "${expected}"; then
+    say "${harness}: expected latest message to contain ${expected}"
+    api GET "/v1/sessions/${session_id}/events" | jq . >&2 || true
+    return 1
+  fi
+}
+
 run_harness() {
   local harness="$1"
   local model="$2"
-  local marker="OMA_LIVE_${harness//-/_}_OK_$(date +%s)"
+  local safe_harness="${harness//-/_}"
+  local run_id
+  run_id="$(date +%s)"
+  local ack_marker="OMA_LIVE_${safe_harness}_ACK_${run_id}"
+  local memory_marker="OMA_LIVE_${safe_harness}_MEMORY_${run_id}"
+  local recall_marker="OMA_LIVE_${safe_harness}_RECALL_${run_id}"
 
   say "creating ${harness} agent with model ${model}"
   local create_body
@@ -173,40 +202,56 @@ run_harness() {
     || die "failed to create ${harness} session: ${session_response}"
   CREATED_SESSIONS+=("${session_id}")
 
-  say "${harness}: posting live turn marker ${marker}"
-  local event_body
-  event_body="$(jq -n --arg c "Reply with exactly this token and no other text: ${marker}" \
-    '{type: "user.message", content: $c}')"
-  api POST "/v1/sessions/${session_id}/events" -d "${event_body}" >/dev/null
-
-  poll_session "${session_id}" "${harness}" >/dev/null || {
+  say "${harness}: turn 1 remember ${memory_marker}"
+  post_turn_and_wait \
+    "${session_id}" \
+    "${harness}:turn1" \
+    "Remember this token for the next turn: ${memory_marker}. Reply with exactly this token and no other text: ${ack_marker}" || {
     say "${harness}: failed; events follow"
     api GET "/v1/sessions/${session_id}/events" | jq . >&2 || true
     return 1
   }
 
-  local output
-  output="$(latest_agent_message "${session_id}")"
-  say "${harness}: output=${output}"
-  if ! echo "${output}" | grep -q "${marker}"; then
-    say "${harness}: expected marker ${marker}"
+  local turn1_output
+  turn1_output="$(latest_agent_message "${session_id}")"
+  say "${harness}: turn1 output=${turn1_output}"
+  assert_message_contains "${harness}" "${session_id}" "${turn1_output}" "${ack_marker}" || return 1
+
+  say "${harness}: turn 2 recall ${memory_marker}"
+  post_turn_and_wait \
+    "${session_id}" \
+    "${harness}:turn2" \
+    "Using the prior turn in this same managed session, reply with exactly two space-separated tokens and no other text. First token: ${recall_marker}. Second token: the token I asked you to remember in the prior turn." || {
+    say "${harness}: failed during recall; events follow"
     api GET "/v1/sessions/${session_id}/events" | jq . >&2 || true
     return 1
-  fi
+  }
 
-  local events_json bad_session_count convo_count ordered
+  local turn2_output
+  turn2_output="$(latest_agent_message "${session_id}")"
+  say "${harness}: turn2 output=${turn2_output}"
+  assert_message_contains "${harness}" "${session_id}" "${turn2_output}" "${recall_marker}" || return 1
+  assert_message_contains "${harness}" "${session_id}" "${turn2_output}" "${memory_marker}" || return 1
+
+  local events_json bad_session_count user_count agent_count convo_count ordered
   events_json="$(api GET "/v1/sessions/${session_id}/events")"
   bad_session_count="$(echo "${events_json}" | jq --arg sid "${session_id}" '[.events[] | select(.session_id != $sid)] | length')"
+  user_count="$(echo "${events_json}" | jq '[.events[] | select(.type == "user.message")] | length')"
+  agent_count="$(echo "${events_json}" | jq '[.events[] | select(.type == "agent.message")] | length')"
   convo_count="$(echo "${events_json}" | jq '[.events[] | select(.type == "user.message" or .type == "agent.message")] | length')"
   ordered="$(echo "${events_json}" | jq -r '[.events[].created_at] as $ts | ($ts == ($ts | sort))')"
   [[ "${bad_session_count}" == "0" ]] \
     || die "${harness}: events contain wrong session_id"
-  [[ "${convo_count}" -ge "2" ]] \
-    || die "${harness}: expected at least user.message + agent.message events"
+  [[ "${user_count}" -ge "2" ]] \
+    || die "${harness}: expected at least two user.message events"
+  [[ "${agent_count}" -ge "2" ]] \
+    || die "${harness}: expected at least two agent.message events"
+  [[ "${convo_count}" -ge "4" ]] \
+    || die "${harness}: expected at least two managed conversation turns"
   [[ "${ordered}" == "true" ]] \
     || die "${harness}: events are not chronologically ordered"
 
-  say "${harness}: PASS"
+  say "${harness}: PASS two-turn managed session"
 }
 
 RUNNABLE=()
