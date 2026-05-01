@@ -911,11 +911,11 @@ async function main(): Promise<void> {
   const jsonlSamplerHandle = setInterval(sampleJsonl, jsonlSampleIntervalMs);
   jsonlSamplerHandle.unref();
 
-  // Graceful shutdown: tear down all pool-managed containers (best-effort)
-  // and close the SQLite store so WAL checkpoints flush cleanly. The HTTP
-  // server is not explicitly stopped because Hono's node-server doesn't
-  // expose a close() reference in this codebase yet — in practice the
-  // process.exit() call takes the listener down with it.
+  // Graceful shutdown: detach from pool-managed containers and close the
+  // SQLite store so WAL checkpoints flush cleanly. Do not stop session
+  // containers here: planned orchestrator restarts must let the next process
+  // adopt still-running agents. Explicit session delete, idle reap, and
+  // pressure eviction remain the teardown paths.
   const shutdown = (signal: string): void => {
     log.info({ signal }, "shutting down");
     (async () => {

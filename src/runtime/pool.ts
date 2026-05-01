@@ -35,8 +35,8 @@ const log = getLogger("pool");
 // be a small HTTP client. The pool owns only the lifecycle, not the protocol.
 //
 // The pool is in-memory only. On orchestrator restart the pool is empty;
-// any containers that outlived the prior process are reaped at startup by
-// DockerContainerRuntime.cleanupOrphaned(). See src/index.ts.
+// containers that outlive the prior process are re-adopted at startup when
+// their persisted session mapping is still valid. See src/index.ts.
 
 export type PoolConfig = {
   /** Milliseconds a container may sit unused before the sweeper reaps it. */
@@ -1321,10 +1321,14 @@ export class SessionContainerPool {
   }
 
   /**
-   * Stop the sweeper and tear down every active container. Best-effort:
-   * errors are swallowed so shutdown is not blocked by a single stuck stop.
+   * Stop the sweeper and detach from active/warm containers.
+   *
+   * By default this does NOT stop containers. That is load-bearing for
+   * orchestrator restarts: the next process can adopt running session
+   * containers and preserve in-flight work. Tests and explicit operator
+   * teardown can pass `stopContainers: true`.
    */
-  async shutdown(): Promise<void> {
+  async shutdown(opts: { stopContainers?: boolean } = {}): Promise<void> {
     this.shuttingDown = true;
     if (this.sweeperHandle) {
       clearInterval(this.sweeperHandle);
@@ -1343,23 +1347,25 @@ export class SessionContainerPool {
       ...entries.map((e) => e.controlPlane.close(e.controlClient)),
       ...warmEntries.map((e) => e.controlPlane.close(e.controlClient)),
     ]);
-    // Stop every container (agents + sidecars + warm).
-    const containerIds = [
-      ...entries.map((e) => e.container.id),
-      ...entries.flatMap((e) =>
-        e.ownedResources ? [e.ownedResources.sidecar.id] : [],
-      ),
-      ...warmEntries.map((e) => e.container.id),
-    ];
-    await Promise.allSettled(containerIds.map((id) => this.runtime.stop(id)));
-    // Remove any per-session networks owned by limited-networking sessions.
-    // Best-effort — Docker will GC lingering networks eventually anyway.
-    const networksToRemove = entries.flatMap((e) =>
-      e.ownedResources ? e.ownedResources.networks : [],
-    );
-    await Promise.allSettled(
-      networksToRemove.map((n) => this.runtime.removeNetwork(n)),
-    );
+    if (opts.stopContainers) {
+      // Stop every container (agents + sidecars + warm).
+      const containerIds = [
+        ...entries.map((e) => e.container.id),
+        ...entries.flatMap((e) =>
+          e.ownedResources ? [e.ownedResources.sidecar.id] : [],
+        ),
+        ...warmEntries.map((e) => e.container.id),
+      ];
+      await Promise.allSettled(containerIds.map((id) => this.runtime.stop(id)));
+      // Remove any per-session networks owned by limited-networking sessions.
+      // Best-effort — Docker will GC lingering networks eventually anyway.
+      const networksToRemove = entries.flatMap((e) =>
+        e.ownedResources ? e.ownedResources.networks : [],
+      );
+      await Promise.allSettled(
+        networksToRemove.map((n) => this.runtime.removeNetwork(n)),
+      );
+    }
   }
 
   private async reapIdle(): Promise<void> {

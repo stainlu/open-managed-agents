@@ -688,7 +688,7 @@ describe("SessionContainerPool.shutdown", () => {
     vi.useRealTimers();
   });
 
-  it("stops every active and warm container", async () => {
+  it("detaches by default so orchestrator restarts can adopt containers", async () => {
     const { pool, runtime } = makePool();
     await pool.acquireForSession({
       sessionId: "ses_1",
@@ -698,18 +698,32 @@ describe("SessionContainerPool.shutdown", () => {
     expect(pool.snapshot()).toHaveLength(1);
     await pool.shutdown();
     expect(pool.snapshot()).toHaveLength(0);
+    expect(runtime.stopped.has("cnt_1")).toBe(false);
+    expect(runtime.stopped.has("cnt_2")).toBe(false);
+  });
+
+  it("stops every active and warm container when explicit teardown is requested", async () => {
+    const { pool, runtime } = makePool();
+    await pool.acquireForSession({
+      sessionId: "ses_1",
+      spawnOptions: baseSpawnOptions(),
+    });
+    await pool.warmForAgent("agt_x", baseSpawnOptions());
+    expect(pool.snapshot()).toHaveLength(1);
+    await pool.shutdown({ stopContainers: true });
+    expect(pool.snapshot()).toHaveLength(0);
     // Both the active (cnt_1) and warm (cnt_2) were stopped.
     expect(runtime.stopped.has("cnt_1")).toBe(true);
     expect(runtime.stopped.has("cnt_2")).toBe(true);
   });
 
-  it("waits for inflight warm boots and stops them during shutdown", async () => {
+  it("waits for inflight warm boots and stops them during explicit teardown", async () => {
     const { pool, runtime } = makePool();
     runtime.readyDelayMs = 25;
 
     const warming = pool.warmForAgent("agt_x", baseSpawnOptions());
     await new Promise((r) => setImmediate(r));
-    await pool.shutdown();
+    await pool.shutdown({ stopContainers: true });
     await warming;
 
     expect(runtime.stopped.has("cnt_1")).toBe(true);

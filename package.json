@@ -21,6 +21,7 @@
     "test:e2e": "bash test/e2e.sh",
     "test:e2e-harnesses": "bash test/e2e-harnesses.sh",
     "test:e2e-feature-matrix": "bash test/e2e-feature-matrix.sh",
+    "test:e2e-restart-resume": "bash test/e2e-restart-resume.sh",
     "lint": "tsc --noEmit -p tsconfig.json",
     "docker:build-runtime": "docker build -f Dockerfile.runtime -t open-managed-agents/openclaw-agent:latest .",
     "docker:build-hermes-runtime": "docker build -f Dockerfile.hermes-runtime -t open-managed-agents/hermes-agent:latest .",
