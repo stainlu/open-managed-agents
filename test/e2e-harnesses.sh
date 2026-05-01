@@ -34,6 +34,7 @@ HARNESSES="${OMA_LIVE_HARNESSES:-codex claude-agent-sdk}"
 HARNESSES="${HARNESSES//,/ }"
 POLL_INTERVAL_SEC="${OMA_LIVE_POLL_INTERVAL_SEC:-2}"
 MAX_POLL_SEC="${OMA_LIVE_MAX_POLL_SEC:-360}"
+HEALTH_MAX_SEC="${OMA_LIVE_HEALTH_MAX_SEC:-90}"
 REQUIRE="${OMA_LIVE_REQUIRE:-0}"
 
 CREATED_SESSIONS=()
@@ -85,6 +86,24 @@ api() {
       "${BASE_URL}${path}" \
       "$@"
   fi
+}
+
+wait_for_health() {
+  local elapsed=0
+  local last_error=""
+  while [[ "${elapsed}" -lt "${HEALTH_MAX_SEC}" ]]; do
+    if last_error="$(api GET /healthz 2>&1 >/dev/null)"; then
+      return 0
+    fi
+    sleep "${POLL_INTERVAL_SEC}"
+    elapsed=$((elapsed + POLL_INTERVAL_SEC))
+    say "health t=${elapsed}s not ready"
+  done
+
+  if [[ -n "${last_error}" ]]; then
+    say "last health error: ${last_error}"
+  fi
+  return 1
 }
 
 required_key_for_harness() {
@@ -287,7 +306,7 @@ if [[ "${#RUNNABLE[@]}" -eq 0 ]]; then
 fi
 
 say "checking orchestrator health at ${BASE_URL}/healthz"
-api GET /healthz >/dev/null \
+wait_for_health \
   || die "orchestrator is not healthy; run docker compose up -d first"
 
 CATALOG="$(api GET /v1/harnesses)"
