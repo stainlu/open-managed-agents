@@ -87,6 +87,7 @@ Node: `>=22.14.0`.
 pnpm install
 pnpm build
 pnpm test
+pnpm test:adapter-conformance
 ```
 
 Local full stack:
@@ -95,6 +96,16 @@ Local full stack:
 pnpm docker:build
 docker compose up --build -d
 ```
+
+Live non-OpenClaw harness E2E:
+
+```bash
+pnpm test:e2e-harnesses
+```
+
+This checks Codex and Claude Agent SDK through the managed API. It skips
+harnesses whose provider key is not present; set `OMA_LIVE_REQUIRE=1` to fail
+instead of skip.
 
 Some runtime internals still use `OPENCLAW_*` names for compatibility with the
 OpenClaw adapter and existing deployment scripts. New harness-neutral adapter
