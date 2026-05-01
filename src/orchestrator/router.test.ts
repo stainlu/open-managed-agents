@@ -93,6 +93,21 @@ async function waitForSessionToStopRunning(
   throw new Error(`session ${sessionId} stayed inflight`);
 }
 
+function findLastEvent(
+  events: Event[],
+  pred: (event: Event) => boolean,
+): Event | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (event && pred(event)) return event;
+  }
+  return undefined;
+}
+
+async function* doneStream(): AsyncGenerator<string, void, void> {
+  yield "[DONE]";
+}
+
 describe("AgentRouter.createSession", () => {
   it("normalizes runtime models through ZenMux when ZENMUX_API_KEY is configured", () => {
     expect(
@@ -366,6 +381,96 @@ describe("AgentRouter.streamEvent — pre-container decision tree", () => {
     ).rejects.toMatchObject({ name: "RouterError", code: "agent_not_found" });
     // Session must be idle since we never got past validation.
     expect(store.sessions.get(session.sessionId)?.status).toBe("idle");
+  });
+});
+
+describe("AgentRouter.streamEvent — finalization", () => {
+  it("persists native metadata returned by a streaming harness result", async () => {
+    const storedEvents: Event[] = [];
+    const appendEvents = vi.fn((_agentId: string, sessionId: string, events: Event[]) => {
+      storedEvents.push(...events.map((event) => ({ ...event, sessionId })));
+    });
+    const eventReader: Partial<ManagedEventLog> = {
+      stateRoot: "/tmp/test-state",
+      appendEvents,
+      listBySession: () => storedEvents,
+      countUserTurns: () => storedEvents.filter((event) => event.type === "user.message").length,
+      latestAgentOutcome: () => findLastEvent(
+        storedEvents,
+        (event) => event.type === "agent.message" || event.type === "agent.tool_result",
+      ),
+      latestAgentMessage: () => findLastEvent(
+        storedEvents,
+        (event) => event.type === "agent.message",
+      ),
+    };
+    vi.spyOn(OpenClawHarnessAdapter.prototype, "invokeStreamingTurn").mockResolvedValue({
+      chunks: doneStream(),
+      events: [
+        {
+          eventId: "evt_user",
+          sessionId: "native-session",
+          type: "user.message",
+          content: "hi",
+          createdAt: 1,
+        },
+        {
+          eventId: "evt_agent",
+          sessionId: "native-session",
+          type: "agent.message",
+          content: "done",
+          createdAt: 2,
+          tokensIn: 11,
+          tokensOut: 7,
+          model: "deepseek/v4",
+        },
+      ],
+      result: {
+        output: "done",
+        tokensIn: 11,
+        tokensOut: 7,
+        model: "deepseek/v4",
+        native: {
+          nativeSessionId: "native-ses",
+          nativeThreadId: "thread-1",
+          nativeMetadata: { checkpoint: 3 },
+        },
+      },
+      abort: async () => {},
+    });
+    const { router, store } = makeRouter({
+      eventReaderStub: eventReader,
+      poolStub: {
+        acquireForSession: async () =>
+          ({ baseUrl: "http://container.test", token: "tok" }) as any,
+        evictSession: async () => {},
+      },
+    });
+    const agent = store.agents.create({
+      model: "deepseek/v4",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+    });
+    const session = router.createSession(agent.agentId);
+
+    const handle = await router.streamEvent({ sessionId: session.sessionId, content: "hi" });
+    for await (const chunk of handle.chunks) {
+      // Drain stream before finalization, matching the HTTP handler.
+      expect(chunk).toBe("[DONE]");
+    }
+    await handle.finalize({ ok: true });
+
+    const finished = store.sessions.get(session.sessionId);
+    expect(finished?.status).toBe("idle");
+    expect(finished?.tokensIn).toBe(11);
+    expect(finished?.tokensOut).toBe(7);
+    expect(finished?.nativeSessionId).toBe("native-ses");
+    expect(finished?.nativeThreadId).toBe("thread-1");
+    expect(finished?.nativeMetadata).toEqual({ checkpoint: 3 });
+    expect(appendEvents).toHaveBeenCalledTimes(2);
   });
 });
 
