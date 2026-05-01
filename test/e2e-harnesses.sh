@@ -36,11 +36,6 @@ POLL_INTERVAL_SEC="${OMA_LIVE_POLL_INTERVAL_SEC:-2}"
 MAX_POLL_SEC="${OMA_LIVE_MAX_POLL_SEC:-360}"
 REQUIRE="${OMA_LIVE_REQUIRE:-0}"
 
-AUTH_ARGS=()
-if [[ -n "${OPENCLAW_API_TOKEN:-}" ]]; then
-  AUTH_ARGS=(-H "Authorization: Bearer ${OPENCLAW_API_TOKEN}")
-fi
-
 CREATED_SESSIONS=()
 CREATED_AGENTS=()
 
@@ -52,27 +47,44 @@ cleanup() {
   local session_id agent_id
   set +u
   for session_id in "${CREATED_SESSIONS[@]}"; do
-    curl --silent -X DELETE "${AUTH_ARGS[@]}" \
-      "${BASE_URL}/v1/sessions/${session_id}" >/dev/null 2>&1 || true
+    delete_resource "/v1/sessions/${session_id}" || true
   done
   for agent_id in "${CREATED_AGENTS[@]}"; do
-    curl --silent -X DELETE "${AUTH_ARGS[@]}" \
-      "${BASE_URL}/v1/agents/${agent_id}" >/dev/null 2>&1 || true
+    delete_resource "/v1/agents/${agent_id}" || true
   done
   exit "${ec}"
 }
 trap cleanup EXIT
 
+delete_resource() {
+  local path="$1"
+  if [[ -n "${OPENCLAW_API_TOKEN:-}" ]]; then
+    curl --silent -X DELETE \
+      -H "Authorization: Bearer ${OPENCLAW_API_TOKEN}" \
+      "${BASE_URL}${path}" >/dev/null 2>&1
+  else
+    curl --silent -X DELETE "${BASE_URL}${path}" >/dev/null 2>&1
+  fi
+}
+
 api() {
   local method="$1"
   local path="$2"
   shift 2
-  curl --silent --show-error --fail \
-    -X "${method}" \
-    "${AUTH_ARGS[@]}" \
-    -H "Content-Type: application/json" \
-    "${BASE_URL}${path}" \
-    "$@"
+  if [[ -n "${OPENCLAW_API_TOKEN:-}" ]]; then
+    curl --silent --show-error --fail \
+      -X "${method}" \
+      -H "Authorization: Bearer ${OPENCLAW_API_TOKEN}" \
+      -H "Content-Type: application/json" \
+      "${BASE_URL}${path}" \
+      "$@"
+  else
+    curl --silent --show-error --fail \
+      -X "${method}" \
+      -H "Content-Type: application/json" \
+      "${BASE_URL}${path}" \
+      "$@"
+  fi
 }
 
 required_key_for_harness() {
