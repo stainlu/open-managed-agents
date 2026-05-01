@@ -720,6 +720,7 @@ export class AgentRouter {
             undefined,
             harness,
           );
+          router.mirrorVisibleEvents(agent.agentId, args.sessionId);
           const tokensIn = latest?.tokensIn ?? 0;
           const tokensOut = latest?.tokensOut ?? 0;
           const costUsd = await router.resolveRunCostUsd(
@@ -1356,6 +1357,7 @@ export class AgentRouter {
       },
       harness,
     );
+    this.mirrorVisibleEvents(agent.agentId, sessionId);
     const tokensIn = latestAgent?.tokensIn ?? completion.tokensIn;
     const tokensOut = latestAgent?.tokensOut ?? completion.tokensOut;
     const costUsd = await this.resolveRunCostUsd(
@@ -1492,6 +1494,7 @@ export class AgentRouter {
 
     if (outcome.ok) {
       const latest = this.events.latestAgentMessage(agent.agentId, sessionId);
+      this.mirrorVisibleEvents(agent.agentId, sessionId);
       const tokensIn = latest?.tokensIn ?? 0;
       const tokensOut = latest?.tokensOut ?? 0;
       const costUsd = await this.resolveRunCostUsd(
@@ -1551,6 +1554,13 @@ export class AgentRouter {
       latestAgentOutcomeId:
         this.events.latestAgentOutcome(agentId, sessionId)?.eventId,
     };
+  }
+
+  private mirrorVisibleEvents(agentId: string, sessionId: string): void {
+    if (!this.events.appendEvents) return;
+    const events = this.events.listBySession(agentId, sessionId);
+    if (events.length === 0) return;
+    this.events.appendEvents(agentId, sessionId, events);
   }
 
   private async resolveRunCostUsd(

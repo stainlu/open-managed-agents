@@ -18,6 +18,7 @@ import {
   RouterError,
   type RouterConfig,
 } from "./router.js";
+import type { Event } from "./types.js";
 
 // These tests cover the decision-tree logic that doesn't require a live
 // container: createSession, runEvent's pre-dispatch checks, and cancel's
@@ -708,6 +709,66 @@ describe("AgentRouter.runEvent — JSONL advancement guarantees", () => {
     expect(finished?.tokensIn).toBe(11);
     expect(finished?.tokensOut).toBe(7);
     expect(finished?.costUsd).toBe(0.12);
+  });
+
+  it("mirrors visible native events through the managed event append boundary after a successful turn", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { content: "done" } }],
+            usage: { prompt_tokens: 11, completion_tokens: 7 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    const nativeEvents: Event[] = [
+      {
+        eventId: "evt_user",
+        sessionId: "native-session",
+        type: "user.message",
+        content: "hi",
+        createdAt: 1,
+      },
+      {
+        eventId: "evt_agent",
+        sessionId: "native-session",
+        type: "agent.message",
+        content: "done",
+        createdAt: 2,
+        tokensIn: 11,
+        tokensOut: 7,
+      },
+    ];
+    const appendEvents = vi.fn();
+    const fakeEvents = {
+      stateRoot: "/tmp/test-state",
+      appendEvents,
+      listBySession: vi.fn().mockReturnValue(nativeEvents),
+      countUserTurns: vi.fn().mockReturnValueOnce(0).mockReturnValue(1),
+      latestAgentOutcome: vi
+        .fn()
+        .mockReturnValueOnce(undefined)
+        .mockReturnValue(nativeEvents[1]),
+      latestAgentMessage: vi.fn().mockReturnValue(nativeEvents[1]),
+    };
+    const { router, store } = makeRouter({
+      poolStub: {
+        acquireForSession: async () =>
+          ({ baseUrl: "http://container.test", token: "tok" }) as any,
+        evictSession: async () => {},
+      },
+      eventReaderStub: fakeEvents as unknown as ManagedEventLog,
+    });
+    const agent = seedAgent(store);
+    const session = router.createSession(agent.agentId);
+
+    await router.runEvent({ sessionId: session.sessionId, content: "hi" });
+    await waitForSessionToStopRunning(store, session.sessionId);
+
+    expect(appendEvents).toHaveBeenCalledWith(agent.agentId, session.sessionId, nativeEvents);
   });
 
   it("keeps the turn successful when a tool result advances but no final agent.message is written", async () => {
