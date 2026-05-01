@@ -43,6 +43,32 @@ Why this exists:
 All request and response schemas live in
 `src/harness/adapter-server-protocol.ts`.
 
+## Conformance Smoke
+
+Run the local adapter-server contract smoke with:
+
+```bash
+pnpm test:adapter-conformance
+```
+
+This starts the Hermes, Codex, and Claude Agent SDK adapter servers from source
+on local ephemeral ports and checks the `oma.adapter.v1` envelope, declared
+capabilities, bearer auth, control responses, event/approval listing, and
+adapter-neutral error shapes.
+
+It deliberately does not start a real model turn. Provider-key-gated live E2E
+tests own native harness execution. This smoke catches protocol drift before a
+runtime image or live provider is involved.
+
+To check an already-running adapter server:
+
+```bash
+node scripts/check-adapter-server.mjs \
+  --base-url http://127.0.0.1:18789 \
+  --harness-id hermes \
+  --token "$OPENCLAW_GATEWAY_TOKEN"
+```
+
 ## Routes
 
 | Method | Path | Purpose |

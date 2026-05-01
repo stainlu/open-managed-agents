@@ -5,12 +5,12 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { query } from "@anthropic-ai/claude-agent-sdk";
 
 const PROTOCOL_VERSION = "oma.adapter.v1";
 const HARNESS_ID = "claude-agent-sdk";
 const ADAPTER_VERSION = "0.1.0";
 const require = createRequire(import.meta.url);
+let cachedQuery = null;
 
 function env(name, fallback = "") {
   const value = process.env[name];
@@ -77,6 +77,13 @@ function sdkPackageInfo() {
   } catch {
     return { version: "unknown", claudeCodeVersion: "unknown" };
   }
+}
+
+async function claudeQuery() {
+  if (cachedQuery) return cachedQuery;
+  const sdk = await import("@anthropic-ai/claude-agent-sdk");
+  cachedQuery = sdk.query;
+  return cachedQuery;
 }
 
 function errorPayload(code, message, status = 500, retryable = false, details) {
@@ -562,6 +569,7 @@ class ClaudeAgentSdkAdapterRuntime {
     try {
       const options = this._buildOptions(state, request, writeFrame);
       const prompt = String(request.turn?.content ?? "");
+      const query = await claudeQuery();
       const q = query({ prompt, options });
       state.activeQuery = q;
       for await (const message of q) {

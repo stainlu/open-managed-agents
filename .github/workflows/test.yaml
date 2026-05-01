@@ -70,6 +70,9 @@ jobs:
       - name: Claude Agent SDK adapter syntax
         run: node --check docker/claude-agent-sdk-adapter/oma_claude_agent_sdk_adapter.mjs
 
+      - name: Adapter server conformance smoke
+        run: pnpm test:adapter-conformance
+
       # Egress-proxy sidecar (networking: limited enforcement). Shipped
       # as its own tiny image with no deps — uses node:test built-in.
       - name: Egress-proxy — syntax

@@ -292,10 +292,14 @@ class HermesAdapterRuntime:
             },
         }
 
-    def _session_db(self) -> Any:
+    def _session_db(self) -> Any | None:
         if self._db is not None:
             return self._db
-        from hermes_state import SessionDB
+        try:
+            from hermes_state import SessionDB
+        except ModuleNotFoundError:
+            self.logger.warning("hermes_state is unavailable; native session restore is disabled")
+            return None
 
         home = Path(os.environ["HERMES_HOME"])
         self._db = SessionDB(db_path=home / "state.db")
@@ -316,12 +320,13 @@ class HermesAdapterRuntime:
                 )
             db = self._session_db()
             history: list[dict[str, Any]] = []
-            try:
-                row = db.get_session(native)
-                if row is not None:
-                    history = db.get_messages_as_conversation(native)
-            except Exception:
-                self.logger.debug("could not restore Hermes session %s", native, exc_info=True)
+            if db is not None:
+                try:
+                    row = db.get_session(native)
+                    if row is not None:
+                        history = db.get_messages_as_conversation(native)
+                except Exception:
+                    self.logger.debug("could not restore Hermes session %s", native, exc_info=True)
 
             state = ManagedSession(
                 managed_session_id=session_id,
