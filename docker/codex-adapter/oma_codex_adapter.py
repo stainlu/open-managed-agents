@@ -46,6 +46,33 @@ def _is_conformance_turn(request: dict[str, Any]) -> bool:
     return model == "conformance/model"
 
 
+def _codex_child_env() -> dict[str, str]:
+    env = {
+        "CODEX_HOME": _env("CODEX_HOME", _env("OMA_CODEX_HOME", "/workspace/.codex")),
+    }
+    default_keys = [
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_ORG_ID",
+        "OPENAI_ORGANIZATION",
+        "OPENAI_PROJECT",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+    ]
+    extra_keys = []
+    for raw in (_env("OMA_CODEX_PASSTHROUGH_ENV"), _env("OPENCLAW_PASSTHROUGH_ENV")):
+        extra_keys.extend(k.strip() for k in raw.split(",") if k.strip())
+    for key in dict.fromkeys([*default_keys, *extra_keys]):
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
+    return env
+
+
 def _now_ms() -> int:
     return int(time.time() * 1000)
 
@@ -264,9 +291,7 @@ class CodexAdapterRuntime:
         config = AppServerConfig(
             codex_bin=codex_bin,
             cwd=_env("OMA_CODEX_CWD", _env("OMA_STATE_DIR", "/workspace")),
-            env={
-                "CODEX_HOME": _env("CODEX_HOME", _env("OMA_CODEX_HOME", "/workspace/.codex")),
-            },
+            env=_codex_child_env(),
             client_name="open_managed_agents_codex_adapter",
             client_title="Open Managed Agents Codex Adapter",
             client_version=ADAPTER_VERSION,
