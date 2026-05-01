@@ -1,5 +1,6 @@
 import type { Event } from "../orchestrator/types.js";
 import type { ManagedEventLog, ManagedEventLogFollowOptions } from "./types.js";
+import { mergeManagedEventsForSession } from "./normalize.js";
 
 export class CompositeManagedEventLog implements ManagedEventLog {
   constructor(
@@ -16,9 +17,10 @@ export class CompositeManagedEventLog implements ManagedEventLog {
   }
 
   listBySession(agentId: string, sessionId: string): Event[] {
-    return this.logs
-      .flatMap((log) => log.listBySession(agentId, sessionId))
-      .sort((a, b) => a.createdAt - b.createdAt);
+    return mergeManagedEventsForSession(
+      sessionId,
+      this.logs.flatMap((log) => log.listBySession(agentId, sessionId)),
+    );
   }
 
   latestAgentMessage(agentId: string, sessionId: string): Event | undefined {
@@ -116,4 +118,3 @@ function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
     signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
-

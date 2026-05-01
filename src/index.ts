@@ -272,8 +272,8 @@ async function main(): Promise<void> {
   const passthroughEnv = collectPassthroughEnv();
   const passthroughEnvKeys = Object.keys(passthroughEnv).sort();
 
-  // Event reader. Parses OpenClaw's per-session JSONL on the mounted state
-  // directory at query time; the orchestrator never writes to those files.
+  // Event log. Managed adapter-server harnesses append normalized events here;
+  // OpenClaw is still read through from its native Pi/OpenClaw JSONL.
   const eventReader = new CompositeManagedEventLog(stateRoot, [
     new ManagedJsonlEventLog(stateRoot),
     new OpenClawJsonlEventLog(stateRoot),

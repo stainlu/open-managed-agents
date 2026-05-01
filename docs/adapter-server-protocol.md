@@ -245,6 +245,19 @@ Supported event types:
 - `session.compaction`
 - `session.runtime_notice`
 
+Managed event invariants:
+
+- `session_id` is the managed session id. The orchestrator canonicalizes this
+  when appending, so adapters must never require clients to know native ids.
+- `event_id` must be stable and unique within a managed session.
+- `created_at` is a Unix timestamp in milliseconds.
+- Event lists are returned in chronological order. Equal timestamps preserve
+  append order.
+- Duplicate `event_id` values are ignored when native and managed event sources
+  overlap.
+- `content` is always a string. Structured native payloads belong in
+  `tool_arguments`, `native_metadata`, or adapter-native logs.
+
 ## Errors
 
 Error responses use:

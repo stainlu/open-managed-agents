@@ -194,14 +194,17 @@ run_harness() {
     return 1
   fi
 
-  local events_json bad_session_count convo_count
+  local events_json bad_session_count convo_count ordered
   events_json="$(api GET "/v1/sessions/${session_id}/events")"
   bad_session_count="$(echo "${events_json}" | jq --arg sid "${session_id}" '[.events[] | select(.session_id != $sid)] | length')"
   convo_count="$(echo "${events_json}" | jq '[.events[] | select(.type == "user.message" or .type == "agent.message")] | length')"
+  ordered="$(echo "${events_json}" | jq -r '[.events[].created_at] as $ts | ($ts == ($ts | sort))')"
   [[ "${bad_session_count}" == "0" ]] \
     || die "${harness}: events contain wrong session_id"
   [[ "${convo_count}" -ge "2" ]] \
     || die "${harness}: expected at least user.message + agent.message events"
+  [[ "${ordered}" == "true" ]] \
+    || die "${harness}: events are not chronologically ordered"
 
   say "${harness}: PASS"
 }

@@ -2,17 +2,28 @@ import { mkdirSync, readFileSync, statSync, unlinkSync, appendFileSync } from "n
 import { dirname, join } from "node:path";
 import type { Event } from "../orchestrator/types.js";
 import type { ManagedEventLog, ManagedEventLogFollowOptions } from "./types.js";
+import {
+  mergeManagedEventsForSession,
+  normalizeManagedEventBatch,
+} from "./normalize.js";
 
 export class ManagedJsonlEventLog implements ManagedEventLog {
   constructor(public readonly stateRoot: string) {}
 
   appendEvents(agentId: string, sessionId: string, events: Event[]): void {
     if (events.length === 0) return;
+    const existingIds = new Set(
+      this.listBySession(agentId, sessionId).map((event) => event.eventId),
+    );
+    const normalized = normalizeManagedEventBatch(sessionId, events, {
+      seenEventIds: existingIds,
+    });
+    if (normalized.length === 0) return;
     const path = this.path(agentId, sessionId);
     mkdirSync(dirname(path), { recursive: true });
     appendFileSync(
       path,
-      events.map((event) => JSON.stringify({ ...event, sessionId })).join("\n") + "\n",
+      normalized.map((event) => JSON.stringify(event)).join("\n") + "\n",
       "utf8",
     );
   }
@@ -24,18 +35,17 @@ export class ManagedJsonlEventLog implements ManagedEventLog {
     } catch {
       return [];
     }
-    const events: Event[] = [];
+    const parsedEvents: Event[] = [];
     for (const line of raw.split("\n")) {
       if (!line.trim()) continue;
       try {
         const parsed = JSON.parse(line) as Event;
-        if (parsed.sessionId === sessionId) events.push(parsed);
+        if (parsed.sessionId === sessionId) parsedEvents.push(parsed);
       } catch {
         // Skip partial/corrupt tail lines.
       }
     }
-    events.sort((a, b) => a.createdAt - b.createdAt);
-    return events;
+    return mergeManagedEventsForSession(sessionId, parsedEvents);
   }
 
   latestAgentMessage(agentId: string, sessionId: string): Event | undefined {
@@ -141,4 +151,3 @@ function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
     signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
-
