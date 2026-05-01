@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { adapterServerControlPlane, invokeAdapterServerTurn } from "./adapter-server-client.js";
+import {
+  adapterServerControlPlane,
+  invokeAdapterServerTurn,
+  invokeStreamingAdapterServerTurn,
+} from "./adapter-server-client.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -116,5 +120,72 @@ describe("adapter-server client", () => {
       baseUrl: "http://adapter",
       token: "tok",
     })).rejects.toThrow(/harness mismatch/);
+  });
+
+  it("captures managed events from adapter-server streaming frames", async () => {
+    const userEvent = {
+      event_id: "evt_user",
+      session_id: "ses_123",
+      type: "user.message",
+      content: "hello",
+      created_at: 1,
+    };
+    const agentEvent = {
+      event_id: "evt_agent",
+      session_id: "ses_123",
+      type: "agent.message",
+      content: "done",
+      created_at: 2,
+      tokens_in: 11,
+      tokens_out: 7,
+      model: "deepseek/v4",
+    };
+    const frames = [
+      { type: "event", event: userEvent },
+      { type: "delta", content: "done" },
+      {
+        type: "turn.completed",
+        result: {
+          protocol_version: "oma.adapter.v1",
+          output: "done",
+          usage: { tokens_in: 11, tokens_out: 7, model: "deepseek/v4" },
+          events: [agentEvent],
+        },
+      },
+    ];
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      new Response(
+        frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join(""),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      ),
+    ));
+
+    const stream = await invokeStreamingAdapterServerTurn({
+      baseUrl: "http://adapter",
+      token: "tok",
+      content: "hello",
+      sessionId: "ses_123",
+      timeoutMs: 60_000,
+      agent: {
+        agentId: "agt_123",
+        harnessId: "hermes",
+        model: "deepseek/v4",
+        tools: [],
+        instructions: "",
+        permissionPolicy: { type: "always_allow" },
+        mcpServers: {},
+        thinkingLevel: "off",
+        callableAgents: [],
+        maxSubagentDepth: 0,
+      } as any,
+    });
+
+    const chunks: string[] = [];
+    for await (const chunk of stream.chunks) chunks.push(chunk);
+
+    expect(JSON.parse(chunks[0] ?? "{}").choices[0].delta.content).toBe("done");
+    expect(chunks.at(-1)).toBe("[DONE]");
+    expect(stream.events?.map((event) => event.eventId)).toEqual(["evt_user", "evt_agent"]);
+    expect(stream.events?.map((event) => event.sessionId)).toEqual(["ses_123", "ses_123"]);
   });
 });

@@ -713,6 +713,9 @@ export class AgentRouter {
         const current = router.sessions.get(args.sessionId);
         if (!isSessionInflight(current)) return;
         if (outcome.ok) {
+          if (stream.events && stream.events.length > 0) {
+            router.events.appendEvents?.(agent.agentId, args.sessionId, stream.events);
+          }
           const latest = await router.waitForTurnAdvanced(
             agent.agentId,
             args.sessionId,

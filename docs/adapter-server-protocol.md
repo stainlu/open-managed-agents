@@ -209,6 +209,9 @@ Frame types:
 - `state` - `starting`, `running`, `final`, or `error`.
 - `turn.completed` - final result with usage/native metadata.
 
+The orchestrator captures `event` frames, plus `turn.completed.result.events`,
+and appends them to the managed event log before finalizing the turn.
+
 Example:
 
 ```json

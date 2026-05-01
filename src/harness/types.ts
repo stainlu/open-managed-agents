@@ -50,6 +50,7 @@ export type HarnessStreamingTurnInvocationArgs = HarnessTurnInvocationArgs;
 
 export type HarnessStreamingTurn = {
   chunks: AsyncGenerator<string, void, void>;
+  events?: Event[];
   abort(reason?: string): Promise<void>;
 };
 

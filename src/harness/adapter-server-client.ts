@@ -135,15 +135,18 @@ export async function invokeStreamingAdapterServerTurn(
   }
   const reader = res.body.getReader();
   let closed = false;
+  const events: Event[] = [];
   return {
     chunks: decodeAdapterServerSseAsOpenAiChunks(
       reader,
       args.sessionId,
       args.agent?.model ?? args.model ?? "adapter-server",
+      events,
       () => {
         closed = true;
       },
     ),
+    events,
     abort: async (reason?: string) => {
       if (closed) return;
       await reader.cancel(reason ?? "client disconnected").catch(() => {
@@ -283,6 +286,7 @@ async function* decodeAdapterServerSseAsOpenAiChunks(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   sessionId: string,
   model: string,
+  events: Event[],
   onClosed: () => void,
 ): AsyncGenerator<string, void, void> {
   const decoder = new TextDecoder("utf-8");
@@ -304,6 +308,9 @@ async function* decodeAdapterServerSseAsOpenAiChunks(
           .join("\n");
         if (!data) continue;
         const parsed = AdapterServerStreamFrameSchema.parse(JSON.parse(data));
+        if (parsed.type === "event") {
+          events.push(adapterEventToManagedEvent(parsed.event));
+        }
         if (parsed.type === "delta") {
           yield JSON.stringify({
             id: `chatcmpl-${sessionId}`,
@@ -320,6 +327,7 @@ async function* decodeAdapterServerSseAsOpenAiChunks(
           });
         }
         if (parsed.type === "turn.completed") {
+          events.push(...parsed.result.events.map(adapterEventToManagedEvent));
           yield JSON.stringify({
             id: `chatcmpl-${sessionId}`,
             object: "chat.completion.chunk",
