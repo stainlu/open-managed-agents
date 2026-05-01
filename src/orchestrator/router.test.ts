@@ -7,6 +7,7 @@ import {
 } from "../harness/openclaw.js";
 import { OpenClawJsonlEventLog } from "../harness/openclaw-events.js";
 import { HarnessRegistry } from "../harness/registry.js";
+import type { HarnessCapabilities } from "../harness/types.js";
 import type { GatewayWebSocketClient } from "../runtime/gateway-ws.js";
 import { ParentTokenMinter } from "../runtime/parent-token.js";
 import type { SessionContainerPool } from "../runtime/pool.js";
@@ -29,6 +30,7 @@ function makeRouter(opts: {
   poolStub?: Partial<SessionContainerPool>;
   eventReaderStub?: Partial<ManagedEventLog>;
   passthroughEnv?: Record<string, string>;
+  capabilityOverrides?: Partial<HarnessCapabilities>;
 } = {}): {
   router: AgentRouter;
   store: InMemoryStore;
@@ -56,6 +58,12 @@ function makeRouter(opts: {
     environments: store.environments,
     vaults: store.vaults,
   });
+  if (opts.capabilityOverrides) {
+    (harness as { capabilities: HarnessCapabilities }).capabilities = {
+      ...harness.capabilities,
+      ...opts.capabilityOverrides,
+    };
+  }
   const cfg: RouterConfig = {
     passthroughEnv: opts.passthroughEnv ?? {},
     runTimeoutMs: 60_000,
@@ -107,6 +115,11 @@ function findLastEvent(
 async function* doneStream(): AsyncGenerator<string, void, void> {
   yield "[DONE]";
 }
+
+const unsupported = (detail: string) => ({
+  support: "unsupported" as const,
+  detail,
+});
 
 describe("AgentRouter.createSession", () => {
   it("normalizes runtime models through ZenMux when ZENMUX_API_KEY is configured", () => {
@@ -193,6 +206,35 @@ describe("AgentRouter.createSession", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(RouterError);
       expect((err as RouterError).code).toBe("unsupported_harness");
+    }
+  });
+
+  it("rejects stored agent templates that request unsupported harness features", () => {
+    const { router, store } = makeRouter({
+      capabilityOverrides: {
+        mcp: unsupported("MCP is not available in this harness"),
+      },
+    });
+    const agent = store.agents.create({
+      model: "m",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+      mcpServers: {
+        docs: { command: "npx", args: ["-y", "@modelcontextprotocol/server-github"] },
+      },
+    });
+
+    try {
+      router.createSession(agent.agentId);
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toMatchObject({
+        name: "RouterError",
+        code: "unsupported_capability",
+      });
     }
   });
 
@@ -380,6 +422,29 @@ describe("AgentRouter.streamEvent — pre-container decision tree", () => {
       router.streamEvent({ sessionId: session.sessionId, content: "hi" }),
     ).rejects.toMatchObject({ name: "RouterError", code: "agent_not_found" });
     // Session must be idle since we never got past validation.
+    expect(store.sessions.get(session.sessionId)?.status).toBe("idle");
+  });
+
+  it("rejects harnesses that do not support streaming before acquiring a container", async () => {
+    const { router, store } = makeRouter({
+      capabilityOverrides: {
+        streaming: unsupported("streaming is not implemented"),
+      },
+    });
+    const agent = store.agents.create({
+      model: "m",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+      mcpServers: {},
+    });
+    const session = router.createSession(agent.agentId);
+
+    await expect(
+      router.streamEvent({ sessionId: session.sessionId, content: "hi" }),
+    ).rejects.toMatchObject({ name: "RouterError", code: "unsupported_capability" });
     expect(store.sessions.get(session.sessionId)?.status).toBe("idle");
   });
 });
@@ -570,6 +635,29 @@ describe("AgentRouter.runEvent — decision tree", () => {
     });
   });
 
+  it("rejects harnesses that do not support starting turns before flipping session state", async () => {
+    const { router, store } = makeRouter({
+      capabilityOverrides: {
+        start_turn: unsupported("turns are disabled"),
+      },
+    });
+    const agent = store.agents.create({
+      model: "m",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+      mcpServers: {},
+    });
+    const session = router.createSession(agent.agentId);
+
+    await expect(
+      router.runEvent({ sessionId: session.sessionId, content: "hi" }),
+    ).rejects.toMatchObject({ name: "RouterError", code: "unsupported_capability" });
+    expect(store.sessions.get(session.sessionId)?.status).toBe("idle");
+  });
+
   it("queues the event when the session is currently running (no new run started)", async () => {
     // Session in "running" state → the event should land in the queue for
     // the in-flight run to pick up on completion. runEvent must return
@@ -645,6 +733,110 @@ describe("AgentRouter.runEvent — decision tree", () => {
       }),
     ).rejects.toMatchObject({ name: "RouterError", code: "session_busy" });
     expect(queue.size(session.sessionId)).toBe(0);
+  });
+
+  it("rejects queued per-turn model overrides when the harness cannot patch a live session", async () => {
+    const { router, store, queue } = makeRouter({
+      capabilityOverrides: {
+        dynamic_model_patch: unsupported("live model patching is unavailable"),
+      },
+    });
+    const agent = store.agents.create({
+      model: "m",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+      mcpServers: {},
+    });
+    const session = router.createSession(agent.agentId);
+    store.sessions.beginRun(session.sessionId);
+
+    await expect(
+      router.runEvent({
+        sessionId: session.sessionId,
+        content: "second message",
+        model: "other-model",
+      }),
+    ).rejects.toMatchObject({ name: "RouterError", code: "unsupported_capability" });
+    expect(queue.size(session.sessionId)).toBe(0);
+    expect(store.sessions.get(session.sessionId)?.status).toBe("starting");
+  });
+});
+
+describe("AgentRouter control capability enforcement", () => {
+  it("rejects cancel when the harness does not support cancellation", async () => {
+    const { router, store } = makeRouter({
+      capabilityOverrides: {
+        cancellation: unsupported("cancel is unavailable"),
+      },
+    });
+    const agent = store.agents.create({
+      model: "m",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+      mcpServers: {},
+    });
+    const session = router.createSession(agent.agentId);
+    store.sessions.beginRun(session.sessionId);
+
+    await expect(router.cancel(session.sessionId)).rejects.toMatchObject({
+      name: "RouterError",
+      code: "unsupported_capability",
+    });
+    expect(store.sessions.get(session.sessionId)?.status).toBe("starting");
+  });
+
+  it("rejects tool confirmations when the harness does not expose approvals", async () => {
+    const { router, store } = makeRouter({
+      capabilityOverrides: {
+        tool_approvals: unsupported("approvals are unavailable"),
+      },
+    });
+    const agent = store.agents.create({
+      model: "m",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+      mcpServers: {},
+    });
+    const session = router.createSession(agent.agentId);
+
+    await expect(
+      router.confirmTool(session.sessionId, "approval_1", "allow"),
+    ).rejects.toMatchObject({
+      name: "RouterError",
+      code: "unsupported_capability",
+    });
+  });
+
+  it("rejects compaction when the harness marks it unsupported", async () => {
+    const { router, store } = makeRouter({
+      capabilityOverrides: {
+        compaction: unsupported("manual compact is unavailable"),
+      },
+    });
+    const agent = store.agents.create({
+      model: "m",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+      mcpServers: {},
+    });
+    const session = router.createSession(agent.agentId);
+
+    await expect(router.compact(session.sessionId)).rejects.toMatchObject({
+      name: "RouterError",
+      code: "unsupported_capability",
+    });
   });
 });
 

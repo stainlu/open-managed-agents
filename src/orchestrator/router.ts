@@ -4,6 +4,7 @@ import {
   HarnessInvocationError,
   type HarnessAdapter,
   type HarnessApprovalRequest,
+  type HarnessCapabilities,
   type HarnessStreamingTurn,
   type HarnessTurnResult,
 } from "../harness/types.js";
@@ -197,6 +198,50 @@ export class AgentRouter {
     return this.harnessForSession(session);
   }
 
+  private assertHarnessCapability(
+    harness: HarnessAdapter,
+    capability: keyof HarnessCapabilities,
+  ): void {
+    const cap = harness.capabilities[capability];
+    if (cap.support !== "unsupported") return;
+    throw new RouterError(
+      "unsupported_capability",
+      `harness ${harness.id} does not support ${capability}: ${cap.detail}`,
+    );
+  }
+
+  private assertAgentTemplateCapabilities(
+    harness: HarnessAdapter,
+    agent: AgentConfig,
+  ): void {
+    if (agent.permissionPolicy.type === "deny") {
+      this.assertHarnessCapability(harness, "permission_deny");
+    }
+    if (agent.permissionPolicy.type === "always_ask") {
+      this.assertHarnessCapability(harness, "tool_approvals");
+    }
+    if (Object.keys(agent.mcpServers ?? {}).length > 0) {
+      this.assertHarnessCapability(harness, "mcp");
+    }
+    const callableAgents = agent.callableAgents ?? [];
+    const maxSubagentDepth = agent.maxSubagentDepth ?? 0;
+    if (callableAgents.length > 0 || maxSubagentDepth > 0) {
+      this.assertHarnessCapability(harness, "subagents");
+    }
+  }
+
+  private assertDynamicPatchIfNeeded(
+    harness: HarnessAdapter,
+    isFirstTurn: boolean,
+    patch: { model?: string; thinkingLevel?: AgentConfig["thinkingLevel"] },
+  ): void {
+    if (!patch.model && !patch.thinkingLevel) return;
+    // First-turn model/thinking overrides are baked into spawn options.
+    // After that, changing a live native session requires adapter support.
+    if (isFirstTurn) return;
+    this.assertHarnessCapability(harness, "dynamic_model_patch");
+  }
+
   private replacePendingApprovals(sessionId: string, approvals: PendingApproval[]): void {
     if (approvals.length === 0) {
       this.pendingApprovals.delete(sessionId);
@@ -375,6 +420,7 @@ export class AgentRouter {
       throw new RouterError("agent_archived", `agent ${agentId} is archived`);
     }
     const harness = this.harnessForAgent(agent);
+    this.assertAgentTemplateCapabilities(harness, agent);
     if (opts?.vaultId && !this.vaults.getVault(opts.vaultId)) {
       throw new RouterError(
         "vault_not_found",
@@ -447,7 +493,8 @@ export class AgentRouter {
   async warmForAgent(agentId: string): Promise<void> {
     const agent = this.agents.get(agentId);
     if (!agent) return;
-    this.harnessForAgent(agent);
+    const harness = this.harnessForAgent(agent);
+    this.assertAgentTemplateCapabilities(harness, agent);
     if (agent.callableAgents.length > 0 || agent.maxSubagentDepth > 0) {
       return;
     }
@@ -456,7 +503,6 @@ export class AgentRouter {
       remainingSubagentDepth: 0,
       environmentId: null,
     } as Session);
-    const harness = this.harnessForAgent(agent);
     await this.pool.warmForAgent(agentId, spawnOptions, harness.controlPlane);
   }
 
@@ -529,7 +575,9 @@ export class AgentRouter {
         `agent ${session.agentId} does not exist`,
       );
     }
-    this.harnessForSession(session);
+    const harness = this.harnessForSession(session);
+    this.assertHarnessCapability(harness, "start_turn");
+    this.assertAgentTemplateCapabilities(harness, agent);
 
     // Quotas are checked BEFORE the busy-session queue path: we refuse
     // to even enqueue a run for a session that's already out of budget.
@@ -542,6 +590,10 @@ export class AgentRouter {
           `session ${args.sessionId} is busy; retry after the current run completes`,
         );
       }
+      this.assertDynamicPatchIfNeeded(harness, false, {
+        model: args.model,
+        thinkingLevel: args.thinkingLevel,
+      });
       this.queue.enqueue(args.sessionId, {
         content: args.content,
         model: args.model,
@@ -551,6 +603,11 @@ export class AgentRouter {
       this.sessions.bumpTurns(args.sessionId);
       return { session, queued: true };
     }
+
+    this.assertDynamicPatchIfNeeded(harness, session.turns === 0, {
+      model: args.model,
+      thinkingLevel: args.thinkingLevel,
+    });
 
     const runningSession = this.sessions.beginRun(args.sessionId) ?? session;
     this.sessions.bumpTurns(args.sessionId);
@@ -611,6 +668,13 @@ export class AgentRouter {
       );
     }
     const harness = this.harnessForSession(session);
+    this.assertHarnessCapability(harness, "start_turn");
+    this.assertHarnessCapability(harness, "streaming");
+    this.assertAgentTemplateCapabilities(harness, agent);
+    this.assertDynamicPatchIfNeeded(harness, session.turns === 0, {
+      model: args.model,
+      thinkingLevel: args.thinkingLevel,
+    });
     this.assertQuota(session, agent);
 
     const running = this.sessions.beginRun(args.sessionId) ?? session;
@@ -647,7 +711,7 @@ export class AgentRouter {
         }
       }
 
-      if ((args.model || effectiveThinking) && !streamIsFirstTurn) {
+      if ((args.model || args.thinkingLevel) && !streamIsFirstTurn) {
         const controlClient = this.pool.getWsClient(args.sessionId);
         if (!controlClient) {
           throw new RouterError(
@@ -657,7 +721,7 @@ export class AgentRouter {
         }
         const patch: { model?: string; thinkingLevel?: AgentConfig["thinkingLevel"] } = {};
         if (args.model) patch.model = args.model;
-        if (effectiveThinking) patch.thinkingLevel = effectiveThinking;
+        if (args.thinkingLevel) patch.thinkingLevel = args.thinkingLevel;
         try {
           await harness.patchSession(controlClient, args.sessionId, patch);
         } catch (patchErr) {
@@ -806,12 +870,7 @@ export class AgentRouter {
       );
     }
     const harness = this.harnessForSession(session);
-    if (harness.capabilities.compaction.support === "unsupported") {
-      throw new RouterError(
-        "unsupported_capability",
-        `harness ${harness.id} does not support compaction: ${harness.capabilities.compaction.detail}`,
-      );
-    }
+    this.assertHarnessCapability(harness, "compaction");
     const controlClient = this.pool.getWsClient(sessionId);
     if (!controlClient) {
       throw new RouterError(
@@ -1152,6 +1211,7 @@ export class AgentRouter {
       );
     }
     const harness = this.harnessForSession(session);
+    this.assertHarnessCapability(harness, "cancellation");
     const controlClient = this.pool.getWsClient(sessionId);
     if (!controlClient) {
       // Session is running but no container yet — still in the acquire
@@ -1186,6 +1246,7 @@ export class AgentRouter {
     decision: "allow" | "deny",
   ): Promise<void> {
     const harness = this.harnessForSessionId(sessionId);
+    this.assertHarnessCapability(harness, "tool_approvals");
     const controlClient = this.pool.getWsClient(sessionId);
     if (!controlClient) {
       throw new RouterError(
@@ -1276,6 +1337,8 @@ export class AgentRouter {
     const harness = currentSession
       ? this.harnessForSession(currentSession)
       : this.harnessForAgent(agent);
+    this.assertHarnessCapability(harness, "start_turn");
+    this.assertAgentTemplateCapabilities(harness, agent);
     await this.refreshExpiringOAuthCredentials(agent, currentSession?.vaultId ?? null);
     const timings: Record<string, number> = { ...tick("oauth_refresh", cursor) };
     cursor = Date.now();
@@ -1290,6 +1353,10 @@ export class AgentRouter {
 
     const effectiveThinking = thinkingLevelOverride ?? agent.thinkingLevel;
     const isFirstTurn = currentSession ? currentSession.turns <= 1 : true;
+    this.assertDynamicPatchIfNeeded(harness, isFirstTurn, {
+      model: modelOverride,
+      thinkingLevel: thinkingLevelOverride,
+    });
     const spawnOptions = this.buildSpawnOptions(
       sessionId,
       agent,
@@ -1753,8 +1820,7 @@ export class AgentRouter {
           }
         }
 
-        const effectiveThinking = thinkingLevelOverride ?? agent.thinkingLevel;
-        const needsPatch = Boolean(modelOverride) || Boolean(effectiveThinking);
+        const needsPatch = Boolean(modelOverride) || Boolean(thinkingLevelOverride);
         // Pi creates the session key on the first HTTP POST. Before that,
         // sessions.patch can't find the key and times out (10s wasted).
         // Skip the patch on the first turn; buildSpawnOptions already
@@ -1771,7 +1837,7 @@ export class AgentRouter {
           }
           const patch: { model?: string; thinkingLevel?: AgentConfig["thinkingLevel"] } = {};
           if (modelOverride) patch.model = modelOverride;
-          if (effectiveThinking) patch.thinkingLevel = effectiveThinking;
+          if (thinkingLevelOverride) patch.thinkingLevel = thinkingLevelOverride;
           try {
             await harness.patchSession(controlClient, sessionId, patch);
           } catch (patchErr) {
