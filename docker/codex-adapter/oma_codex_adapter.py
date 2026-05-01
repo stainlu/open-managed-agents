@@ -78,6 +78,10 @@ def _codex_child_env() -> dict[str, str]:
     return env
 
 
+def _codex_api_key() -> str:
+    return _env("CODEX_API_KEY") or _env("OPENAI_API_KEY")
+
+
 def _now_ms() -> int:
     return int(time.time() * 1000)
 
@@ -308,8 +312,23 @@ class CodexAdapterRuntime:
         )
         client.start()
         client.initialize()
+        self._login_with_api_key_if_present(client)
         state.client = client
         return client
+
+    def _login_with_api_key_if_present(self, client: Any) -> None:
+        api_key = _codex_api_key()
+        if not api_key:
+            return
+        # Production `codex app-server` intentionally does not honor API-key env
+        # auth directly. Login through the app-server account protocol so the
+        # native OpenAI transport has a real auth snapshot before the first turn.
+        result = client._request_raw(
+            "account/login/start",
+            {"type": "apiKey", "apiKey": api_key},
+        )
+        if not isinstance(result, dict) or result.get("type") != "apiKey":
+            raise RuntimeError("Codex app-server rejected API-key login")
 
     def _thread_params(self, request: dict[str, Any]) -> dict[str, Any]:
         agent = request["agent"]
