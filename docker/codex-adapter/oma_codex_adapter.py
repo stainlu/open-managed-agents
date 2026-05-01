@@ -51,6 +51,7 @@ def _codex_child_env() -> dict[str, str]:
         "CODEX_HOME": _env("CODEX_HOME", _env("OMA_CODEX_HOME", "/workspace/.codex")),
     }
     default_keys = [
+        "CODEX_API_KEY",
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
         "OPENAI_ORG_ID",
@@ -70,6 +71,10 @@ def _codex_child_env() -> dict[str, str]:
         value = os.environ.get(key)
         if value:
             env[key] = value
+    if "CODEX_API_KEY" not in env and env.get("OPENAI_API_KEY"):
+        env["CODEX_API_KEY"] = env["OPENAI_API_KEY"]
+    if "OPENAI_API_KEY" not in env and env.get("CODEX_API_KEY"):
+        env["OPENAI_API_KEY"] = env["CODEX_API_KEY"]
     return env
 
 

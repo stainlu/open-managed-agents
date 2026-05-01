@@ -10,6 +10,7 @@ export default defineConfig({
     exclude: [
       "**/node_modules/**",
       "**/dist/**",
+      "data/**",
       "docker/**",
       "sdk/**/dist/**",
     ],

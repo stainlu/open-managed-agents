@@ -99,6 +99,7 @@ function collectPassthroughEnv(): Record<string, string> {
     "AWS_BEARER_TOKEN_BEDROCK",
     // Direct provider API keys
     "ANTHROPIC_API_KEY",
+    "CODEX_API_KEY",
     "OPENAI_API_KEY",
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",

@@ -33,6 +33,17 @@ export type CodexHarnessAdapterConfig = {
   environments: EnvironmentStore;
 };
 
+function codexPassthroughEnv(env: Record<string, string>): Record<string, string> {
+  const next = { ...env };
+  if (!next.CODEX_API_KEY && next.OPENAI_API_KEY) {
+    next.CODEX_API_KEY = next.OPENAI_API_KEY;
+  }
+  if (!next.OPENAI_API_KEY && next.CODEX_API_KEY) {
+    next.OPENAI_API_KEY = next.CODEX_API_KEY;
+  }
+  return next;
+}
+
 export class CodexHarnessAdapter implements HarnessAdapter {
   readonly id = "codex";
   readonly displayName = "Codex";
@@ -126,7 +137,7 @@ export class CodexHarnessAdapter implements HarnessAdapter {
     this.prepareWorkspace(agent.agentId, sessionId);
 
     const env: Record<string, string> = {
-      ...this.cfg.passthroughEnv,
+      ...codexPassthroughEnv(this.cfg.passthroughEnv),
       OMA_ADAPTER_PROTOCOL: "oma.adapter.v1",
       OMA_ADAPTER_HARNESS_ID: this.id,
       OMA_ADAPTER_PORT: String(this.cfg.gatewayPort),

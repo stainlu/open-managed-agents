@@ -129,6 +129,7 @@ services:
       AWS_BEARER_TOKEN_BEDROCK: ${AWS_BEARER_TOKEN_BEDROCK:-}
       # Direct provider API keys (forwarded to agent containers as-is)
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CODEX_API_KEY: ${CODEX_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
