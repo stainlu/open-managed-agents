@@ -47,6 +47,7 @@ services:
       OPENCLAW_RUNTIME_IMAGE: ghcr.io/stainlu/open-managed-agents-openclaw-agent:latest
       OMA_HERMES_RUNTIME_IMAGE: ghcr.io/stainlu/open-managed-agents-hermes-agent:latest
       OMA_CODEX_RUNTIME_IMAGE: ghcr.io/stainlu/open-managed-agents-codex-agent:latest
+      OMA_CLAUDE_AGENT_SDK_RUNTIME_IMAGE: ghcr.io/stainlu/open-managed-agents-claude-agent-sdk-agent:latest
       # Egress-proxy sidecar image for networking:limited sessions.
       # Override to pin a sha-tagged release instead of latest.
       OPENCLAW_EGRESS_PROXY_IMAGE: ghcr.io/stainlu/open-managed-agents-egress-proxy:latest
@@ -157,6 +158,7 @@ services:
       - ensure-agent-image
       - ensure-hermes-agent-image
       - ensure-codex-agent-image
+      - ensure-claude-agent-sdk-agent-image
 
   # Pulls the agent runtime image so it's available locally when the
   # orchestrator (via dockerode) spawns per-session containers from it.
@@ -187,6 +189,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.codex-runtime
+    entrypoint: ["/bin/true"]
+    command: ["true"]
+    restart: "no"
+
+  ensure-claude-agent-sdk-agent-image:
+    image: ghcr.io/stainlu/open-managed-agents-claude-agent-sdk-agent:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.claude-agent-sdk-runtime
     entrypoint: ["/bin/true"]
     command: ["true"]
     restart: "no"

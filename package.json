@@ -22,8 +22,9 @@
     "docker:build-runtime": "docker build -f Dockerfile.runtime -t open-managed-agents/openclaw-agent:latest .",
     "docker:build-hermes-runtime": "docker build -f Dockerfile.hermes-runtime -t open-managed-agents/hermes-agent:latest .",
     "docker:build-codex-runtime": "docker build -f Dockerfile.codex-runtime -t open-managed-agents/codex-agent:latest .",
+    "docker:build-claude-agent-sdk-runtime": "docker build -f Dockerfile.claude-agent-sdk-runtime -t open-managed-agents/claude-agent-sdk-agent:latest .",
     "docker:build-orchestrator": "docker build -f Dockerfile.orchestrator -t open-managed-agents/orchestrator:latest .",
-    "docker:build": "pnpm docker:build-runtime && pnpm docker:build-hermes-runtime && pnpm docker:build-codex-runtime && pnpm docker:build-orchestrator"
+    "docker:build": "pnpm docker:build-runtime && pnpm docker:build-hermes-runtime && pnpm docker:build-codex-runtime && pnpm docker:build-claude-agent-sdk-runtime && pnpm docker:build-orchestrator"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",

@@ -67,6 +67,9 @@ jobs:
       - name: apply-provider-config.mjs syntax
         run: node --check docker/apply-provider-config.mjs
 
+      - name: Claude Agent SDK adapter syntax
+        run: node --check docker/claude-agent-sdk-adapter/oma_claude_agent_sdk_adapter.mjs
+
       # Egress-proxy sidecar (networking: limited enforcement). Shipped
       # as its own tiny image with no deps — uses node:test built-in.
       - name: Egress-proxy — syntax

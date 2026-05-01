@@ -1,0 +1,49 @@
+# Open Managed Agents - Claude Agent SDK adapter runtime image
+#
+# Runs @anthropic-ai/claude-agent-sdk behind the internal oma.adapter.v1
+# HTTP/SSE protocol. The orchestrator owns managed session lifecycle,
+# isolation, queues, policy, and public API; Claude Agent SDK owns the agent loop.
+
+FROM node:22-bookworm-slim
+
+ARG CLAUDE_AGENT_SDK_VERSION=0.2.123
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        git \
+        tini \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/oma-claude-agent-sdk-adapter
+
+RUN npm install --omit=dev --no-audit --no-fund \
+        "@anthropic-ai/claude-agent-sdk@${CLAUDE_AGENT_SDK_VERSION}"
+
+RUN groupadd -r claude && useradd -r -g claude -m -d /home/claude claude
+RUN mkdir -p /workspace /opt/oma-claude-agent-sdk-adapter \
+    && chown -R claude:claude /workspace /home/claude /opt/oma-claude-agent-sdk-adapter
+
+COPY docker/claude-agent-sdk-adapter/oma_claude_agent_sdk_adapter.mjs \
+    /opt/oma-claude-agent-sdk-adapter/oma_claude_agent_sdk_adapter.mjs
+
+USER claude
+WORKDIR /workspace
+
+ENV OMA_ADAPTER_PROTOCOL="oma.adapter.v1" \
+    OMA_ADAPTER_HARNESS_ID="claude-agent-sdk" \
+    OMA_ADAPTER_PORT="18789" \
+    OPENCLAW_GATEWAY_PORT="18789" \
+    OMA_STATE_DIR="/workspace" \
+    OMA_CLAUDE_CWD="/workspace" \
+    OMA_CLAUDE_CONFIG_DIR="/workspace/.claude" \
+    CLAUDE_CONFIG_DIR="/workspace/.claude" \
+    CLAUDE_AGENT_SDK_CLIENT_APP="open-managed-agents/0.1"
+
+EXPOSE 18789
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
+    CMD curl --silent --fail "http://127.0.0.1:${OMA_ADAPTER_PORT}/readyz" || exit 1
+
+ENTRYPOINT ["/usr/bin/tini", "--", "node", "/opt/oma-claude-agent-sdk-adapter/oma_claude_agent_sdk_adapter.mjs"]

@@ -43,6 +43,7 @@ ENV NODE_ENV=production \
     OPENCLAW_RUNTIME_IMAGE=open-managed-agents/openclaw-agent:latest \
     OMA_HERMES_RUNTIME_IMAGE=open-managed-agents/hermes-agent:latest \
     OMA_CODEX_RUNTIME_IMAGE=open-managed-agents/codex-agent:latest \
+    OMA_CLAUDE_AGENT_SDK_RUNTIME_IMAGE=open-managed-agents/claude-agent-sdk-agent:latest \
     OPENCLAW_HOST_STATE_ROOT=/var/openclaw/sessions \
     OPENCLAW_GATEWAY_PORT=18789
 

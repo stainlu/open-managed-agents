@@ -5,7 +5,7 @@ info:
   license:
     name: MIT
     identifier: MIT
-  description: API-first managed-agent layer for OpenClaw, Hermes, and future agent harnesses.
+  description: API-first managed-agent layer for OpenClaw, Hermes, Codex, Claude Agent SDK, and future agent harnesses.
 servers:
   - url: http://localhost:8080
 security:
@@ -555,7 +555,7 @@ components:
     HarnessId:
       type: string
       pattern: "^[a-z0-9][a-z0-9._-]*$"
-      examples: [openclaw, hermes, codex]
+      examples: [openclaw, hermes, codex, claude-agent-sdk]
     HarnessCapability:
       type: object
       required: [support, detail]

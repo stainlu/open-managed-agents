@@ -25,7 +25,7 @@ export type PermissionPolicy =
 
 export type ThinkingLevel = "off" | "low" | "medium" | "high" | "xhigh";
 
-export type HarnessId = "openclaw" | "hermes" | "codex" | (string & {});
+export type HarnessId = "openclaw" | "hermes" | "codex" | "claude-agent-sdk" | (string & {});
 
 export type HarnessCapabilitySupport = "supported" | "partial" | "unsupported";
 
