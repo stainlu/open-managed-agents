@@ -149,6 +149,11 @@ describe("adapter-server client", () => {
           protocol_version: "oma.adapter.v1",
           output: "done",
           usage: { tokens_in: 11, tokens_out: 7, model: "deepseek/v4" },
+          native: {
+            native_session_id: "native-ses",
+            native_thread_id: "thread-1",
+            native_metadata: { checkpoint: 3 },
+          },
           events: [agentEvent],
         },
       },
@@ -187,5 +192,16 @@ describe("adapter-server client", () => {
     expect(chunks.at(-1)).toBe("[DONE]");
     expect(stream.events?.map((event) => event.eventId)).toEqual(["evt_user", "evt_agent"]);
     expect(stream.events?.map((event) => event.sessionId)).toEqual(["ses_123", "ses_123"]);
+    expect(stream.result).toMatchObject({
+      output: "done",
+      tokensIn: 11,
+      tokensOut: 7,
+      model: "deepseek/v4",
+      native: {
+        nativeSessionId: "native-ses",
+        nativeThreadId: "thread-1",
+        nativeMetadata: { checkpoint: 3 },
+      },
+    });
   });
 });

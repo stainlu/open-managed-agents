@@ -716,22 +716,30 @@ export class AgentRouter {
           if (stream.events && stream.events.length > 0) {
             router.events.appendEvents?.(agent.agentId, args.sessionId, stream.events);
           }
+          const completion = stream.result;
           const latest = await router.waitForTurnAdvanced(
             agent.agentId,
             args.sessionId,
             beforeTurn,
-            undefined,
+            completion,
             harness,
           );
           router.mirrorVisibleEvents(agent.agentId, args.sessionId);
-          const tokensIn = latest?.tokensIn ?? 0;
-          const tokensOut = latest?.tokensOut ?? 0;
+          const tokensIn = latest?.tokensIn ?? completion?.tokensIn ?? 0;
+          const tokensOut = latest?.tokensOut ?? completion?.tokensOut ?? 0;
           const costUsd = await router.resolveRunCostUsd(
-            latest?.model ?? harness.modelForUsage(agent.model),
+            latest?.model ?? completion?.model ?? harness.modelForUsage(agent.model),
             tokensIn,
             tokensOut,
             latest?.costUsd,
           );
+          if (completion?.native) {
+            router.sessions.updateNativeMetadata(args.sessionId, {
+              nativeSessionId: completion.native.nativeSessionId,
+              nativeThreadId: completion.native.nativeThreadId,
+              nativeMetadata: completion.native.nativeMetadata,
+            });
+          }
           router.pendingApprovals.delete(args.sessionId);
           router.sessions.endRunSuccess(args.sessionId, { tokensIn, tokensOut, costUsd });
           return;

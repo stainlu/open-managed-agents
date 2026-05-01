@@ -136,17 +136,24 @@ export async function invokeStreamingAdapterServerTurn(
   const reader = res.body.getReader();
   let closed = false;
   const events: Event[] = [];
+  let result: HarnessTurnResult | undefined;
   return {
     chunks: decodeAdapterServerSseAsOpenAiChunks(
       reader,
       args.sessionId,
       args.agent?.model ?? args.model ?? "adapter-server",
       events,
+      (completed) => {
+        result = completed;
+      },
       () => {
         closed = true;
       },
     ),
     events,
+    get result() {
+      return result;
+    },
     abort: async (reason?: string) => {
       if (closed) return;
       await reader.cancel(reason ?? "client disconnected").catch(() => {
@@ -287,6 +294,7 @@ async function* decodeAdapterServerSseAsOpenAiChunks(
   sessionId: string,
   model: string,
   events: Event[],
+  onCompleted: (result: HarnessTurnResult) => void,
   onClosed: () => void,
 ): AsyncGenerator<string, void, void> {
   const decoder = new TextDecoder("utf-8");
@@ -327,12 +335,14 @@ async function* decodeAdapterServerSseAsOpenAiChunks(
           });
         }
         if (parsed.type === "turn.completed") {
-          events.push(...parsed.result.events.map(adapterEventToManagedEvent));
+          const result = turnResultFromAdapterResponse(parsed.result);
+          events.push(...(result.events ?? []));
+          onCompleted(result);
           yield JSON.stringify({
             id: `chatcmpl-${sessionId}`,
             object: "chat.completion.chunk",
             created: Math.floor(Date.now() / 1000),
-            model: parsed.result.usage.model ?? model,
+            model: result.model ?? model,
             choices: [
               {
                 index: 0,
