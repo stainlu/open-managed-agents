@@ -18,6 +18,12 @@ function env(name, fallback = "") {
   return fallback;
 }
 
+function isConformanceTurn(request) {
+  if (env("OMA_ADAPTER_CONFORMANCE") !== "1") return false;
+  const model = String(request?.turn?.model || request?.agent?.model || "").trim();
+  return model === "conformance/model";
+}
+
 function nowMs() {
   return Date.now();
 }
@@ -567,6 +573,9 @@ class ClaudeAgentSdkAdapterRuntime {
       resultMessage: null,
     };
     try {
+      if (isConformanceTurn(request)) {
+        return this._runConformanceTurn(state, request, writeFrame);
+      }
       const options = this._buildOptions(state, request, writeFrame);
       const prompt = String(request.turn?.content ?? "");
       const query = await claudeQuery();
@@ -598,6 +607,20 @@ class ClaudeAgentSdkAdapterRuntime {
       for (const pending of state.pendingApprovals.values()) pending.resolve("deny");
       state.pendingApprovals.clear();
     }
+  }
+
+  _runConformanceTurn(state, request, writeFrame) {
+    const output = stringify(request.turn?.content ?? "");
+    state.model = "conformance/model";
+    state.usage = { tokens_in: 1, tokens_out: 1 };
+    if (writeFrame) writeFrame({ type: "delta", content: output });
+    const event = this.appendEvent(state, "agent.message", output, {
+      tokens_in: 1,
+      tokens_out: 1,
+      model: state.model,
+    });
+    if (writeFrame) writeFrame({ type: "event", event });
+    return output;
   }
 
   _handleSdkMessage(state, turn, message, writeFrame) {

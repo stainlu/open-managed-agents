@@ -38,6 +38,15 @@ def _env(name: str, default: str = "") -> str:
     return value
 
 
+def _is_conformance_turn(request: dict[str, Any]) -> bool:
+    if _env("OMA_ADAPTER_CONFORMANCE") != "1":
+        return False
+    agent = request.get("agent") or {}
+    turn = request.get("turn") or {}
+    model = str(turn.get("model") or agent.get("model") or "").strip()
+    return model == "conformance/model"
+
+
 def _now_ms() -> int:
     return int(time.time() * 1000)
 
@@ -541,6 +550,9 @@ class HermesAdapterRuntime:
         request: dict[str, Any],
         stream_queue: queue.Queue | None = None,
     ) -> dict[str, Any]:
+        if _is_conformance_turn(request):
+            return self._run_conformance_turn(state, request, stream_queue)
+
         agent = self._ensure_agent(state, request)
         turn = request["turn"]
         agent_spec = request["agent"]
@@ -643,6 +655,39 @@ class HermesAdapterRuntime:
                 os.environ.pop("HERMES_EXEC_ASK", None)
             else:
                 os.environ["HERMES_EXEC_ASK"] = previous_exec_ask
+
+    def _run_conformance_turn(
+        self,
+        state: ManagedSession,
+        request: dict[str, Any],
+        stream_queue: queue.Queue | None,
+    ) -> dict[str, Any]:
+        output = _stringify(request["turn"]["content"])
+        state.requested_model = "conformance/model"
+        state.model = "conformance/model"
+        state.provider = "conformance"
+        state.api_mode = "local"
+        if stream_queue is not None:
+            stream_queue.put({"type": "delta", "content": output})
+        with state.lock:
+            event = self._append_event(
+                state,
+                "agent.message",
+                output,
+                tokens_in=1,
+                tokens_out=1,
+                cost_usd=0.0,
+                model=state.model,
+            )
+        if stream_queue is not None:
+            stream_queue.put({"type": "event", "event": event})
+        return {
+            "final_response": output,
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "estimated_cost_usd": 0.0,
+            "model": state.model,
+        }
 
     def _result_payload(
         self,

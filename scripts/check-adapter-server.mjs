@@ -21,6 +21,20 @@ const CAPABILITY_KEYS = [
   "subagents",
 ];
 
+const MANAGED_EVENT_TYPES = new Set([
+  "user.message",
+  "agent.message",
+  "agent.error",
+  "agent.tool_use",
+  "agent.tool_result",
+  "agent.thinking",
+  "agent.tool_confirmation_request",
+  "session.model_change",
+  "session.thinking_level_change",
+  "session.compaction",
+  "session.runtime_notice",
+]);
+
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const ADAPTERS = {
@@ -167,10 +181,218 @@ function assertNativeMaybe(native, route) {
   }
 }
 
+function assertPlainObject(value, route, name) {
+  assert(value && typeof value === "object" && !Array.isArray(value), `${route} ${name} must be object`);
+}
+
+function assertNonnegativeInteger(value, route, name) {
+  assert(Number.isInteger(value) && value >= 0, `${route} ${name} must be nonnegative integer`);
+}
+
+function assertUsageMaybe(usage, route) {
+  if (usage === undefined || usage === null) return;
+  assertPlainObject(usage, route, "usage");
+  assertNonnegativeInteger(usage.tokens_in, route, "usage.tokens_in");
+  assertNonnegativeInteger(usage.tokens_out, route, "usage.tokens_out");
+  if (usage.cost_usd !== undefined) {
+    assert(typeof usage.cost_usd === "number" && usage.cost_usd >= 0, `${route} usage.cost_usd must be nonnegative number`);
+  }
+  if (usage.model !== undefined) {
+    assert(typeof usage.model === "string" && usage.model.length > 0, `${route} usage.model must be nonempty string`);
+  }
+}
+
+function assertManagedEvent(event, route, expectedSessionId) {
+  assertPlainObject(event, route, "event");
+  assert(typeof event.event_id === "string" && event.event_id.length > 0, `${route} event_id must be nonempty string`);
+  assert(typeof event.session_id === "string" && event.session_id.length > 0, `${route} session_id must be nonempty string`);
+  if (expectedSessionId !== undefined) {
+    assert(event.session_id === expectedSessionId, `${route} event session mismatch: expected ${expectedSessionId}, got ${event.session_id}`);
+  }
+  assert(MANAGED_EVENT_TYPES.has(event.type), `${route} unsupported event type ${event.type}`);
+  assert(typeof event.content === "string", `${route} event.content must be string`);
+  assertNonnegativeInteger(event.created_at, route, "event.created_at");
+
+  for (const key of ["tokens_in", "tokens_out"]) {
+    if (event[key] !== undefined) assertNonnegativeInteger(event[key], route, `event.${key}`);
+  }
+  if (event.cost_usd !== undefined) {
+    assert(typeof event.cost_usd === "number" && event.cost_usd >= 0, `${route} event.cost_usd must be nonnegative number`);
+  }
+  for (const key of ["model", "tool_name", "tool_call_id", "approval_id"]) {
+    if (event[key] !== undefined) {
+      assert(typeof event[key] === "string" && event[key].length > 0, `${route} event.${key} must be nonempty string`);
+    }
+  }
+  if (event.tool_arguments !== undefined) {
+    assertPlainObject(event.tool_arguments, route, "event.tool_arguments");
+  }
+  if (event.is_error !== undefined) {
+    assert(typeof event.is_error === "boolean", `${route} event.is_error must be boolean`);
+  }
+}
+
+function assertTurnResult(result, route, expectedSessionId) {
+  assertPlainObject(result, route, "turn result");
+  assert(result.protocol_version === PROTOCOL_VERSION, `${route} turn result protocol_version mismatch`);
+  assert(typeof result.output === "string", `${route} turn result output must be string`);
+  assertUsageMaybe(result.usage, route);
+  assertNativeMaybe(result.native, route);
+  assert(Array.isArray(result.events), `${route} turn result events must be an array`);
+  for (const event of result.events) {
+    assertManagedEvent(event, route, expectedSessionId);
+  }
+}
+
 function assertControlResponse(response, route) {
   assertProtocolEnvelope(response, route);
   assert(typeof response.data.accepted === "boolean", `${route} accepted must be boolean`);
   assertNativeMaybe(response.data.native, route);
+}
+
+function streamTurnRequest(sessionId, harnessId) {
+  return {
+    protocol_version: PROTOCOL_VERSION,
+    session: { managed_session_id: sessionId },
+    agent: {
+      agent_id: `agt_conformance_${harnessId.replaceAll("-", "_")}`,
+      harness_id: harnessId,
+      model: "conformance/model",
+      instructions: "Echo the marker exactly.",
+      tools: [],
+      permission_policy: { type: "always_allow" },
+      mcp_servers: {},
+      thinking_level: "off",
+      callable_agents: [],
+      max_subagent_depth: 0,
+    },
+    environment: { networking: { type: "unrestricted" } },
+    turn: {
+      content: `stream-conformance-${harnessId}`,
+      stream: true,
+      timeout_ms: 5_000,
+    },
+  };
+}
+
+function parseSseFrame(rawFrame, route) {
+  const dataLines = rawFrame
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart());
+  if (dataLines.length === 0) return null;
+  const data = dataLines.join("\n");
+  if (data === "[DONE]") return null;
+  try {
+    return JSON.parse(data);
+  } catch (error) {
+    throw new Error(`${route} returned invalid SSE JSON: ${data.slice(0, 300)}`);
+  }
+}
+
+async function readSseFramesUntilCompleted(res, route) {
+  assert(res.body, `${route} response is missing a readable body`);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  const frames = [];
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      while (true) {
+        const match = buffer.match(/\r?\n\r?\n/);
+        if (!match || match.index === undefined) break;
+        const rawFrame = buffer.slice(0, match.index);
+        buffer = buffer.slice(match.index + match[0].length);
+        const frame = parseSseFrame(rawFrame, route);
+        if (!frame) continue;
+        frames.push(frame);
+        if (frame.type === "turn.completed") return frames;
+      }
+    }
+
+    buffer += decoder.decode();
+    const frame = parseSseFrame(buffer, route);
+    if (frame) frames.push(frame);
+    return frames;
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+}
+
+function assertStreamFrame(frame, route, expectedSessionId) {
+  assertPlainObject(frame, route, "stream frame");
+  assert(typeof frame.type === "string" && frame.type.length > 0, `${route} frame.type must be string`);
+  if (frame.type === "delta") {
+    assert(typeof frame.content === "string", `${route} delta.content must be string`);
+    return;
+  }
+  if (frame.type === "event") {
+    assertManagedEvent(frame.event, route, expectedSessionId);
+    return;
+  }
+  if (frame.type === "approval.requested") {
+    assertPlainObject(frame.approval, route, "approval");
+    assert(typeof frame.approval.approval_id === "string" && frame.approval.approval_id.length > 0, `${route} approval_id must be string`);
+    assert(frame.approval.managed_session_id === expectedSessionId, `${route} approval session mismatch`);
+    assert(typeof frame.approval.tool_name === "string" && frame.approval.tool_name.length > 0, `${route} approval tool_name must be string`);
+    assert(typeof frame.approval.description === "string", `${route} approval description must be string`);
+    assertNonnegativeInteger(frame.approval.arrived_at, route, "approval.arrived_at");
+    return;
+  }
+  if (frame.type === "approval.resolved") {
+    assert(typeof frame.approval_id === "string" && frame.approval_id.length > 0, `${route} approval_id must be string`);
+    if (frame.decision !== undefined) assert(["allow", "deny"].includes(frame.decision), `${route} invalid approval decision`);
+    return;
+  }
+  if (frame.type === "state") {
+    assert(["starting", "running", "final", "error"].includes(frame.state), `${route} invalid state ${frame.state}`);
+    if (frame.error_message !== undefined) assert(typeof frame.error_message === "string", `${route} error_message must be string`);
+    return;
+  }
+  if (frame.type === "turn.completed") {
+    assertTurnResult(frame.result, route, expectedSessionId);
+    return;
+  }
+  throw new Error(`${route} unknown stream frame type ${frame.type}`);
+}
+
+async function assertStreamingTurn(baseUrl, token, sessionId, harnessId) {
+  const route = `POST /sessions/${sessionId}/turns stream`;
+  const res = await fetch(`${baseUrl}/sessions/${encodeURIComponent(sessionId)}/turns`, {
+    method: "POST",
+    headers: {
+      ...headers(token),
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify(streamTurnRequest(sessionId, harnessId)),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    assert(false, `${route} returned HTTP ${res.status}: ${text.slice(0, 500)}`);
+  }
+  const contentType = res.headers.get("content-type") ?? "";
+  assert(contentType.includes("text/event-stream"), `${route} content-type must be text/event-stream, got ${contentType}`);
+
+  const frames = await readSseFramesUntilCompleted(res, route);
+  assert(frames.length > 0, `${route} returned no SSE data frames`);
+  for (const frame of frames) assertStreamFrame(frame, route, sessionId);
+
+  const errors = frames.filter((frame) => frame.type === "state" && frame.state === "error");
+  assert(errors.length === 0, `${route} returned error state: ${errors.map((frame) => frame.error_message ?? "").join("; ")}`);
+
+  const eventFrames = frames.filter((frame) => frame.type === "event");
+  assert(eventFrames.length > 0, `${route} must emit at least one managed event frame`);
+  assert(eventFrames.some((frame) => frame.event.type === "user.message"), `${route} must emit the user.message event`);
+
+  const completed = frames.filter((frame) => frame.type === "turn.completed");
+  assert(completed.length === 1, `${route} must emit exactly one turn.completed frame`);
+  assert(completed[0].result.events.length > 0, `${route} turn.completed result must include managed events`);
 }
 
 async function waitForReady(baseUrl, processState) {
@@ -243,6 +465,10 @@ async function runChecks({ baseUrl, harnessId, token, readyResponse }) {
   assert(Array.isArray(approvals.data.approvals), "approvals must be an array");
   assertNativeMaybe(approvals.data.native, "GET /approvals");
 
+  if (ready.data.capabilities.streaming === true) {
+    await assertStreamingTurn(baseUrl, token, `${sessionId}_stream`, harnessId);
+  }
+
   const controlBody = {
     protocol_version: PROTOCOL_VERSION,
     session: { managed_session_id: sessionId },
@@ -307,6 +533,7 @@ async function runSpawnedAdapter(adapterName) {
     env: {
       ...process.env,
       ...def.env(tempDir),
+      OMA_ADAPTER_CONFORMANCE: "1",
       OMA_ADAPTER_HOST: "127.0.0.1",
       OMA_ADAPTER_PORT: String(port),
       OPENCLAW_GATEWAY_PORT: String(port),
