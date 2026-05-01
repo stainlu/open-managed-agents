@@ -97,6 +97,13 @@ pnpm docker:build
 docker compose up --build -d
 ```
 
+If another local stack already owns port 8080:
+
+```bash
+OPENCLAW_HOST_PORT=8081 docker compose up --build -d
+BASE_URL=http://localhost:8081 pnpm test:e2e-harnesses
+```
+
 Live non-OpenClaw harness E2E:
 
 ```bash
