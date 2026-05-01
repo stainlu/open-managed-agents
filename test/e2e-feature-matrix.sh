@@ -249,6 +249,8 @@ create_basic_agent() {
   agent_id="$(echo "${response}" | jq -r '.agent_id')"
   [[ -n "${agent_id}" && "${agent_id}" != "null" ]] \
     || die "failed to create ${harness} agent: ${response}"
+  [[ "$(echo "${response}" | jq -r '.harness_id')" == "${harness}" ]] \
+    || die "created agent ${agent_id} has wrong harness: ${response}"
   CREATED_AGENTS+=("${agent_id}")
   CREATED_AGENT_ID="${agent_id}"
 }
@@ -260,6 +262,12 @@ create_session() {
   session_id="$(echo "${response}" | jq -r '.session_id')"
   [[ -n "${session_id}" && "${session_id}" != "null" ]] \
     || die "failed to create session for ${agent_id}: ${response}"
+  [[ "$(echo "${response}" | jq -r '.agent_id')" == "${agent_id}" ]] \
+    || die "created session ${session_id} has wrong agent: ${response}"
+  [[ "$(echo "${response}" | jq -r '.status')" == "idle" ]] \
+    || die "created session ${session_id} should start idle: ${response}"
+  [[ "$(echo "${response}" | jq -r '.turns')" == "0" ]] \
+    || die "created session ${session_id} should start at turns=0: ${response}"
   CREATED_SESSIONS+=("${session_id}")
   CREATED_SESSION_ID="${session_id}"
 }
@@ -363,6 +371,109 @@ run_static_rejection_checks() {
       }')"
     assert_create_rejected "${harness}" "permission_deny" "${body}"
   fi
+}
+
+run_approval_policy_check() {
+  local catalog="$1"
+  local harness="$2"
+  local model="$3"
+  local support body response agent_id policy
+
+  support="$(cap_support "${catalog}" "${harness}" "tool_approvals")"
+  body="$(jq -n \
+    --arg harnessId "${harness}" \
+    --arg model "${model}" \
+    '{
+      name: "feature-matrix-approval-policy",
+      harnessId: $harnessId,
+      model: $model,
+      tools: [],
+      instructions: "",
+      permissionPolicy: {type: "always_ask"}
+    }')"
+
+  if [[ "${support}" == "unsupported" ]]; then
+    assert_create_rejected "${harness}" "tool_approvals" "${body}"
+    return
+  fi
+
+  response="$(curl_json POST /v1/agents -d "${body}")"
+  agent_id="$(echo "${response}" | jq -r '.agent_id')"
+  [[ -n "${agent_id}" && "${agent_id}" != "null" ]] \
+    || die "${harness}: failed to create approval-policy agent: ${response}"
+  CREATED_AGENTS+=("${agent_id}")
+  policy="$(echo "${response}" | jq -r '.permission_policy.type')"
+  [[ "${policy}" == "always_ask" ]] \
+    || die "${harness}: approval-policy agent returned wrong policy: ${response}"
+  say "${harness}: PASS approval policy accepted for ${support} tool_approvals"
+}
+
+run_session_lifecycle_check() {
+  local harness="$1"
+  local model="$2"
+  local safe_harness run_id agent_id session_id marker1 marker2 session_json events_json status
+
+  safe_harness="$(safe_harness_name "${harness}")"
+  run_id="$(date +%s)"
+  marker1="OMA_FEATURE_LIFECYCLE_${safe_harness}_MEMORY_${run_id}"
+  marker2="OMA_FEATURE_LIFECYCLE_${safe_harness}_RECALL_${run_id}"
+
+  create_basic_agent \
+    "${harness}" \
+    "${model}" \
+    "feature-${harness}-lifecycle" \
+    "You are a live lifecycle test agent. Follow exact-output instructions."
+  agent_id="${CREATED_AGENT_ID}"
+  create_session "${agent_id}"
+  session_id="${CREATED_SESSION_ID}"
+
+  session_json="$(curl_json GET "/v1/sessions/${session_id}")"
+  [[ "$(echo "${session_json}" | jq -r '.harness_id')" == "${harness}" ]] \
+    || die "${harness}: session get returned wrong harness: ${session_json}"
+  curl_json GET /v1/sessions \
+    | jq -e --arg sid "${session_id}" '.sessions[]? | select(.session_id == $sid)' >/dev/null \
+    || die "${harness}: created session ${session_id} missing from list"
+  say "${harness}: PASS session create/get/list lifecycle"
+
+  post_turn_and_wait \
+    "${session_id}" \
+    "${harness}:lifecycle-turn1" \
+    "Remember this token: ${marker1}. Reply with exactly OMA_FEATURE_LIFECYCLE_${safe_harness}_ACK_${run_id} and no other text."
+  assert_contains \
+    "${harness}: lifecycle turn1" \
+    "$(latest_agent_message "${session_id}")" \
+    "OMA_FEATURE_LIFECYCLE_${safe_harness}_ACK_${run_id}"
+
+  post_turn_and_wait \
+    "${session_id}" \
+    "${harness}:lifecycle-turn2" \
+    "Reply with exactly ${marker2} ${marker1} and no other text."
+  assert_contains \
+    "${harness}: lifecycle turn2" \
+    "$(latest_agent_message "${session_id}")" \
+    "${marker2} ${marker1}"
+
+  session_json="$(curl_json GET "/v1/sessions/${session_id}")"
+  [[ "$(echo "${session_json}" | jq -r '.status')" == "idle" ]] \
+    || die "${harness}: lifecycle session should be idle after two turns: ${session_json}"
+  [[ "$(echo "${session_json}" | jq -r '.turns')" == "2" ]] \
+    || die "${harness}: lifecycle session should have turns=2: ${session_json}"
+  assert_contains "${harness}: lifecycle output" "$(echo "${session_json}" | jq -r '.output // ""')" "${marker2}"
+
+  events_json="$(curl_json GET "/v1/sessions/${session_id}/events")"
+  [[ "$(echo "${events_json}" | jq '[.events[] | select(.type=="user.message")] | length')" == "2" ]] \
+    || die "${harness}: lifecycle events should include two user messages: ${events_json}"
+  [[ "$(echo "${events_json}" | jq '[.events[] | select(.type=="agent.message")] | length')" == "2" ]] \
+    || die "${harness}: lifecycle events should include two agent messages: ${events_json}"
+  say "${harness}: PASS two-turn managed session resume"
+
+  status="$(curl_json_status DELETE "/v1/sessions/${session_id}" "${SCRATCH}/${harness}-delete-session.json")"
+  [[ "${status}" == "200" ]] \
+    || die "${harness}: expected delete session HTTP 200, got ${status}: $(cat "${SCRATCH}/${harness}-delete-session.json")"
+  status="$(curl_json_status GET "/v1/sessions/${session_id}" "${SCRATCH}/${harness}-get-deleted-session.json")"
+  [[ "${status}" == "404" ]] \
+    || die "${harness}: expected deleted session GET HTTP 404, got ${status}: $(cat "${SCRATCH}/${harness}-get-deleted-session.json")"
+  say "${harness}: PASS session delete lifecycle"
 }
 
 extract_stream_text() {
@@ -539,6 +650,8 @@ run_harness_matrix() {
   done
 
   run_static_rejection_checks "${catalog}" "${harness}" "${model}"
+  run_approval_policy_check "${catalog}" "${harness}" "${model}"
+  run_session_lifecycle_check "${harness}" "${model}"
 
   create_basic_agent \
     "${harness}" \
