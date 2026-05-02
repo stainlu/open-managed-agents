@@ -122,6 +122,18 @@ key, export it as `KIMI_API_KEY` before starting compose. The script skips
 harnesses whose provider key is not present; set `OMA_LIVE_REQUIRE=1` to run
 anyway when the compose/orchestrator process already has server-side credentials.
 
+Broader provider-backed feature matrix:
+
+```bash
+pnpm test:e2e-feature-matrix
+OMA_FEATURE_TEST_APPROVAL=1 pnpm test:e2e-feature-matrix
+```
+
+The default matrix checks catalog enforcement, session lifecycle, streaming,
+OpenAI-compatible named-session resume, and compaction behavior. The approval
+flag enables live non-OpenClaw tool-approval checks, which are opt-in because
+they depend on the native model choosing the requested tool call.
+
 Some runtime internals still use `OPENCLAW_*` names for compatibility with the
 OpenClaw adapter and existing deployment scripts. New harness-neutral adapter
 protocol pieces use `OMA_*`.

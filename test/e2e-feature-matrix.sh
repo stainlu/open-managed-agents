@@ -32,6 +32,7 @@
 #   OMA_FEATURE_HERMES_REQUIRED_KEY=KIMI_CODING_API_KEY ./test/e2e-feature-matrix.sh
 #   OMA_FEATURE_REQUIRE=1 ./test/e2e-feature-matrix.sh
 #   OMA_FEATURE_TEST_CANCEL=1 ./test/e2e-feature-matrix.sh
+#   OMA_FEATURE_TEST_APPROVAL=1 ./test/e2e-feature-matrix.sh
 #
 # Without OMA_FEATURE_REQUIRE=1, harnesses whose provider key is not visible in
 # the local test shell are skipped. With OMA_FEATURE_REQUIRE=1, the script runs
@@ -49,11 +50,13 @@ HEALTH_MAX_SEC="${OMA_FEATURE_HEALTH_MAX_SEC:-90}"
 REQUIRE="${OMA_FEATURE_REQUIRE:-0}"
 TEST_CANCEL="${OMA_FEATURE_TEST_CANCEL:-0}"
 CANCEL_DELAY_SEC="${OMA_FEATURE_CANCEL_DELAY_SEC:-1}"
+TEST_APPROVAL="${OMA_FEATURE_TEST_APPROVAL:-0}"
 
 CREATED_SESSIONS=()
 CREATED_AGENTS=()
 CREATED_AGENT_ID=""
 CREATED_SESSION_ID=""
+SSE_PIDS=()
 SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/oma-feature-matrix.XXXXXX")"
 
 say() { echo "[e2e-feature-matrix] $*"; }
@@ -61,8 +64,12 @@ die() { echo "[e2e-feature-matrix] FATAL: $*" >&2; exit 1; }
 
 cleanup() {
   local ec=$?
-  local session_id agent_id
+  local session_id agent_id sse_pid
   set +u
+  for sse_pid in "${SSE_PIDS[@]}"; do
+    kill "${sse_pid}" >/dev/null 2>&1 || true
+    wait "${sse_pid}" >/dev/null 2>&1 || true
+  done
   for session_id in "${CREATED_SESSIONS[@]}"; do
     delete_resource "/v1/sessions/${session_id}" || true
   done
@@ -545,6 +552,224 @@ run_streaming_check() {
   say "${harness}: PASS chat.completions stream=true"
 }
 
+chat_completion_status() {
+  local agent_id="$1"
+  local session_key="$2"
+  local content="$3"
+  local out="$4"
+  local body
+
+  body="$(jq -n \
+    --arg content "${content}" \
+    '{
+      stream: false,
+      messages: [{role: "user", content: $content}]
+    }')"
+
+  if [[ -n "${OPENCLAW_API_TOKEN:-}" ]]; then
+    curl --silent --show-error \
+      -o "${out}" \
+      -w "%{http_code}" \
+      -X POST \
+      -H "Authorization: Bearer ${OPENCLAW_API_TOKEN}" \
+      -H "Content-Type: application/json" \
+      -H "x-openclaw-agent-id: ${agent_id}" \
+      -H "x-openclaw-session-key: ${session_key}" \
+      "${BASE_URL}/v1/chat/completions" \
+      -d "${body}"
+  else
+    curl --silent --show-error \
+      -o "${out}" \
+      -w "%{http_code}" \
+      -X POST \
+      -H "Content-Type: application/json" \
+      -H "x-openclaw-agent-id: ${agent_id}" \
+      -H "x-openclaw-session-key: ${session_key}" \
+      "${BASE_URL}/v1/chat/completions" \
+      -d "${body}"
+  fi
+}
+
+chat_completion_text() {
+  local path="$1"
+  jq -r '.choices[0].message.content // ""' "${path}"
+}
+
+run_chat_resume_check() {
+  local harness="$1"
+  local agent_id="$2"
+  local safe_harness run_id session_key memory ack recall out1 out2 status text session_json turns
+
+  safe_harness="$(safe_harness_name "${harness}")"
+  run_id="$(date +%s)"
+  session_key="oma_feature_chat_${safe_harness}_${run_id}"
+  memory="OMA_FEATURE_CHAT_${safe_harness}_MEMORY_${run_id}"
+  ack="OMA_FEATURE_CHAT_${safe_harness}_ACK_${run_id}"
+  recall="OMA_FEATURE_CHAT_${safe_harness}_RECALL_${run_id}"
+  out1="${SCRATCH}/${harness}-chat-resume-1.json"
+  out2="${SCRATCH}/${harness}-chat-resume-2.json"
+  CREATED_SESSIONS+=("${session_key}")
+
+  status="$(chat_completion_status \
+    "${agent_id}" \
+    "${session_key}" \
+    "Remember this token for the next turn: ${memory}. Reply with exactly ${ack} and no other text." \
+    "${out1}")"
+  [[ "${status}" == "200" ]] \
+    || die "${harness}: chat resume turn1 returned HTTP ${status}: $(cat "${out1}")"
+  text="$(chat_completion_text "${out1}")"
+  assert_contains "${harness}: chat resume turn1" "${text}" "${ack}"
+
+  status="$(chat_completion_status \
+    "${agent_id}" \
+    "${session_key}" \
+    "Reply with exactly ${recall} ${memory} and no other text." \
+    "${out2}")"
+  [[ "${status}" == "200" ]] \
+    || die "${harness}: chat resume turn2 returned HTTP ${status}: $(cat "${out2}")"
+  text="$(chat_completion_text "${out2}")"
+  assert_contains "${harness}: chat resume turn2" "${text}" "${recall} ${memory}"
+
+  session_json="$(curl_json GET "/v1/sessions/${session_key}")"
+  [[ "$(echo "${session_json}" | jq -r '.harness_id')" == "${harness}" ]] \
+    || die "${harness}: chat resume session has wrong harness: ${session_json}"
+  turns="$(echo "${session_json}" | jq -r '.turns')"
+  [[ "${turns}" == "2" ]] \
+    || die "${harness}: chat resume session should have turns=2, got ${turns}: ${session_json}"
+  say "${harness}: PASS chat.completions named-session resume"
+}
+
+start_event_stream() {
+  local session_id="$1"
+  local out="$2"
+  if [[ -n "${OPENCLAW_API_TOKEN:-}" ]]; then
+    curl --silent --no-buffer \
+      -H "Authorization: Bearer ${OPENCLAW_API_TOKEN}" \
+      "${BASE_URL}/v1/sessions/${session_id}/events?stream=true" >"${out}" 2>&1 &
+  else
+    curl --silent --no-buffer \
+      "${BASE_URL}/v1/sessions/${session_id}/events?stream=true" >"${out}" 2>&1 &
+  fi
+  echo "$!"
+}
+
+extract_approval_id() {
+  local out="$1"
+  awk '
+    $0 == "event: agent.tool_confirmation_request" { seen=1; next }
+    seen && /^data: / {
+      sub(/^data: /, "");
+      print;
+      exit;
+    }
+    seen && $0 == "" { seen=0 }
+  ' "${out}" | jq -r '.approval_id // ""'
+}
+
+wait_for_approval() {
+  local harness="$1"
+  local session_id="$2"
+  local out="$3"
+  local elapsed=0
+  local approval_id=""
+  local status=""
+
+  while [[ "${elapsed}" -lt "${MAX_POLL_SEC}" ]]; do
+    sleep "${POLL_INTERVAL_SEC}"
+    elapsed=$((elapsed + POLL_INTERVAL_SEC))
+    approval_id="$(extract_approval_id "${out}" || true)"
+    if [[ -n "${approval_id}" && "${approval_id}" != "null" ]]; then
+      echo "${approval_id}"
+      return 0
+    fi
+    status="$(curl_json GET "/v1/sessions/${session_id}" | jq -r '.status')"
+    if [[ "${status}" == "failed" || "${status}" == "idle" ]]; then
+      say "${harness}: approval stream output follows" >&2
+      head -c 4096 "${out}" >&2 || true
+      echo >&2
+      curl_json GET "/v1/sessions/${session_id}/events" | jq . >&2 || true
+      return 1
+    fi
+    say "${harness}: approval t=${elapsed}s status=${status}" >&2
+  done
+
+  say "${harness}: approval timed out; stream output follows" >&2
+  head -c 4096 "${out}" >&2 || true
+  echo >&2
+  return 1
+}
+
+run_live_approval_check() {
+  local catalog="$1"
+  local harness="$2"
+  local model="$3"
+  local support safe_harness run_id marker body response agent_id session_id sse_out sse_pid approval_id confirm_body session_json output events_json post_turn_body
+
+  support="$(cap_support "${catalog}" "${harness}" "tool_approvals")"
+  if [[ "${support}" == "unsupported" ]]; then
+    say "${harness}: skip live approval check; capability unsupported"
+    return
+  fi
+  if [[ "${TEST_APPROVAL}" != "1" ]]; then
+    say "${harness}: skip live approval check (set OMA_FEATURE_TEST_APPROVAL=1)"
+    return
+  fi
+
+  safe_harness="$(safe_harness_name "${harness}")"
+  run_id="$(date +%s)"
+  marker="OMA_FEATURE_APPROVAL_${safe_harness}_${run_id}"
+
+  body="$(jq -n \
+    --arg harnessId "${harness}" \
+    --arg model "${model}" \
+    '{
+      name: ("feature-" + $harnessId + "-approval-live"),
+      harnessId: $harnessId,
+      model: $model,
+      tools: ["bash"],
+      instructions: "You are a live tool-approval test agent. Use tools when the user explicitly asks.",
+      permissionPolicy: {type: "always_ask", tools: ["bash", "shell", "terminal"]},
+      thinkingLevel: "off"
+    }')"
+  response="$(curl_json POST /v1/agents -d "${body}")"
+  agent_id="$(echo "${response}" | jq -r '.agent_id')"
+  [[ -n "${agent_id}" && "${agent_id}" != "null" ]] \
+    || die "${harness}: failed to create live approval agent: ${response}"
+  CREATED_AGENTS+=("${agent_id}")
+
+  create_session "${agent_id}"
+  session_id="${CREATED_SESSION_ID}"
+  sse_out="${SCRATCH}/${harness}-approval.sse"
+  sse_pid="$(start_event_stream "${session_id}" "${sse_out}")"
+  SSE_PIDS+=("${sse_pid}")
+
+  post_turn_body="$(jq -n \
+    --arg marker "${marker}" \
+    '{
+      type: "user.message",
+      content: ("Use the bash, shell, or terminal tool to run exactly: printf " + ($marker|@sh) + ". After the command succeeds, reply with exactly " + $marker + " and no other text. Do not answer without running the command.")
+    }')"
+  curl_json POST "/v1/sessions/${session_id}/events" -d "${post_turn_body}" >/dev/null
+
+  approval_id="$(wait_for_approval "${harness}" "${session_id}" "${sse_out}")" \
+    || die "${harness}: expected live approval request"
+  confirm_body="$(jq -n --arg id "${approval_id}" '{type: "user.tool_confirmation", toolUseId: $id, result: "allow"}')"
+  curl_json POST "/v1/sessions/${session_id}/events" -d "${confirm_body}" >/dev/null
+  poll_session "${session_id}" "${harness}:approval-live" >/dev/null
+
+  kill "${sse_pid}" >/dev/null 2>&1 || true
+  wait "${sse_pid}" >/dev/null 2>&1 || true
+
+  session_json="$(curl_json GET "/v1/sessions/${session_id}")"
+  output="$(echo "${session_json}" | jq -r '.output // ""')"
+  assert_contains "${harness}: live approval output" "${output}" "${marker}"
+  events_json="$(curl_json GET "/v1/sessions/${session_id}/events")"
+  echo "${events_json}" \
+    | jq -e '.events[]? | select(.type == "agent.tool_confirmation_request")' >/dev/null \
+    || die "${harness}: live approval finished without persisted tool_confirmation_request: ${events_json}"
+  say "${harness}: PASS live tool approval request/resolve"
+}
+
 run_compaction_check() {
   local catalog="$1"
   local harness="$2"
@@ -675,8 +900,10 @@ run_harness_matrix() {
   else
     say "${harness}: skip streaming live check; capability unsupported"
   fi
+  run_chat_resume_check "${harness}" "${agent_id}"
 
   run_compaction_check "${catalog}" "${harness}" "${model}"
+  run_live_approval_check "${catalog}" "${harness}" "${model}"
   support="$(cap_support "${catalog}" "${harness}" "cancellation")"
   run_cancel_check "${harness}" "${model}" "${support}"
 
