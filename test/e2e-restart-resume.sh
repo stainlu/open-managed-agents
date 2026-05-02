@@ -20,6 +20,8 @@
 #   OMA_RESTART_CODEX_MODEL=openai/gpt-5.4 ./test/e2e-restart-resume.sh
 #   OMA_RESTART_CLAUDE_AGENT_SDK_MODEL=anthropic/claude-opus-4.7 ./test/e2e-restart-resume.sh
 #   OMA_RESTART_OPENCLAW_MODEL=moonshot/kimi-k2.5 ./test/e2e-restart-resume.sh
+#   OMA_RESTART_HERMES_MODEL=moonshot/kimi-k2.6 ./test/e2e-restart-resume.sh
+#   OMA_RESTART_HERMES_REQUIRED_KEY=KIMI_CODING_API_KEY ./test/e2e-restart-resume.sh
 
 set -euo pipefail
 
@@ -117,7 +119,7 @@ required_key_for_harness() {
     openclaw) echo "${OMA_RESTART_OPENCLAW_REQUIRED_KEY:-MOONSHOT_API_KEY}" ;;
     codex) echo "OPENAI_API_KEY" ;;
     claude-agent-sdk) echo "ANTHROPIC_API_KEY" ;;
-    hermes) echo "${OMA_RESTART_HERMES_REQUIRED_KEY:-OPENAI_API_KEY}" ;;
+    hermes) echo "${OMA_RESTART_HERMES_REQUIRED_KEY:-KIMI_API_KEY}" ;;
     *) return 1 ;;
   esac
 }
@@ -127,7 +129,7 @@ model_for_harness() {
     openclaw) echo "${OMA_RESTART_OPENCLAW_MODEL:-moonshot/kimi-k2.5}" ;;
     codex) echo "${OMA_RESTART_CODEX_MODEL:-openai/gpt-5.5}" ;;
     claude-agent-sdk) echo "${OMA_RESTART_CLAUDE_AGENT_SDK_MODEL:-anthropic/claude-sonnet-4-6}" ;;
-    hermes) echo "${OMA_RESTART_HERMES_MODEL:-openai/gpt-5.5}" ;;
+    hermes) echo "${OMA_RESTART_HERMES_MODEL:-moonshot/kimi-k2.6}" ;;
     *) return 1 ;;
   esac
 }
