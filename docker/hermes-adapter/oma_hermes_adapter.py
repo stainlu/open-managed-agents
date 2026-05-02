@@ -70,6 +70,46 @@ def _stringify(value: Any) -> str:
         return str(value)
 
 
+def _message_text(message: dict[str, Any]) -> str:
+    content = message.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts).strip()
+    return _stringify(content).strip()
+
+
+def _final_response_from_result(result: dict[str, Any]) -> str:
+    direct = _stringify(result.get("final_response")).strip()
+    if direct:
+        return direct
+    for message in reversed(result.get("messages") or []):
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        text = _message_text(message)
+        if text:
+            return text
+    return direct
+
+
+def _error_message_from_result(result: dict[str, Any]) -> str:
+    raw = result.get("error")
+    if isinstance(raw, dict):
+        message = raw.get("message") or raw.get("error") or raw
+    else:
+        message = raw
+    text = _stringify(message).strip()
+    return text or "Hermes turn failed"
+
+
 def _safe_json(value: Any) -> Any:
     try:
         json.dumps(value)
@@ -626,7 +666,17 @@ class HermesAdapterRuntime:
             )
             if result.get("messages"):
                 state.history = result["messages"]
-            final_response = _stringify(result.get("final_response"))
+            final_response = _final_response_from_result(result)
+            if not final_response and (result.get("failed") or result.get("error")):
+                message = _error_message_from_result(result)
+                raise AdapterHttpError(
+                    *_error_payload(
+                        "native_harness_error",
+                        f"Hermes returned an error result: {message}",
+                        HTTPStatus.BAD_GATEWAY,
+                    )
+                )
+            result["final_response"] = final_response
             with state.lock:
                 final_event = self._append_event(
                     state,
@@ -698,9 +748,10 @@ class HermesAdapterRuntime:
         usage = _usage_from_result(result)
         if not usage.get("model"):
             usage["model"] = state.model
+        output = _final_response_from_result(result)
         return {
             "protocol_version": PROTOCOL_VERSION,
-            "output": _stringify(result.get("final_response")),
+            "output": output,
             "usage": usage,
             "native": _native_state(session_id, state),
             "events": list(state.active_events),

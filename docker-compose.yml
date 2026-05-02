@@ -12,6 +12,7 @@
 # agent containers by src/index.ts:collectPassthroughEnv(). Export whichever
 # key your chosen provider needs before `docker compose up`. Examples:
 #   export MOONSHOT_API_KEY=sk-...   # default: moonshot/kimi-k2.5
+#   export KIMI_API_KEY=sk-...       # Hermes Kimi/Moonshot provider
 #   export ANTHROPIC_API_KEY=sk-...  # anthropic/claude-sonnet-4-6
 #   export OPENAI_API_KEY=sk-...     # openai/gpt-5.4
 #   export GEMINI_API_KEY=...        # google/gemini-2.5-pro
@@ -134,6 +135,9 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       MOONSHOT_API_KEY: ${MOONSHOT_API_KEY:-}
+      KIMI_API_KEY: ${KIMI_API_KEY:-}
+      KIMI_CODING_API_KEY: ${KIMI_CODING_API_KEY:-}
+      KIMI_BASE_URL: ${KIMI_BASE_URL:-}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       QWEN_API_KEY: ${QWEN_API_KEY:-}
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}

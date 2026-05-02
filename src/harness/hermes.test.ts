@@ -11,7 +11,7 @@ describe("HermesHarnessAdapter", () => {
       stateRoot: "/tmp/oma-hermes-test",
       network: "oma-net",
       gatewayPort: 18789,
-      passthroughEnv: { OPENAI_API_KEY: "sk-test" },
+      passthroughEnv: { OPENAI_API_KEY: "sk-test", KIMI_API_KEY: "sk-kimi" },
       environments: store.environments,
     });
 
@@ -44,6 +44,8 @@ describe("HermesHarnessAdapter", () => {
     ]);
     expect(spawn.env).toMatchObject({
       OPENAI_API_KEY: "sk-test",
+      KIMI_API_KEY: "sk-kimi",
+      KIMI_CODING_API_KEY: "sk-kimi",
       OMA_ADAPTER_PROTOCOL: "oma.adapter.v1",
       OMA_ADAPTER_HARNESS_ID: "hermes",
       OMA_ADAPTER_PORT: "18789",

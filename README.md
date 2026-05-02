@@ -110,9 +110,17 @@ Live non-OpenClaw harness E2E:
 pnpm test:e2e-harnesses
 ```
 
-This checks Codex and Claude Agent SDK through the managed API. It skips
-harnesses whose provider key is not present; set `OMA_LIVE_REQUIRE=1` to fail
-instead of skip.
+This checks Codex and Claude Agent SDK through the managed API. Hermes is
+available as an opt-in live harness:
+
+```bash
+OMA_LIVE_HARNESSES=hermes pnpm test:e2e-harnesses
+```
+
+Hermes expects `KIMI_API_KEY` by default. If you only have a legacy Moonshot
+key, export it as `KIMI_API_KEY` before starting compose. The script skips
+harnesses whose provider key is not present; set `OMA_LIVE_REQUIRE=1` to run
+anyway when the compose/orchestrator process already has server-side credentials.
 
 Some runtime internals still use `OPENCLAW_*` names for compatibility with the
 OpenClaw adapter and existing deployment scripts. New harness-neutral adapter

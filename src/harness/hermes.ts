@@ -138,6 +138,9 @@ export class HermesHarnessAdapter implements HarnessAdapter {
       TERMINAL_ENV: "local",
       HERMES_INTERACTIVE: agent.permissionPolicy.type === "always_ask" ? "1" : "0",
     };
+    if (!env.KIMI_CODING_API_KEY && env.KIMI_API_KEY) {
+      env.KIMI_CODING_API_KEY = env.KIMI_API_KEY;
+    }
 
     return {
       image: this.cfg.runtimeImage,

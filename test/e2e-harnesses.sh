@@ -16,16 +16,23 @@
 #   - codex requires OPENAI_API_KEY and uses openai/gpt-5.5
 #   - claude-agent-sdk requires ANTHROPIC_API_KEY and uses
 #     anthropic/claude-sonnet-4-6
+#   - hermes is opt-in, requires KIMI_API_KEY by default, and uses
+#     moonshot/kimi-k2.6 through Hermes' Kimi/Moonshot provider.
+#     If you only have a legacy Moonshot key, export it as KIMI_API_KEY.
 #
 # Useful overrides:
 #   BASE_URL=http://localhost:8080 ./test/e2e-harnesses.sh
 #   OMA_LIVE_HARNESSES=codex ./test/e2e-harnesses.sh
+#   OMA_LIVE_HARNESSES=hermes ./test/e2e-harnesses.sh
 #   OMA_LIVE_CODEX_MODEL=openai/gpt-5.4 ./test/e2e-harnesses.sh
 #   OMA_LIVE_CLAUDE_AGENT_SDK_MODEL=anthropic/claude-opus-4.7 ./test/e2e-harnesses.sh
+#   OMA_LIVE_HERMES_MODEL=moonshot/kimi-k2.6 ./test/e2e-harnesses.sh
+#   OMA_LIVE_HERMES_REQUIRED_KEY=KIMI_CODING_API_KEY ./test/e2e-harnesses.sh
 #   OMA_LIVE_REQUIRE=1 ./test/e2e-harnesses.sh
 #
 # If no required provider key is present, the script exits 0 after reporting
-# skips. Set OMA_LIVE_REQUIRE=1 to make missing keys a failure.
+# skips. Set OMA_LIVE_REQUIRE=1 to run anyway and let the already-running
+# orchestrator prove whether server-side credentials are available.
 
 set -euo pipefail
 
@@ -110,6 +117,7 @@ required_key_for_harness() {
   case "$1" in
     codex) echo "OPENAI_API_KEY" ;;
     claude-agent-sdk) echo "ANTHROPIC_API_KEY" ;;
+    hermes) echo "${OMA_LIVE_HERMES_REQUIRED_KEY:-KIMI_API_KEY}" ;;
     *) return 1 ;;
   esac
 }
@@ -118,6 +126,7 @@ model_for_harness() {
   case "$1" in
     codex) echo "${OMA_LIVE_CODEX_MODEL:-openai/gpt-5.5}" ;;
     claude-agent-sdk) echo "${OMA_LIVE_CLAUDE_AGENT_SDK_MODEL:-anthropic/claude-sonnet-4-6}" ;;
+    hermes) echo "${OMA_LIVE_HERMES_MODEL:-moonshot/kimi-k2.6}" ;;
     *) return 1 ;;
   esac
 }
@@ -288,9 +297,12 @@ run_harness() {
 RUNNABLE=()
 for harness in ${HARNESSES}; do
   key_var="$(required_key_for_harness "${harness}")" \
-    || die "unknown live harness ${harness}; expected codex or claude-agent-sdk"
+    || die "unknown live harness ${harness}; expected codex, claude-agent-sdk, or hermes"
   key_value="${!key_var-}"
   if [[ -n "${key_value}" ]]; then
+    RUNNABLE+=("${harness}")
+  elif [[ "${REQUIRE}" == "1" ]]; then
+    say "${harness}: ${key_var} is not set in this shell; assuming orchestrator has server-side credentials"
     RUNNABLE+=("${harness}")
   else
     say "skip ${harness}: ${key_var} is not set"
@@ -298,9 +310,6 @@ for harness in ${HARNESSES}; do
 done
 
 if [[ "${#RUNNABLE[@]}" -eq 0 ]]; then
-  if [[ "${REQUIRE}" == "1" ]]; then
-    die "no live harnesses runnable; set OPENAI_API_KEY and/or ANTHROPIC_API_KEY"
-  fi
   say "no live harnesses runnable; exiting 0"
   exit 0
 fi

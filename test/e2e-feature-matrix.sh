@@ -18,12 +18,18 @@
 #     compose/orchestrator environment.
 #   - claude-agent-sdk uses anthropic/claude-sonnet-4-6 and normally needs
 #     ANTHROPIC_API_KEY in the compose/orchestrator environment.
+#   - hermes is opt-in, uses moonshot/kimi-k2.6 by default, and normally needs
+#     KIMI_API_KEY in the compose/orchestrator environment. If you only have a
+#     legacy Moonshot key, export it as KIMI_API_KEY.
 #
 # Useful overrides:
 #   BASE_URL=http://localhost:8081 ./test/e2e-feature-matrix.sh
 #   OMA_FEATURE_HARNESSES=codex ./test/e2e-feature-matrix.sh
+#   OMA_FEATURE_HARNESSES=hermes ./test/e2e-feature-matrix.sh
 #   OMA_FEATURE_CODEX_MODEL=openai/gpt-5.4 ./test/e2e-feature-matrix.sh
 #   OMA_FEATURE_CLAUDE_AGENT_SDK_MODEL=anthropic/claude-opus-4.7 ./test/e2e-feature-matrix.sh
+#   OMA_FEATURE_HERMES_MODEL=moonshot/kimi-k2.6 ./test/e2e-feature-matrix.sh
+#   OMA_FEATURE_HERMES_REQUIRED_KEY=KIMI_CODING_API_KEY ./test/e2e-feature-matrix.sh
 #   OMA_FEATURE_REQUIRE=1 ./test/e2e-feature-matrix.sh
 #   OMA_FEATURE_TEST_CANCEL=1 ./test/e2e-feature-matrix.sh
 #
@@ -146,6 +152,7 @@ required_key_for_harness() {
   case "$1" in
     codex) echo "OPENAI_API_KEY" ;;
     claude-agent-sdk) echo "ANTHROPIC_API_KEY" ;;
+    hermes) echo "${OMA_FEATURE_HERMES_REQUIRED_KEY:-KIMI_API_KEY}" ;;
     *) return 1 ;;
   esac
 }
@@ -154,6 +161,7 @@ model_for_harness() {
   case "$1" in
     codex) echo "${OMA_FEATURE_CODEX_MODEL:-openai/gpt-5.5}" ;;
     claude-agent-sdk) echo "${OMA_FEATURE_CLAUDE_AGENT_SDK_MODEL:-anthropic/claude-sonnet-4-6}" ;;
+    hermes) echo "${OMA_FEATURE_HERMES_MODEL:-moonshot/kimi-k2.6}" ;;
     *) return 1 ;;
   esac
 }
@@ -678,7 +686,7 @@ run_harness_matrix() {
 RUNNABLE=()
 for harness in ${HARNESSES}; do
   key_var="$(required_key_for_harness "${harness}")" \
-    || die "unknown live harness ${harness}; expected codex or claude-agent-sdk"
+    || die "unknown live harness ${harness}; expected codex, claude-agent-sdk, or hermes"
   key_value="${!key_var-}"
   if [[ -n "${key_value}" ]]; then
     RUNNABLE+=("${harness}")
