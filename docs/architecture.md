@@ -27,6 +27,9 @@ The hard rule:
 
 > Own the managed-agent boundary. Do not own the agent brain.
 
+See `docs/managed-agent-contract.md` for the explicit product contract that
+new harness adapters must satisfy.
+
 ## Core Boundaries
 
 ### Managed API
