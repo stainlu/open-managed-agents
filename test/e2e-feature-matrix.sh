@@ -666,6 +666,29 @@ extract_approval_id() {
   ' "${out}" | jq -r '.approval_id // ""'
 }
 
+extract_approval_ids() {
+  local out="$1"
+  awk '
+    $0 == "event: agent.tool_confirmation_request" { seen=1; next }
+    seen && /^data: / {
+      sub(/^data: /, "");
+      print;
+      seen=0;
+    }
+    seen && $0 == "" { seen=0 }
+  ' "${out}" | jq -r 'select(.approval_id != null) | .approval_id' 2>/dev/null
+}
+
+contains_value() {
+  local needle="$1"
+  shift
+  local item
+  for item in "$@"; do
+    [[ "${item}" == "${needle}" ]] && return 0
+  done
+  return 1
+}
+
 wait_for_approval() {
   local harness="$1"
   local session_id="$2"
@@ -699,11 +722,66 @@ wait_for_approval() {
   return 1
 }
 
+resolve_approvals_until_idle() {
+  local harness="$1"
+  local session_id="$2"
+  local out="$3"
+  local elapsed=0
+  local approval_id=""
+  local confirm_body=""
+  local session_json=""
+  local status=""
+  local resolved_count=0
+  local resolved_approval_ids=" "
+
+  while [[ "${elapsed}" -lt "${MAX_POLL_SEC}" ]]; do
+    while IFS= read -r approval_id; do
+      [[ -n "${approval_id}" && "${approval_id}" != "null" ]] || continue
+      if [[ "${resolved_approval_ids}" == *" ${approval_id} "* ]]; then
+        continue
+      fi
+      confirm_body="$(jq -n --arg id "${approval_id}" '{type: "user.tool_confirmation", toolUseId: $id, result: "allow"}')"
+      curl_json POST "/v1/sessions/${session_id}/events" -d "${confirm_body}" >/dev/null
+      resolved_approval_ids="${resolved_approval_ids}${approval_id} "
+      resolved_count=$((resolved_count + 1))
+      say "${harness}: allowed approval ${approval_id}"
+    done < <(extract_approval_ids "${out}" || true)
+
+    session_json="$(curl_json GET "/v1/sessions/${session_id}")"
+    status="$(echo "${session_json}" | jq -r '.status')"
+    case "${status}" in
+      idle)
+        [[ "${resolved_count}" -gt 0 ]] \
+          || die "${harness}: approval session went idle without an approval request"
+        echo "${session_json}"
+        return 0
+        ;;
+      failed)
+        echo "${session_json}" | jq . >&2
+        say "${harness}: approval stream output follows" >&2
+        head -c 4096 "${out}" >&2 || true
+        echo >&2
+        curl_json GET "/v1/sessions/${session_id}/events" | jq . >&2 || true
+        return 1
+        ;;
+    esac
+
+    sleep "${POLL_INTERVAL_SEC}"
+    elapsed=$((elapsed + POLL_INTERVAL_SEC))
+    say "${harness}: approval-live t=${elapsed}s status=${status} resolved=${resolved_count}"
+  done
+
+  say "${harness}: approval-live timed out; stream output follows" >&2
+  head -c 4096 "${out}" >&2 || true
+  echo >&2
+  return 1
+}
+
 run_live_approval_check() {
   local catalog="$1"
   local harness="$2"
   local model="$3"
-  local support safe_harness run_id marker body response agent_id session_id sse_out sse_pid approval_id confirm_body session_json output events_json post_turn_body
+  local support safe_harness run_id marker body response agent_id session_id sse_out sse_pid session_json output events_json post_turn_body
 
   support="$(cap_support "${catalog}" "${harness}" "tool_approvals")"
   if [[ "${support}" == "unsupported" ]]; then
@@ -747,15 +825,11 @@ run_live_approval_check() {
     --arg marker "${marker}" \
     '{
       type: "user.message",
-      content: ("Use the bash, shell, or terminal tool to run exactly: printf " + ($marker|@sh) + ". After the command succeeds, reply with exactly " + $marker + " and no other text. Do not answer without running the command.")
+      content: ("Use the bash, shell, or terminal tool to run exactly: mkdir -p .oma_approval && printf " + ($marker|@sh) + " > .oma_approval/marker.txt && cat .oma_approval/marker.txt. After the command succeeds, reply with exactly " + $marker + " and no other text. Do not answer without running the command.")
     }')"
   curl_json POST "/v1/sessions/${session_id}/events" -d "${post_turn_body}" >/dev/null
 
-  approval_id="$(wait_for_approval "${harness}" "${session_id}" "${sse_out}")" \
-    || die "${harness}: expected live approval request"
-  confirm_body="$(jq -n --arg id "${approval_id}" '{type: "user.tool_confirmation", toolUseId: $id, result: "allow"}')"
-  curl_json POST "/v1/sessions/${session_id}/events" -d "${confirm_body}" >/dev/null
-  poll_session "${session_id}" "${harness}:approval-live" >/dev/null
+  resolve_approvals_until_idle "${harness}" "${session_id}" "${sse_out}" >/dev/null
 
   kill "${sse_pid}" >/dev/null 2>&1 || true
   wait "${sse_pid}" >/dev/null 2>&1 || true

@@ -175,16 +175,21 @@ def _reasoning_effort(level: str | None) -> str | None:
 def _approval_policy(agent: dict[str, Any]) -> str:
     policy = agent.get("permission_policy") or {}
     if policy.get("type") == "always_ask":
-        return "on-request"
+        # Codex has no literal "always ask" mode in app-server. "untrusted" is
+        # the closest stable mapping: safe read-only commands may still run, but
+        # writes and non-trivial commands request approval from the adapter.
+        return "untrusted"
     return "never"
 
 
 def _sandbox(agent: dict[str, Any], environment: dict[str, Any] | None) -> str:
-    # The container remains the hard isolation boundary. Codex's native sandbox
-    # is additive, so the adapter keeps it in workspace-write by default.
     _ = agent
     _ = environment
-    return "workspace-write"
+    # The container is OMA's hard isolation boundary. Codex's native Linux
+    # sandbox is additive, but under the adapter runtime it can fail command
+    # startup before approval is surfaced. Default to direct in-container
+    # execution and let operators opt back into Codex's native sandbox.
+    return _env("OMA_CODEX_SANDBOX", "danger-full-access")
 
 
 def _native_state(state: "ManagedSession") -> dict[str, Any]:

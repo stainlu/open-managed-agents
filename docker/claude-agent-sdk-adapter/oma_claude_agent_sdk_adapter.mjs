@@ -498,13 +498,12 @@ class ClaudeAgentSdkAdapterRuntime {
         return {
           behavior: "deny",
           message: `tool ${toolName} is denied by Open Managed Agents policy`,
-          toolUseID: options?.toolUseID,
         };
       }
       if (policy.type !== "always_ask" || !toolMatchesPolicy(toolName, policyTools)) {
         return {
           behavior: "allow",
-          toolUseID: options?.toolUseID,
+          updatedInput: input,
         };
       }
 
@@ -549,15 +548,12 @@ class ClaudeAgentSdkAdapterRuntime {
         if (decision === "allow") {
           return {
             behavior: "allow",
-            toolUseID: options?.toolUseID,
-            decisionClassification: "user_temporary",
+            updatedInput: input,
           };
         }
         return {
           behavior: "deny",
           message: `tool ${toolName} denied by user`,
-          toolUseID: options?.toolUseID,
-          decisionClassification: "user_reject",
         };
       } finally {
         clearTimeout(timer);
