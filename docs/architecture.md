@@ -30,6 +30,10 @@ The hard rule:
 See `docs/managed-agent-contract.md` for the explicit product contract that
 new harness adapters must satisfy.
 
+See `docs/openclaw-migration-checklist.md` for the concrete keep/change list
+used to migrate from the OpenClaw-specific baseline to the harness-agnostic
+product.
+
 ## Core Boundaries
 
 ### Managed API

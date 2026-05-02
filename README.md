@@ -126,6 +126,12 @@ Some runtime internals still use `OPENCLAW_*` names for compatibility with the
 OpenClaw adapter and existing deployment scripts. New harness-neutral adapter
 protocol pieces use `OMA_*`.
 
+Key docs:
+
+- `docs/architecture.md`
+- `docs/managed-agent-contract.md`
+- `docs/openclaw-migration-checklist.md`
+
 ## Strategy Notes
 
 `strategy.md` is intentionally gitignored. It is the local working strategy doc
