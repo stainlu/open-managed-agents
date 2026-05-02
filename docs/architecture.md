@@ -34,6 +34,9 @@ See `docs/openclaw-migration-checklist.md` for the concrete keep/change list
 used to migrate from the OpenClaw-specific baseline to the harness-agnostic
 product.
 
+See `docs/runtime-backend-positioning.md` for the current source-backed read on
+Docker, ECS/Fargate, Cloud Run, Kubernetes, and agent sandboxes.
+
 ## Core Boundaries
 
 ### Managed API
@@ -278,6 +281,11 @@ SSE-based. Harness capability discovery lives at `client.harnesses.catalog()` /
 backend today is `docker`; unknown backend names fail at startup. This keeps the
 future seam explicit without pretending ECS, Cloud Run, Container Apps, ECI, or
 VKE are production backends.
+
+The current backend decision is intentionally conservative: Docker-on-VPS stays
+the production default until a second backend can prove durable session
+workspace, restart adoption, logs, limited networking, and the public managed
+API without cloud-specific router branches.
 
 The server is self-documenting at `GET /`: the root returns name, description, version, and the full endpoint map. A developer landing on the orchestrator never needs to open a separate reference.
 

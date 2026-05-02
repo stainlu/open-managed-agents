@@ -143,6 +143,7 @@ Key docs:
 - `docs/architecture.md`
 - `docs/managed-agent-contract.md`
 - `docs/openclaw-migration-checklist.md`
+- `docs/runtime-backend-positioning.md`
 
 ## Strategy Notes
 
