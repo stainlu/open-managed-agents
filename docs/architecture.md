@@ -274,7 +274,10 @@ SSE-based. Harness capability discovery lives at `client.harnesses.catalog()` /
 
 `dockerode`-backed implementation of the `ContainerRuntime` interface. Spawns unrestricted containers on `openclaw-net`; limited-networking sessions use a per-session confined network plus the shared `openclaw-control-plane` network and an egress-proxy sidecar. Containers are labeled `managed-by=open-managed-agents` for orphan detection, capped at 2 GiB memory and 512 PIDs, and polled through `/readyz` on the gateway port. Normal startup uses `listManaged()` plus selective pool adoption to preserve valid session containers and stop only true orphans. `cleanupOrphaned()` remains a concrete Docker-only helper for explicit orphan sweeps / tests, not the default startup path.
 
-The interface is the seam for cloud backends (ECS, Cloud Run, Container Apps, ECI, VKE) — new backends are drop-in alongside `docker.ts` without touching the pool, router, or server.
+`src/runtime/factory.ts` owns runtime backend selection. The only supported
+backend today is `docker`; unknown backend names fail at startup. This keeps the
+future seam explicit without pretending ECS, Cloud Run, Container Apps, ECI, or
+VKE are production backends.
 
 The server is self-documenting at `GET /`: the root returns name, description, version, and the full endpoint map. A developer landing on the orchestrator never needs to open a separate reference.
 
@@ -289,6 +292,7 @@ The orchestrator process itself reads a small set of env vars at startup. Everyt
 | `OPENCLAW_STORE_PATH` | SQLite file path (when `OPENCLAW_STORE=sqlite`) | `/var/openclaw/state/managed-runtime.db` |
 | `OPENCLAW_STATE_ROOT` | **In-process** path of the mounted sessions directory, used by the managed event-log implementations to open session event files | `/var/openclaw/sessions` |
 | `OPENCLAW_HOST_STATE_ROOT` | **Host-side** path of the same directory — passed to dockerode when spawning agent containers (the Docker daemon resolves against the host filesystem, so a container-relative path would fail). Must be absolute; startup throws if not | `/var/openclaw/sessions` |
+| `OMA_CONTAINER_RUNTIME` | Runtime backend selector. Only `docker` is implemented today; unknown values fail startup. `OPENCLAW_CONTAINER_RUNTIME` is accepted as a legacy alias | `docker` |
 | `OPENCLAW_RUNTIME_IMAGE` | Docker image reference the orchestrator spawns per session | `open-managed-agents/openclaw-agent:latest` |
 | `OPENCLAW_DOCKER_NETWORK` | Docker bridge network shared by the orchestrator and unrestricted agent containers | `openclaw-net` |
 | `OPENCLAW_CONTROL_PLANE_NETWORK` | Internal Docker network used for orchestrator-to-agent control traffic when `networking: limited` is enabled. Must be set with `OPENCLAW_EGRESS_PROXY_IMAGE` or limited sessions fail at spawn time | `""`; `openclaw-control-plane` in compose |

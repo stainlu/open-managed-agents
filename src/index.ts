@@ -22,7 +22,10 @@ import {
 } from "./metrics.js";
 import { AgentRouter, type RouterConfig } from "./orchestrator/router.js";
 import { startServer } from "./orchestrator/server.js";
-import { DockerContainerRuntime } from "./runtime/docker.js";
+import {
+  buildContainerRuntime,
+  containerRuntimeBackendFromEnv,
+} from "./runtime/factory.js";
 import { ParentTokenMinter } from "./runtime/parent-token.js";
 import {
   limitedNetworkingResourceNames,
@@ -252,7 +255,12 @@ async function main(): Promise<void> {
   // 120-burst); stops blind-loop DoS without hindering real workloads.
   const rateLimitRpm = envInt("OPENCLAW_RATE_LIMIT_RPM", 120);
 
-  const runtime = new DockerContainerRuntime({ network, spawnTimeoutMs });
+  const runtimeBackend = containerRuntimeBackendFromEnv(process.env);
+  const { runtime } = buildContainerRuntime({
+    backend: runtimeBackend,
+    docker: { network, spawnTimeoutMs },
+  });
+  log.info({ runtime_backend: runtimeBackend }, "container runtime backend selected");
   await runtime.ensureNetwork();
 
   const storeBackendRaw = env("OPENCLAW_STORE", "sqlite");
