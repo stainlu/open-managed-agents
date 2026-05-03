@@ -53,10 +53,11 @@ pnpm test:adapter-conformance
 
 This starts the Hermes, Codex, and Claude Agent SDK adapter servers from source
 on local ephemeral ports and checks the `oma.adapter.v1` envelope, declared
-capabilities, bearer auth, control responses, event/approval listing, and
+capabilities, bearer auth, control responses, event/approval listing,
+non-streaming conformance turns, `/outcome`, streaming frames, and
 adapter-neutral error shapes.
 
-It deliberately does not start a real model turn. Provider-key-gated live E2E
+It only starts synthetic `conformance/model` turns. Provider-key-gated live E2E
 tests own native harness execution. This smoke catches protocol drift before a
 runtime image or live provider is involved.
 

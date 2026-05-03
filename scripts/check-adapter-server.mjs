@@ -232,16 +232,26 @@ function assertManagedEvent(event, route, expectedSessionId) {
   }
 }
 
+function assertEventList(events, route, expectedSessionId) {
+  assert(Array.isArray(events), `${route} events must be an array`);
+  let previousCreatedAt = -1;
+  const seenIds = new Set();
+  for (const event of events) {
+    assertManagedEvent(event, route, expectedSessionId);
+    assert(!seenIds.has(event.event_id), `${route} duplicate event_id ${event.event_id}`);
+    seenIds.add(event.event_id);
+    assert(event.created_at >= previousCreatedAt, `${route} events must be chronological`);
+    previousCreatedAt = event.created_at;
+  }
+}
+
 function assertTurnResult(result, route, expectedSessionId) {
   assertPlainObject(result, route, "turn result");
   assert(result.protocol_version === PROTOCOL_VERSION, `${route} turn result protocol_version mismatch`);
   assert(typeof result.output === "string", `${route} turn result output must be string`);
   assertUsageMaybe(result.usage, route);
   assertNativeMaybe(result.native, route);
-  assert(Array.isArray(result.events), `${route} turn result events must be an array`);
-  for (const event of result.events) {
-    assertManagedEvent(event, route, expectedSessionId);
-  }
+  assertEventList(result.events, route, expectedSessionId);
 }
 
 function assertControlResponse(response, route) {
@@ -250,7 +260,7 @@ function assertControlResponse(response, route) {
   assertNativeMaybe(response.data.native, route);
 }
 
-function streamTurnRequest(sessionId, harnessId) {
+function turnRequest(sessionId, harnessId, turn) {
   return {
     protocol_version: PROTOCOL_VERSION,
     session: { managed_session_id: sessionId },
@@ -268,11 +278,18 @@ function streamTurnRequest(sessionId, harnessId) {
     },
     environment: { networking: { type: "unrestricted" } },
     turn: {
-      content: `stream-conformance-${harnessId}`,
-      stream: true,
+      content: turn.content,
+      stream: turn.stream,
       timeout_ms: 5_000,
     },
   };
+}
+
+function streamTurnRequest(sessionId, harnessId) {
+  return turnRequest(sessionId, harnessId, {
+    content: `stream-conformance-${harnessId}`,
+    stream: true,
+  });
 }
 
 function parseSseFrame(rawFrame, route) {
@@ -395,6 +412,56 @@ async function assertStreamingTurn(baseUrl, token, sessionId, harnessId) {
   assert(completed[0].result.events.length > 0, `${route} turn.completed result must include managed events`);
 }
 
+function assertOutcomeResponse(response, route) {
+  assertProtocolEnvelope(response, route);
+  assert(["idle", "starting", "running", "failed"].includes(response.data.status), `${route} invalid status ${response.data.status}`);
+  if (response.data.output !== undefined) assert(typeof response.data.output === "string", `${route} output must be string`);
+  assertUsageMaybe(response.data.usage, route);
+  if (response.data.error_message !== undefined) assert(typeof response.data.error_message === "string", `${route} error_message must be string`);
+  assertNativeMaybe(response.data.native, route);
+}
+
+async function assertNonStreamingTurn(baseUrl, token, sessionId, harnessId) {
+  const marker = `turn-conformance-${harnessId}`;
+  const route = `POST /sessions/${sessionId}/turns`;
+  const turn = await requestJson(
+    baseUrl,
+    "POST",
+    `/sessions/${encodeURIComponent(sessionId)}/turns`,
+    token,
+    turnRequest(sessionId, harnessId, {
+      content: marker,
+      stream: false,
+    }),
+  );
+  assertProtocolEnvelope(turn, route);
+  assertTurnResult(turn.data, route, sessionId);
+  assert(turn.data.output === marker, `${route} output mismatch: expected ${marker}, got ${turn.data.output}`);
+  assert(turn.data.events.some((event) => event.type === "user.message" && event.content === marker), `${route} must include user.message`);
+  assert(turn.data.events.some((event) => event.type === "agent.message" && event.content === marker), `${route} must include agent.message`);
+
+  const events = await requestJson(
+    baseUrl,
+    "GET",
+    `/sessions/${encodeURIComponent(sessionId)}/events`,
+    token,
+  );
+  assertProtocolEnvelope(events, "GET /events after turn");
+  assertEventList(events.data.events, "GET /events after turn", sessionId);
+  assert(events.data.events.some((event) => event.type === "user.message" && event.content === marker), "GET /events after turn must include user.message");
+  assert(events.data.events.some((event) => event.type === "agent.message" && event.content === marker), "GET /events after turn must include agent.message");
+
+  const outcome = await requestJson(
+    baseUrl,
+    "GET",
+    `/sessions/${encodeURIComponent(sessionId)}/outcome`,
+    token,
+  );
+  assertOutcomeResponse(outcome, "GET /outcome after turn");
+  assert(outcome.data.status === "idle", `GET /outcome after turn status should be idle, got ${outcome.data.status}`);
+  assert(outcome.data.output === marker, `GET /outcome after turn output mismatch: expected ${marker}, got ${outcome.data.output}`);
+}
+
 async function waitForReady(baseUrl, processState) {
   const deadline = Date.now() + 10_000;
   let lastError = "";
@@ -452,8 +519,16 @@ async function runChecks({ baseUrl, harnessId, token, readyResponse }) {
     token,
   );
   assertProtocolEnvelope(events, "GET /events");
-  assert(Array.isArray(events.data.events), "events must be an array");
+  assertEventList(events.data.events, "GET /events", sessionId);
   assertNativeMaybe(events.data.native, "GET /events");
+
+  const initialOutcome = await requestJson(
+    baseUrl,
+    "GET",
+    `/sessions/${encodeURIComponent(sessionId)}/outcome`,
+    token,
+  );
+  assertOutcomeResponse(initialOutcome, "GET /outcome");
 
   const approvals = await requestJson(
     baseUrl,
@@ -464,6 +539,8 @@ async function runChecks({ baseUrl, harnessId, token, readyResponse }) {
   assertProtocolEnvelope(approvals, "GET /approvals");
   assert(Array.isArray(approvals.data.approvals), "approvals must be an array");
   assertNativeMaybe(approvals.data.native, "GET /approvals");
+
+  await assertNonStreamingTurn(baseUrl, token, sessionId, harnessId);
 
   if (ready.data.capabilities.streaming === true) {
     await assertStreamingTurn(baseUrl, token, `${sessionId}_stream`, harnessId);

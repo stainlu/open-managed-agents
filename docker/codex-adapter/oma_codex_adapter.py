@@ -851,6 +851,34 @@ class CodexAdapterRuntime:
             "native": _native_state(state),
         }
 
+    def outcome(self, session_id: str) -> dict[str, Any]:
+        state = self.get_session(session_id)
+        with state.lock:
+            active = bool(state.active_thread and state.active_thread.is_alive())
+            latest = next(
+                (event for event in reversed(state.event_backlog) if event["type"] in {"agent.message", "agent.error"}),
+                None,
+            )
+            payload: dict[str, Any] = {
+                "protocol_version": PROTOCOL_VERSION,
+                "status": "running" if active else ("failed" if latest and latest["type"] == "agent.error" else "idle"),
+                "native": _native_state(state),
+            }
+            if latest:
+                if latest["type"] == "agent.message":
+                    payload["output"] = latest.get("content", "")
+                else:
+                    payload["error_message"] = latest.get("content", "")
+                usage = {
+                    "tokens_in": int(latest.get("tokens_in") or 0),
+                    "tokens_out": int(latest.get("tokens_out") or 0),
+                }
+                model = str(latest.get("model") or state.model or "")
+                if model:
+                    usage["model"] = model
+                payload["usage"] = usage
+            return payload
+
 
 class AdapterHttpError(Exception):
     def __init__(self, status: int, payload: dict[str, Any]) -> None:
@@ -929,6 +957,10 @@ class Handler(BaseHTTPRequestHandler):
             session_id = self._session_id_from_path("events")
             if session_id:
                 self._write_json(HTTPStatus.OK, RUNTIME.list_events(session_id))
+                return
+            session_id = self._session_id_from_path("outcome")
+            if session_id:
+                self._write_json(HTTPStatus.OK, RUNTIME.outcome(session_id))
                 return
             session_id = self._session_id_from_path("approvals")
             if session_id:

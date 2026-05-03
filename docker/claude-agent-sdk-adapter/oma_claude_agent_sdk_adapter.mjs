@@ -917,6 +917,29 @@ class ClaudeAgentSdkAdapterRuntime {
       native: nativeState(state),
     };
   }
+
+  outcome(sessionId) {
+    const state = this.getSession(sessionId);
+    const latest = [...state.eventBacklog]
+      .reverse()
+      .find((event) => event.type === "agent.message" || event.type === "agent.error");
+    const payload = {
+      protocol_version: PROTOCOL_VERSION,
+      status: state.active ? "running" : latest?.type === "agent.error" ? "failed" : "idle",
+      native: nativeState(state),
+    };
+    if (latest) {
+      if (latest.type === "agent.message") payload.output = latest.content ?? "";
+      else payload.error_message = latest.content ?? "";
+      payload.usage = {
+        tokens_in: Math.max(0, Math.trunc(latest.tokens_in ?? 0)),
+        tokens_out: Math.max(0, Math.trunc(latest.tokens_out ?? 0)),
+        model: latest.model || state.model || undefined,
+      };
+      if (latest.cost_usd != null) payload.usage.cost_usd = latest.cost_usd;
+    }
+    return payload;
+  }
 }
 
 const RUNTIME = new ClaudeAgentSdkAdapterRuntime();
@@ -1003,6 +1026,11 @@ async function handle(req, res) {
       const eventsSession = sessionRoute(req, "events");
       if (eventsSession) {
         writeJson(res, 200, RUNTIME.listEvents(eventsSession));
+        return;
+      }
+      const outcomeSession = sessionRoute(req, "outcome");
+      if (outcomeSession) {
+        writeJson(res, 200, RUNTIME.outcome(outcomeSession));
         return;
       }
       const approvalsSession = sessionRoute(req, "approvals");
