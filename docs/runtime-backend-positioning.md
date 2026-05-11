@@ -13,7 +13,10 @@ container id/name/network fields; and `NativeOnlySessionRuntime` gives
 native-harness stacks a concrete runtime object without fake Docker behavior.
 `createCloudflareFlueStack` wires the current native Flue path to
 D1-compatible event and harness-state stores plus an optional R2-compatible
-workspace backend, with metadata still passed explicitly.
+workspace backend, with metadata passed explicitly as a `Store`. A
+Cloudflare Durable Object SQLite adapter now exists for that store contract, so
+the remaining Cloudflare gap is production DO composition/lifecycle rather than
+a new metadata abstraction.
 `createCloudflareFlueFetchHandler` adds a Worker-style fetch entrypoint helper
 around the same stack, while still requiring the deployment layer to provide
 real platform bindings. Managed event-log operations are awaitable at the router

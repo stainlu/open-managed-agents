@@ -40,6 +40,25 @@ import type {
   VaultStore,
 } from "./types.js";
 
+export type SqlRunResultLike = {
+  changes: number;
+  lastInsertRowid?: number | bigint;
+};
+
+export type SqlStatementLike = {
+  run(...params: unknown[]): SqlRunResultLike;
+  get(...params: unknown[]): unknown;
+  all(...params: unknown[]): unknown[];
+};
+
+export type SyncSqlDatabaseLike = {
+  prepare(sql: string): SqlStatementLike;
+  exec(sql: string): unknown;
+  pragma(source: string, options?: { simple?: boolean }): unknown;
+  transaction<T extends (...args: unknown[]) => unknown>(fn: T): T;
+  close(): void;
+};
+
 const nanoid = customAlphabet("abcdefghijklmnopqrstuvwxyz0123456789", 12);
 const SESSION_STATUS_VALUES_SQL = `'idle', 'starting', 'running', 'failed'`;
 const THINKING_LEVELS = new Set<string>(["off", "low", "medium", "high", "xhigh"]);
@@ -450,17 +469,17 @@ CREATE INDEX IF NOT EXISTS idx_session_containers_container ON session_container
 // ---------- Agent store ----------
 
 class SqliteAgentStore implements AgentStore {
-  private readonly insertStmt: Database.Statement;
-  private readonly insertVersionStmt: Database.Statement;
-  private readonly getStmt: Database.Statement;
-  private readonly listStmt: Database.Statement;
-  private readonly deleteStmt: Database.Statement;
-  private readonly deleteVersionsStmt: Database.Statement;
-  private readonly updateStmt: Database.Statement;
-  private readonly listVersionsStmt: Database.Statement;
-  private readonly archiveStmt: Database.Statement;
+  private readonly insertStmt: SqlStatementLike;
+  private readonly insertVersionStmt: SqlStatementLike;
+  private readonly getStmt: SqlStatementLike;
+  private readonly listStmt: SqlStatementLike;
+  private readonly deleteStmt: SqlStatementLike;
+  private readonly deleteVersionsStmt: SqlStatementLike;
+  private readonly updateStmt: SqlStatementLike;
+  private readonly listVersionsStmt: SqlStatementLike;
+  private readonly archiveStmt: SqlStatementLike;
 
-  constructor(private readonly db: Database.Database) {
+  constructor(private readonly db: SyncSqlDatabaseLike) {
     this.insertStmt = db.prepare(
       `INSERT INTO agents (
         agent_id, harness_id, model, tools_json, instructions, permission_policy_json,
@@ -655,12 +674,12 @@ class SqliteAgentStore implements AgentStore {
 // ---------- Environment store ----------
 
 class SqliteEnvironmentStore implements EnvironmentStore {
-  private readonly insertStmt: Database.Statement;
-  private readonly getStmt: Database.Statement;
-  private readonly listStmt: Database.Statement;
-  private readonly deleteStmt: Database.Statement;
+  private readonly insertStmt: SqlStatementLike;
+  private readonly getStmt: SqlStatementLike;
+  private readonly listStmt: SqlStatementLike;
+  private readonly deleteStmt: SqlStatementLike;
 
-  constructor(private readonly db: Database.Database) {
+  constructor(private readonly db: SyncSqlDatabaseLike) {
     this.insertStmt = db.prepare(
       `INSERT INTO environments (
         environment_id, name, description, packages_json, networking_json, created_at
@@ -712,22 +731,22 @@ class SqliteEnvironmentStore implements EnvironmentStore {
 // ---------- Session store ----------
 
 class SqliteSessionStore implements SessionStore {
-  private readonly insertStmt: Database.Statement;
-  private readonly getStmt: Database.Statement;
-  private readonly listStmt: Database.Statement;
-  private readonly deleteStmt: Database.Statement;
-  private readonly beginRunStmt: Database.Statement;
-  private readonly markRunningStmt: Database.Statement;
-  private readonly endSuccessStmt: Database.Statement;
-  private readonly endFailureStmt: Database.Statement;
-  private readonly endCancelledStmt: Database.Statement;
-  private readonly addUsageStmt: Database.Statement;
-  private readonly bumpTurnsStmt: Database.Statement;
-  private readonly listByParentStmt: Database.Statement;
-  private readonly failRunningStmt: Database.Statement;
-  private readonly updateNativeMetadataStmt: Database.Statement;
+  private readonly insertStmt: SqlStatementLike;
+  private readonly getStmt: SqlStatementLike;
+  private readonly listStmt: SqlStatementLike;
+  private readonly deleteStmt: SqlStatementLike;
+  private readonly beginRunStmt: SqlStatementLike;
+  private readonly markRunningStmt: SqlStatementLike;
+  private readonly endSuccessStmt: SqlStatementLike;
+  private readonly endFailureStmt: SqlStatementLike;
+  private readonly endCancelledStmt: SqlStatementLike;
+  private readonly addUsageStmt: SqlStatementLike;
+  private readonly bumpTurnsStmt: SqlStatementLike;
+  private readonly listByParentStmt: SqlStatementLike;
+  private readonly failRunningStmt: SqlStatementLike;
+  private readonly updateNativeMetadataStmt: SqlStatementLike;
 
-  constructor(private readonly db: Database.Database) {
+  constructor(private readonly db: SyncSqlDatabaseLike) {
     this.insertStmt = db.prepare(
       `INSERT INTO sessions (
         session_id, agent_id, harness_id, native_session_id,
@@ -1012,21 +1031,21 @@ type VaultCredentialRow = {
 };
 
 class SqliteVaultStore implements VaultStore {
-  private readonly insertVaultStmt: Database.Statement;
-  private readonly getVaultStmt: Database.Statement;
-  private readonly listVaultsStmt: Database.Statement;
-  private readonly listVaultsByUserStmt: Database.Statement;
-  private readonly deleteVaultStmt: Database.Statement;
-  private readonly insertCredStmt: Database.Statement;
-  private readonly getCredStmt: Database.Statement;
-  private readonly listCredsStmt: Database.Statement;
-  private readonly deleteCredStmt: Database.Statement;
-  private readonly touchVaultStmt: Database.Statement;
-  private readonly updateOAuthTokensStmt: Database.Statement;
+  private readonly insertVaultStmt: SqlStatementLike;
+  private readonly getVaultStmt: SqlStatementLike;
+  private readonly listVaultsStmt: SqlStatementLike;
+  private readonly listVaultsByUserStmt: SqlStatementLike;
+  private readonly deleteVaultStmt: SqlStatementLike;
+  private readonly insertCredStmt: SqlStatementLike;
+  private readonly getCredStmt: SqlStatementLike;
+  private readonly listCredsStmt: SqlStatementLike;
+  private readonly deleteCredStmt: SqlStatementLike;
+  private readonly touchVaultStmt: SqlStatementLike;
+  private readonly updateOAuthTokensStmt: SqlStatementLike;
 
-  private readonly dbRef: Database.Database;
+  private readonly dbRef: SyncSqlDatabaseLike;
 
-  constructor(db: Database.Database, private readonly crypto: VaultCrypto) {
+  constructor(db: SyncSqlDatabaseLike, private readonly crypto: VaultCrypto) {
     this.dbRef = db;
     this.insertVaultStmt = db.prepare(
       `INSERT INTO vaults (vault_id, user_id, name, created_at, updated_at)
@@ -1324,10 +1343,10 @@ class SqliteVaultStore implements VaultStore {
 }
 
 class SqliteSecretStore implements SecretStore {
-  private readonly getStmt: Database.Statement;
-  private readonly upsertStmt: Database.Statement;
+  private readonly getStmt: SqlStatementLike;
+  private readonly upsertStmt: SqlStatementLike;
 
-  constructor(db: Database.Database) {
+  constructor(db: SyncSqlDatabaseLike) {
     this.getStmt = db.prepare(`SELECT v FROM kv_secrets WHERE k = ?`);
     // INSERT OR REPLACE so set() is idempotent — callers don't need to
     // distinguish "first boot, generate" from "rotate, overwrite".
@@ -1350,14 +1369,14 @@ class SqliteSecretStore implements SecretStore {
 // ---------- Queue store ----------
 
 class SqliteQueueStore implements QueueStore {
-  private readonly insertStmt: Database.Statement;
-  private readonly peekStmt: Database.Statement;
-  private readonly deleteByIdStmt: Database.Statement;
-  private readonly countStmt: Database.Statement;
-  private readonly clearStmt: Database.Statement;
-  private readonly listSessionsStmt: Database.Statement;
+  private readonly insertStmt: SqlStatementLike;
+  private readonly peekStmt: SqlStatementLike;
+  private readonly deleteByIdStmt: SqlStatementLike;
+  private readonly countStmt: SqlStatementLike;
+  private readonly clearStmt: SqlStatementLike;
+  private readonly listSessionsStmt: SqlStatementLike;
 
-  constructor(db: Database.Database) {
+  constructor(db: SyncSqlDatabaseLike) {
     this.insertStmt = db.prepare(
       `INSERT INTO queued_events (session_id, content, model, thinking_level, enqueued_at)
        VALUES (@session_id, @content, @model, @thinking_level, @enqueued_at)`,
@@ -1450,12 +1469,12 @@ class SqliteQueueStore implements QueueStore {
 // ---------- Session-container mapping store ----------
 
 class SqliteSessionContainerStore implements SessionContainerStore {
-  private readonly upsertStmt: Database.Statement;
-  private readonly getStmt: Database.Statement;
-  private readonly deleteStmt: Database.Statement;
-  private readonly listStmt: Database.Statement;
+  private readonly upsertStmt: SqlStatementLike;
+  private readonly getStmt: SqlStatementLike;
+  private readonly deleteStmt: SqlStatementLike;
+  private readonly listStmt: SqlStatementLike;
 
-  constructor(db: Database.Database) {
+  constructor(db: SyncSqlDatabaseLike) {
     this.upsertStmt = db.prepare(
       `INSERT INTO session_containers (
          session_id, agent_id, container_id, container_name,
@@ -1575,11 +1594,11 @@ function rowToSessionContainer(row: SessionContainerRow): SessionContainer {
 // ---------- Audit store ----------
 
 class SqliteAuditStore implements AuditStore {
-  private readonly insertStmt: Database.Statement;
+  private readonly insertStmt: SqlStatementLike;
   private readonly baseSelect: string;
-  private readonly deleteOlderThanStmt: Database.Statement;
+  private readonly deleteOlderThanStmt: SqlStatementLike;
 
-  constructor(private readonly db: Database.Database) {
+  constructor(private readonly db: SyncSqlDatabaseLike) {
     this.insertStmt = db.prepare(
       `INSERT INTO audit_events (
         ts, request_id, actor, action, target, outcome, metadata_json
@@ -1676,14 +1695,14 @@ class SqliteAuditStore implements AuditStore {
 // ---------- User store ----------
 
 class SqliteUserStore implements UserStore {
-  private readonly insertStmt: Database.Statement;
-  private readonly getByTokenStmt: Database.Statement;
-  private readonly getByGithubIdStmt: Database.Statement;
-  private readonly getStmt: Database.Statement;
-  private readonly deleteExpiredStmt: Database.Statement;
-  private readonly updateGithubStmt: Database.Statement;
+  private readonly insertStmt: SqlStatementLike;
+  private readonly getByTokenStmt: SqlStatementLike;
+  private readonly getByGithubIdStmt: SqlStatementLike;
+  private readonly getStmt: SqlStatementLike;
+  private readonly deleteExpiredStmt: SqlStatementLike;
+  private readonly updateGithubStmt: SqlStatementLike;
 
-  constructor(private readonly db: Database.Database) {
+  constructor(private readonly db: SyncSqlDatabaseLike) {
     this.insertStmt = db.prepare(
       `INSERT INTO users (user_id, github_id, github_username, avatar_url, api_token, tier, created_at, expires_at)
        VALUES (@user_id, @github_id, @github_username, @avatar_url, @api_token, @tier, @created_at, @expires_at)`,
@@ -1810,11 +1829,13 @@ export class SqliteStore implements Store {
    *  previous boot's persisted key, "generated" if this boot minted a
    *  fresh one. */
   readonly vaultKeySource: "env" | "restored" | "generated" = "generated";
-  private readonly db: Database.Database;
+  private readonly db: SyncSqlDatabaseLike;
   private closed = false;
 
-  constructor(path: string, opts?: { vaultKeyEnv?: string }) {
-    this.db = new Database(path);
+  constructor(pathOrDb: string | SyncSqlDatabaseLike, opts?: { vaultKeyEnv?: string }) {
+    this.db = typeof pathOrDb === "string"
+      ? (new Database(pathOrDb) as unknown as SyncSqlDatabaseLike)
+      : pathOrDb;
     // WAL gives concurrent readers while one writer is active, which matters
     // as soon as more than one orchestrator thread/worker is introduced.
     this.db.pragma("journal_mode = WAL");

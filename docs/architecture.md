@@ -162,6 +162,7 @@ JSONL, and cloud runtimes can use a D1-compatible managed event table.
 
 - **`AgentStore`**, **`EnvironmentStore`**, and **`SessionStore`** — interfaces in `src/store/types.ts`. Synchronous methods (both backends are sync; we don't introduce speculative async).
 - **`SqliteStore`** (default, `src/store/sqlite.ts`) — `better-sqlite3`, WAL journal mode, `foreign_keys = ON`, CHECK constraints on session status. Core tables include `agents`, `agent_versions` (immutable version history), `environments`, `sessions`, durable queued events, audit events, key/value secrets, vaults + vault credentials, session/container adoption records, and local users. Sessions cascade on agent delete is **off** — sessions outlive their template. Additive column migrations (for example `ephemeral`, `environment_id`, `version`, `archived_at`, `permission_policy_json`, `thinking_level`, `channels`, `vault_id`) are gated on `PRAGMA table_info` checks and ALTERs on startup.
+- **`DurableObjectSqlStore`** (`src/store/durable-object-sql.ts`) — Cloudflare Durable Object SQLite adapter for the same synchronous `Store` contract. It accepts a platform `ctx.storage` / `storage.sql.exec(...)` surface, compiles the store's named parameters to positional bindings, uses `transactionSync` for store transactions, and reuses `SqliteStore` schema/migrations instead of creating a cloud-only metadata model.
 - **`InMemoryStore`** (`src/store/memory.ts`) — `Map`-backed, used in tests. Same interface, so the router takes store interfaces, not concrete classes.
 - **`buildStore`** (`src/store/index.ts`) — factory keyed on `OPENCLAW_STORE=sqlite|memory` and `OPENCLAW_STORE_PATH`.
 
@@ -236,16 +237,15 @@ session storage model.
 It wires `D1ManagedEventLog`, `D1ManagedHarnessStateStore`,
 `R2ManagedWorkspace`, `FlueHarnessAdapter`, `NativeOnlySessionRuntime`, and an
 `AgentRouter` together behind OMA's existing boundaries. It requires an
-explicit metadata store and either a workspace implementation or an
-R2-compatible bucket so the code does not pretend that Durable Object metadata,
-Artifacts workspace state, or a production Durable Object class are already
-solved.
+explicit metadata store, normally `DurableObjectSqlStore` inside a session
+Durable Object, and either a workspace implementation or an R2-compatible bucket
+so the code does not pretend that Artifacts workspace state, Workflow execution,
+or a production Durable Object class are already solved.
 
 `createCloudflareFlueFetchHandler` layers the shared Hono HTTP API on top of
 that stack for Worker-style `fetch(request, env, ctx)` entrypoints. It still
 requires explicit platform bindings, including the metadata `Store`, so it is
-an entrypoint helper rather than a claim that Cloudflare metadata persistence
-is solved.
+an entrypoint helper rather than a full Cloudflare deployment runtime.
 
 ### OpenClaw JSONL Event Source (`src/harness/openclaw-events.ts`)
 

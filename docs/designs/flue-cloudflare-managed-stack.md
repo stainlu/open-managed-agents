@@ -64,6 +64,10 @@ Done in OMA:
   backend with append, list, latest, count, stat, delete, and polling follow.
 - `D1ManagedHarnessStateStore` now exists as a concrete D1-compatible backend
   for harness-private session state such as Flue's SDK session data.
+- `DurableObjectSqlStore` now exists as a Cloudflare Durable Object
+  SQLite-compatible metadata store. It reuses the existing synchronous
+  `Store` contract and SQLite schema/migrations through a small `sql.exec()`
+  adapter instead of introducing a parallel cloud-only metadata model.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
 - Harness adapters now declare a runtime mode. Existing adapters remain
@@ -97,9 +101,10 @@ Still open:
 - The Flue harness driver is prompt-only: task/shell cancellation, MCP, tool
   approvals/deny policy, Cloudflare-backed Flue session persistence, and
   first-class OMA child sessions for Flue tasks are not wired yet.
-- The production Durable Object class and deployment wiring do not exist yet.
-  Metadata is still an explicit input to the Cloudflare/Flue factories instead
-  of being promoted as a solved platform binding.
+- The production Durable Object class and deployment wiring do not exist yet,
+  so the Cloudflare/Flue factories still take an explicit metadata `Store`.
+  The missing piece is composition and lifecycle, not a separate metadata
+  persistence abstraction.
 
 ## Non-Decision
 
@@ -337,7 +342,7 @@ workspace ids into the public session identity.
    - [x] Add an R2-compatible managed workspace backend.
    - [x] Add a Worker-style fetch handler factory around the Cloudflare/Flue
      stack.
-   - [ ] DO-backed metadata/session state.
+   - [x] Add a DO-SQL-compatible metadata store adapter.
    - [ ] Workflow-backed run execution.
    - [ ] Production R2 or Artifacts workspace binding.
    - [ ] Production Durable Object class and deployment wiring.

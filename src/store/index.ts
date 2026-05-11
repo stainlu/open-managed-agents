@@ -40,8 +40,15 @@ export function buildStore(opts: BuildStoreOptions): Store {
 }
 
 export { InMemoryStore } from "./memory.js";
+export {
+  createDurableObjectSqlDatabase,
+  DurableObjectSqlStore,
+  type DurableObjectSqlCursorLike,
+  type DurableObjectSqlStorageLike,
+  type DurableObjectStorageLike,
+} from "./durable-object-sql.js";
 export { OpenClawJsonlEventLog, PiJsonlEventReader } from "./pi-jsonl.js";
-export { SqliteStore } from "./sqlite.js";
+export { SqliteStore, type SyncSqlDatabaseLike } from "./sqlite.js";
 export type {
   AgentStore,
   EnvironmentStore,
