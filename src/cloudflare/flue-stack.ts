@@ -19,12 +19,19 @@ import { AgentRouter, type RouterConfig } from "../orchestrator/router.js";
 import { NativeOnlySessionRuntime } from "../runtime/native.js";
 import type { ManagedSessionRuntime } from "../runtime/session-runtime.js";
 import type { Store } from "../store/types.js";
+import {
+  R2ManagedWorkspace,
+  type R2BucketLike,
+  type R2ManagedWorkspaceOptions,
+} from "../workspace/r2.js";
 import type { ManagedWorkspace } from "../workspace/types.js";
 
 export type CloudflareFlueStackOptions = {
   db: D1DatabaseLike;
   store: Store;
-  workspace: ManagedWorkspace;
+  workspace?: ManagedWorkspace;
+  r2Bucket?: R2BucketLike;
+  workspaceOptions?: R2ManagedWorkspaceOptions;
   passthroughEnv?: Record<string, string>;
   runTimeoutMs?: number;
   eventLog?: ManagedEventLog;
@@ -42,6 +49,7 @@ export type CloudflareFlueStack = {
   events: ManagedEventLog;
   harnessState: ManagedHarnessStateStore;
   runtime: ManagedSessionRuntime;
+  workspace: ManagedWorkspace;
   harnesses: HarnessRegistry;
   flueHarness: HarnessAdapter;
   routerConfig: RouterConfig;
@@ -65,6 +73,11 @@ export function createCloudflareFlueStack(
   const harnessState = opts.harnessState ??
     new D1ManagedHarnessStateStore(opts.db, opts.harnessStateOptions);
   const runtime = opts.runtime ?? new NativeOnlySessionRuntime();
+  const workspace = opts.workspace ??
+    (opts.r2Bucket ? new R2ManagedWorkspace(opts.r2Bucket, opts.workspaceOptions) : undefined);
+  if (!workspace) {
+    throw new Error("Cloudflare Flue stack requires workspace or r2Bucket");
+  }
   const flueHarness = new FlueHarnessAdapter({
     passthroughEnv,
     sessionStateStore: harnessState,
@@ -85,7 +98,7 @@ export function createCloudflareFlueStack(
     opts.store.environments,
     opts.store.sessions,
     events,
-    opts.workspace,
+    workspace,
     runtime,
     opts.store.queue,
     opts.store.vaults,
@@ -97,6 +110,7 @@ export function createCloudflareFlueStack(
     events,
     harnessState,
     runtime,
+    workspace,
     harnesses,
     flueHarness,
     routerConfig,

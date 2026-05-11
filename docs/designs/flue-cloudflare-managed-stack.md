@@ -45,12 +45,14 @@ Done in OMA:
   harness tries to acquire a runtime lease.
 - `createCloudflareFlueStack` now exists as a Cloudflare-oriented router
   factory. It wires a D1-compatible managed event log, D1-compatible harness
-  state, `FlueHarnessAdapter`, `NativeOnlySessionRuntime`, and explicit
-  metadata/workspace inputs without importing Cloudflare Worker APIs or faking
-  Docker behavior.
+  state, optional R2-compatible workspace, `FlueHarnessAdapter`,
+  `NativeOnlySessionRuntime`, and explicit metadata/workspace inputs without
+  importing Cloudflare Worker APIs or faking Docker behavior.
 - `ManagedWorkspace` now exists in `src/workspace/types.ts`.
 - `LocalManagedWorkspace` preserves the current Docker/OpenClaw workspace
   layout while keeping router workspace CRUD off the event-log `stateRoot`.
+- `R2ManagedWorkspace` now exists as an R2-compatible managed workspace backend
+  for object-store session files.
 - `ManagedEventLog` methods are now awaitable, and router/server call sites
   await event reads, writes, stats, and deletes.
 - `CompositeManagedEventLog` can compose sync local JSONL readers with future
@@ -91,9 +93,8 @@ Still open:
   approvals/deny policy, Cloudflare-backed Flue session persistence, and
   first-class OMA child sessions for Flue tasks are not wired yet.
 - The production Cloudflare Worker / Durable Object entrypoint does not exist
-  yet. Metadata and workspace backends are still explicit inputs to the
-  Cloudflare/Flue router factory instead of being promoted as solved platform
-  bindings.
+  yet. Metadata is still an explicit input to the Cloudflare/Flue router
+  factory instead of being promoted as a solved platform binding.
 
 ## Non-Decision
 
@@ -328,9 +329,10 @@ workspace ids into the public session identity.
 6. [ ] Add Cloudflare runtime prototype.
    - Add a router factory that wires D1 event/state stores, Flue, and a
      native-only runtime without Docker compatibility shims.
+   - Add an R2-compatible managed workspace backend.
    - DO-backed metadata/session state.
    - Workflow-backed run execution.
-   - R2 or Artifacts workspace.
+   - Production R2 or Artifacts workspace binding.
    - No Docker compatibility shims.
 
 7. [ ] Promote Cloudflare runtime only after it proves:

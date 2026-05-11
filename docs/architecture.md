@@ -200,9 +200,12 @@ workspace CRUD routes. It deliberately sits beside, not inside,
 - **`LocalManagedWorkspace`** maps the current Docker/OpenClaw layout to
   `<stateRoot>/<agentId>/sessions/<sessionId>/`, preserving the existing local
   behavior.
-- Future cloud runtimes can implement the same interface over Artifacts, R2,
-  object storage, or a provider-native workspace without exposing local
-  filesystem paths through the event-log contract.
+- **`R2ManagedWorkspace`** maps session files to an R2-compatible object bucket
+  under `<prefix>/<agentId>/sessions/<sessionId>/workspace/`, synthesizing
+  directory listings from object key prefixes.
+- Future cloud runtimes can implement the same interface over Artifacts or
+  another provider-native workspace without exposing local filesystem paths
+  through the event-log contract.
 
 ### Managed Harness State (`src/harness/state-store.ts`)
 
@@ -231,10 +234,11 @@ session storage model.
 
 `createCloudflareFlueStack` is the first Cloudflare-oriented composition point.
 It wires `D1ManagedEventLog`, `D1ManagedHarnessStateStore`,
-`FlueHarnessAdapter`, `NativeOnlySessionRuntime`, and an `AgentRouter` together
-behind OMA's existing boundaries. It requires explicit metadata-store and
-workspace inputs so the code does not pretend that Durable Object metadata,
-R2/Artifacts workspace state, or a production Worker entrypoint are already
+`R2ManagedWorkspace`, `FlueHarnessAdapter`, `NativeOnlySessionRuntime`, and an
+`AgentRouter` together behind OMA's existing boundaries. It requires an
+explicit metadata store and either a workspace implementation or an
+R2-compatible bucket so the code does not pretend that Durable Object metadata,
+Artifacts workspace state, or a production Worker entrypoint are already
 solved.
 
 ### OpenClaw JSONL Event Source (`src/harness/openclaw-events.ts`)

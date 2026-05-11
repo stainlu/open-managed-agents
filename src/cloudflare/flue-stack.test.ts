@@ -9,6 +9,12 @@ import type {
 import type { FlueEngine } from "../harness/flue.js";
 import { NativeOnlySessionRuntime } from "../runtime/native.js";
 import { InMemoryStore } from "../store/memory.js";
+import type {
+  R2BucketLike,
+  R2ListOptionsLike,
+  R2ListResultLike,
+  R2ObjectBodyLike,
+} from "../workspace/r2.js";
 import {
   WorkspaceError,
   type ManagedWorkspace,
@@ -118,6 +124,28 @@ describe("createCloudflareFlueStack", () => {
       store.close();
     }
   });
+
+  it("can construct the workspace from an R2-compatible bucket", async () => {
+    const { db, close } = sqliteD1();
+    const store = new InMemoryStore();
+    try {
+      const stack = createCloudflareFlueStack({
+        db,
+        store,
+        r2Bucket: new FakeR2Bucket(),
+        flueEngine: {
+          prompt: async () => ({ text: "unused" }),
+        },
+      });
+
+      await stack.workspace.writeFile("agt_1", "ses_1", "artifact.txt", Buffer.from("ok"));
+      await expect(stack.workspace.readFile("agt_1", "ses_1", "artifact.txt"))
+        .resolves.toEqual(Buffer.from("ok"));
+    } finally {
+      close();
+      store.close();
+    }
+  });
 });
 
 async function waitForSessionToStopRunning(
@@ -201,5 +229,44 @@ class SqliteD1PreparedStatement implements D1PreparedStatementLike {
 
   async run(): Promise<unknown> {
     return this.db.prepare(this.query).run(...this.values);
+  }
+}
+
+class FakeR2Bucket implements R2BucketLike {
+  private readonly objects = new Map<string, Buffer>();
+
+  async get(key: string): Promise<R2ObjectBodyLike | null> {
+    const body = this.objects.get(key);
+    if (!body) return null;
+    return {
+      key,
+      size: body.byteLength,
+      uploaded: new Date(),
+      arrayBuffer: async () =>
+        body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer,
+    };
+  }
+
+  async put(key: string, value: Uint8Array | ArrayBuffer | string): Promise<unknown> {
+    this.objects.set(key, Buffer.from(value as Uint8Array));
+  }
+
+  async delete(key: string | string[]): Promise<unknown> {
+    for (const item of Array.isArray(key) ? key : [key]) {
+      this.objects.delete(item);
+    }
+  }
+
+  async list(opts: R2ListOptionsLike = {}): Promise<R2ListResultLike> {
+    const prefix = opts.prefix ?? "";
+    return {
+      objects: [...this.objects.entries()]
+        .filter(([key]) => key.startsWith(prefix))
+        .map(([key, body]) => ({
+          key,
+          size: body.byteLength,
+          uploaded: new Date(),
+        })),
+    };
   }
 }
