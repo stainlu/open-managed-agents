@@ -19,8 +19,10 @@ the remaining Cloudflare gap is production deployment/lifecycle rather than a
 new metadata abstraction.
 `CloudflareFlueDurableObject` now provides the first DO composition point around
 that store, D1 event/state stores, R2 workspace, and the shared HTTP API. It is
-still not the promoted backend: Worker routing, `wrangler.toml` bindings,
-Workflow-backed run execution, and real deployment verification remain open.
+paired with a Worker-side router that forwards public traffic to a named
+coordinator Durable Object. It is still not the promoted backend:
+`wrangler.toml` bindings, Workflow-backed run execution, and real deployment
+verification remain open.
 `createCloudflareFlueFetchHandler` adds a Worker-style fetch entrypoint helper
 around the same stack, while still requiring the deployment layer to provide
 real platform bindings. Managed event-log operations are awaitable at the router

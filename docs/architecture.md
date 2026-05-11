@@ -254,6 +254,12 @@ binding, and serves the same Hono API. It is not a Workflow runtime yet; it is
 the coordinator/metadata object that removes the last fake in-memory store from
 the Cloudflare path.
 
+`createCloudflareFlueWorkerRouter` is the public Worker routing helper. It maps
+incoming HTTP requests to a named coordinator Durable Object via
+`idFromName(...)` and forwards the request to that object. This keeps the
+managed metadata authority singular even when many Worker isolates receive
+traffic.
+
 ### OpenClaw JSONL Event Source (`src/harness/openclaw-events.ts`)
 
 Parses OpenClaw's per-session JSONL at query time. Resolves our `session_id` -> the Pi session file via `<stateRoot>/<agentId>/sessions/<sessionId>/agents/main/sessions/sessions.json` keyed by the canonical `agent:main:<session_id>` form, then opens `<stateRoot>/<agentId>/sessions/<sessionId>/agents/main/sessions/<piSessionId>.jsonl`. A legacy fallback still checks the old per-agent path (`<stateRoot>/<agentId>/agents/main/sessions/...`) so existing local state can be read.

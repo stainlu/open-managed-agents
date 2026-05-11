@@ -72,6 +72,9 @@ Done in OMA:
   composition point. It owns DO SQLite metadata, D1-compatible managed events
   and harness state, an R2-compatible workspace, and the shared Worker-style
   OMA HTTP handler without requiring Docker shims.
+- `createCloudflareFlueWorkerRouter` now exists as the public Worker-side
+  router. It forwards requests to a named coordinator Durable Object instead
+  of letting each Worker isolate create its own metadata store.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
 - Harness adapters now declare a runtime mode. Existing adapters remain
@@ -106,9 +109,9 @@ Still open:
   approvals/deny policy, Cloudflare-backed Flue session persistence, and
   first-class OMA child sessions for Flue tasks are not wired yet.
 - Production Cloudflare deployment wiring still does not exist: no
-  `wrangler.toml`, Worker route that chooses the coordinator DO id, migration
-  story for bindings, or Workflow-backed run execution. The DO class exists as
-  a composition point, not as an end-to-end deployment recipe.
+  `wrangler.toml`, binding migration story, or Workflow-backed run execution.
+  The Worker router and DO class exist as composition points, not as an
+  end-to-end deployment recipe.
 
 ## Non-Decision
 
@@ -349,9 +352,11 @@ workspace ids into the public session identity.
    - [x] Add a DO-SQL-compatible metadata store adapter.
    - [x] Add a Durable Object fetch composition class around DO metadata, D1,
      R2, and the shared HTTP handler.
+   - [x] Add a Worker-side router that forwards public requests to a named
+     coordinator Durable Object.
    - [ ] Workflow-backed run execution.
    - [ ] Production R2 or Artifacts workspace binding.
-   - [ ] Production Worker/DO route and `wrangler.toml` deployment wiring.
+   - [ ] Production `wrangler.toml` deployment wiring.
    - [x] No Docker compatibility shims.
 
 7. [ ] Promote Cloudflare runtime only after it proves:
