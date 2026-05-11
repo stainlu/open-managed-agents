@@ -231,7 +231,7 @@ session storage model.
   implement the same boundary over Durable Object state, D1, R2, or another
   provider-native store.
 
-### Cloudflare/Flue Stack Factory (`src/cloudflare/flue-stack.ts`)
+### Cloudflare/Flue Stack (`src/cloudflare/`)
 
 `createCloudflareFlueStack` is the first Cloudflare-oriented composition point.
 It wires `D1ManagedEventLog`, `D1ManagedHarnessStateStore`,
@@ -246,6 +246,13 @@ or a production Durable Object class are already solved.
 that stack for Worker-style `fetch(request, env, ctx)` entrypoints. It still
 requires explicit platform bindings, including the metadata `Store`, so it is
 an entrypoint helper rather than a full Cloudflare deployment runtime.
+
+`CloudflareFlueDurableObject` is the conventional Durable Object composition
+class. It creates `DurableObjectSqlStore` from `ctx.storage`, wires D1-compatible
+managed event and harness-state stores, requires an R2-compatible workspace
+binding, and serves the same Hono API. It is not a Workflow runtime yet; it is
+the coordinator/metadata object that removes the last fake in-memory store from
+the Cloudflare path.
 
 ### OpenClaw JSONL Event Source (`src/harness/openclaw-events.ts`)
 

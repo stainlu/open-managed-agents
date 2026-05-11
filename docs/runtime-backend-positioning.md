@@ -15,8 +15,12 @@ native-harness stacks a concrete runtime object without fake Docker behavior.
 D1-compatible event and harness-state stores plus an optional R2-compatible
 workspace backend, with metadata passed explicitly as a `Store`. A
 Cloudflare Durable Object SQLite adapter now exists for that store contract, so
-the remaining Cloudflare gap is production DO composition/lifecycle rather than
-a new metadata abstraction.
+the remaining Cloudflare gap is production deployment/lifecycle rather than a
+new metadata abstraction.
+`CloudflareFlueDurableObject` now provides the first DO composition point around
+that store, D1 event/state stores, R2 workspace, and the shared HTTP API. It is
+still not the promoted backend: Worker routing, `wrangler.toml` bindings,
+Workflow-backed run execution, and real deployment verification remain open.
 `createCloudflareFlueFetchHandler` adds a Worker-style fetch entrypoint helper
 around the same stack, while still requiring the deployment layer to provide
 real platform bindings. Managed event-log operations are awaitable at the router

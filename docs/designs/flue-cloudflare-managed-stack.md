@@ -68,6 +68,10 @@ Done in OMA:
   SQLite-compatible metadata store. It reuses the existing synchronous
   `Store` contract and SQLite schema/migrations through a small `sql.exec()`
   adapter instead of introducing a parallel cloud-only metadata model.
+- `CloudflareFlueDurableObject` now exists as a conventional Durable Object
+  composition point. It owns DO SQLite metadata, D1-compatible managed events
+  and harness state, an R2-compatible workspace, and the shared Worker-style
+  OMA HTTP handler without requiring Docker shims.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
 - Harness adapters now declare a runtime mode. Existing adapters remain
@@ -101,10 +105,10 @@ Still open:
 - The Flue harness driver is prompt-only: task/shell cancellation, MCP, tool
   approvals/deny policy, Cloudflare-backed Flue session persistence, and
   first-class OMA child sessions for Flue tasks are not wired yet.
-- The production Durable Object class and deployment wiring do not exist yet,
-  so the Cloudflare/Flue factories still take an explicit metadata `Store`.
-  The missing piece is composition and lifecycle, not a separate metadata
-  persistence abstraction.
+- Production Cloudflare deployment wiring still does not exist: no
+  `wrangler.toml`, Worker route that chooses the coordinator DO id, migration
+  story for bindings, or Workflow-backed run execution. The DO class exists as
+  a composition point, not as an end-to-end deployment recipe.
 
 ## Non-Decision
 
@@ -343,9 +347,11 @@ workspace ids into the public session identity.
    - [x] Add a Worker-style fetch handler factory around the Cloudflare/Flue
      stack.
    - [x] Add a DO-SQL-compatible metadata store adapter.
+   - [x] Add a Durable Object fetch composition class around DO metadata, D1,
+     R2, and the shared HTTP handler.
    - [ ] Workflow-backed run execution.
    - [ ] Production R2 or Artifacts workspace binding.
-   - [ ] Production Durable Object class and deployment wiring.
+   - [ ] Production Worker/DO route and `wrangler.toml` deployment wiring.
    - [x] No Docker compatibility shims.
 
 7. [ ] Promote Cloudflare runtime only after it proves:
