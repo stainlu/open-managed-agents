@@ -22,6 +22,10 @@ import type {
 } from "../runtime/container.js";
 import { PoolCapacityError } from "../runtime/pool.js";
 import {
+  InlineRunScheduler,
+  type ManagedRunScheduler,
+} from "../runtime/run-scheduler.js";
+import {
   runtimeEndpoint,
   type ManagedSessionRuntime,
   type RuntimeLease,
@@ -57,6 +61,8 @@ export type RouterConfig = {
   runTimeoutMs: number;
   /** Harness adapters selected by the composition root. */
   harnesses: HarnessRegistry;
+  /** Background run scheduler. Defaults to in-process fire-and-forget. */
+  runScheduler?: ManagedRunScheduler;
 };
 
 export type RunEventArgs = {
@@ -158,6 +164,8 @@ export class AgentRouter {
    * acquiring and aborts before posting to the container.
    */
   private readonly cancelledDuringAcquire = new Set<string>();
+  private readonly runScheduler: ManagedRunScheduler;
+
   constructor(
     private readonly agents: AgentStore,
     private readonly environments: EnvironmentStore,
@@ -168,7 +176,9 @@ export class AgentRouter {
     private readonly queue: QueueStore,
     private readonly vaults: VaultStore,
     private readonly cfg: RouterConfig,
-  ) {}
+  ) {
+    this.runScheduler = cfg.runScheduler ?? new InlineRunScheduler();
+  }
 
   /** Return any pending approval requests for a session (non-destructive). */
   getPendingApprovals(sessionId: string): PendingApproval[] {
@@ -627,22 +637,14 @@ export class AgentRouter {
     this.sessions.bumpTurns(args.sessionId);
     addContext({ sessionId: args.sessionId, agentId: agent.agentId });
 
-    // Capture the current context (request-id + session/agent) so that the
-    // fire-and-forget background task's logs carry the same identifiers
-    // as the HTTP handler that kicked it off.
-    const runInBackground = withCapturedContext(() =>
-      this.executeInBackground(
-        args.sessionId,
-        agent,
-        args.content,
-        args.model,
-        args.thinkingLevel,
-      ),
-    );
-    const handleFailure = withCapturedContext((err: unknown) =>
-      this.handleBackgroundFailure(args.sessionId, err),
-    );
-    void runInBackground().catch(handleFailure);
+    this.scheduleBackgroundRun({
+      sessionId: args.sessionId,
+      agent,
+      content: args.content,
+      model: args.model,
+      thinkingLevel: args.thinkingLevel,
+      queued: false,
+    });
 
     return { session: runningSession, queued: false };
   }
@@ -1289,6 +1291,47 @@ export class AgentRouter {
     });
   }
 
+  private scheduleBackgroundRun(args: {
+    sessionId: string;
+    agent: AgentConfig;
+    content: string;
+    model?: string;
+    thinkingLevel?: AgentConfig["thinkingLevel"];
+    queued: boolean;
+  }): void {
+    // Capture the current context (request-id + session/agent) so that
+    // out-of-band schedulers preserve the same logging scope when they run.
+    const runInBackground = withCapturedContext(() =>
+      this.executeInBackground(
+        args.sessionId,
+        args.agent,
+        args.content,
+        args.model,
+        args.thinkingLevel,
+      ),
+    );
+    const handleFailure = withCapturedContext((err: unknown) =>
+      this.handleBackgroundFailure(args.sessionId, err),
+    );
+    try {
+      const scheduled = this.runScheduler.schedule({
+        request: {
+          sessionId: args.sessionId,
+          agentId: args.agent.agentId,
+          content: args.content,
+          model: args.model,
+          thinkingLevel: args.thinkingLevel,
+          queued: args.queued,
+        },
+        run: runInBackground,
+        onFailure: handleFailure,
+      });
+      void Promise.resolve(scheduled).catch(handleFailure);
+    } catch (err) {
+      void handleFailure(err);
+    }
+  }
+
   private async executeInBackground(
     sessionId: string,
     agent: AgentConfig,
@@ -1438,13 +1481,14 @@ export class AgentRouter {
     const next = this.queue.shift(sessionId);
     if (next) {
       this.sessions.addUsage(sessionId, usage);
-      void this.executeInBackground(
+      this.scheduleBackgroundRun({
         sessionId,
         agent,
-        next.content,
-        next.model,
-        next.thinkingLevel,
-      ).catch((err) => this.handleBackgroundFailure(sessionId, err));
+        content: next.content,
+        model: next.model,
+        thinkingLevel: next.thinkingLevel,
+        queued: true,
+      });
       return;
     }
 

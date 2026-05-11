@@ -15,6 +15,7 @@ import {
   type DurableObjectStorageLike,
 } from "../store/durable-object-sql.js";
 import type { Store } from "../store/types.js";
+import type { ManagedRunRequest } from "../runtime/run-scheduler.js";
 import type {
   R2BucketLike,
   R2ListOptionsLike,
@@ -25,6 +26,7 @@ import {
   CloudflareFlueDurableObject,
   createCloudflareFlueDurableObjectHandler,
 } from "./durable-object.js";
+import type { CloudflareWorkflowBindingLike } from "./workflow.js";
 
 let tmpDir: string;
 
@@ -143,6 +145,59 @@ describe("CloudflareFlueDurableObject", () => {
 
       const store = new DurableObjectSqlStore(doStorage);
       expect(store.secrets.get("parent_token_hmac_secret")?.byteLength).toBe(32);
+    } finally {
+      close();
+      doBacking.close();
+    }
+  });
+
+  it("uses the Workflow binding as the background run scheduler when configured", async () => {
+    const doBacking = new Database(join(tmpDir, "metadata.db"));
+    const doStorage = new FakeDurableObjectStorage(doBacking);
+    const { db, close } = sqliteD1();
+    const workflow = new FakeWorkflow();
+
+    try {
+      const object = new CloudflareFlueDurableObject(
+        { storage: doStorage },
+        {
+          OMA_DB: db,
+          OMA_WORKSPACE: new FakeR2Bucket(),
+          OMA_RUN_WORKFLOW: workflow,
+        },
+      );
+
+      const created = await object.fetch(new Request("https://oma.example/v1/agents", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          harnessId: "flue",
+          model: "test/model",
+          instructions: "be useful",
+        }),
+      }));
+      expect(created.status).toBe(200);
+      const agent = await created.json() as { agent_id: string };
+
+      const run = await object.fetch(new Request(
+        `https://oma.example/v1/agents/${agent.agent_id}/run`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ task: "hello workflow" }),
+        },
+      ));
+      expect(run.status).toBe(200);
+      const body = await run.json() as { session_id: string; status: string };
+
+      expect(body.status).toBe("starting");
+      expect(workflow.created).toHaveLength(1);
+      expect(workflow.created[0]?.params).toMatchObject({
+        sessionId: body.session_id,
+        agentId: agent.agent_id,
+        content: "hello workflow",
+        queued: false,
+      });
     } finally {
       close();
       doBacking.close();
@@ -322,5 +377,14 @@ class FakeR2Bucket implements R2BucketLike {
 
   keys(): Iterable<string> {
     return this.objects.keys();
+  }
+}
+
+class FakeWorkflow implements CloudflareWorkflowBindingLike {
+  readonly created: Array<{ id?: string; params: ManagedRunRequest }> = [];
+
+  create(args: Parameters<CloudflareWorkflowBindingLike["create"]>[0]): { id: string } {
+    this.created.push(args);
+    return { id: args.id ?? `workflow-${this.created.length}` };
   }
 }

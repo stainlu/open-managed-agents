@@ -17,6 +17,7 @@ import {
 import type { HarnessAdapter } from "../harness/types.js";
 import { AgentRouter, type RouterConfig } from "../orchestrator/router.js";
 import { NativeOnlySessionRuntime } from "../runtime/native.js";
+import type { ManagedRunScheduler } from "../runtime/run-scheduler.js";
 import type { ManagedSessionRuntime } from "../runtime/session-runtime.js";
 import type { Store } from "../store/types.js";
 import {
@@ -41,6 +42,7 @@ export type CloudflareFlueStackOptions = {
   flueEngine?: FlueEngine;
   loadFlueEngine?: () => Promise<FlueEngine>;
   runtime?: ManagedSessionRuntime;
+  runScheduler?: ManagedRunScheduler;
 };
 
 export type CloudflareFlueStack = {
@@ -92,6 +94,7 @@ export function createCloudflareFlueStack(
     passthroughEnv,
     runTimeoutMs: opts.runTimeoutMs ?? 10 * 60_000,
     harnesses,
+    runScheduler: opts.runScheduler,
   };
   const router = new AgentRouter(
     opts.store.agents,

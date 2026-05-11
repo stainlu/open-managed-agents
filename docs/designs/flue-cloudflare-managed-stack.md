@@ -75,6 +75,13 @@ Done in OMA:
 - `createCloudflareFlueWorkerRouter` now exists as the public Worker-side
   router. It forwards requests to a named coordinator Durable Object instead
   of letting each Worker isolate create its own metadata store.
+- `ManagedRunScheduler` now exists as the router boundary for background run
+  kickoff. The default `InlineRunScheduler` preserves the current local
+  fire-and-forget behavior.
+- `CloudflareWorkflowRunScheduler` now exists as the Cloudflare scheduling
+  adapter. A Durable Object with `OMA_RUN_WORKFLOW` configured creates a
+  Workflow instance from the managed run request instead of executing the run
+  inline inside the HTTP request path.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
 - Harness adapters now declare a runtime mode. Existing adapters remain
@@ -91,9 +98,9 @@ Done in OMA:
   deltas as OpenAI-compatible chat chunks, appends normalized managed events
   while streamed turns are still running, cancels active prompt calls with
   Flue's native `AbortSignal` path, persists Flue session data through
-  OMA-managed local harness state, and fails loudly for unsupported OMA tool
-  mapping. A D1-compatible store exists for the same harness-state contract,
-  but it is not wired into a Cloudflare runtime yet.
+  OMA-managed harness state, and fails loudly for unsupported OMA tool mapping.
+  Local and D1-compatible stores both exist for the same harness-state contract;
+  the Cloudflare stack uses the D1-compatible placement.
 
 Started upstream in Flue:
 
@@ -109,8 +116,9 @@ Still open:
   approvals/deny policy, Cloudflare-backed Flue session persistence, and
   first-class OMA child sessions for Flue tasks are not wired yet.
 - Production Cloudflare deployment wiring still does not exist: no
-  `wrangler.toml`, binding migration story, or Workflow-backed run execution.
-  The Worker router and DO class exist as composition points, not as an
+  `wrangler.toml`, binding migration story, or Workflow runner that resumes a
+  scheduled managed run through the coordinator DO/router. The Worker router,
+  DO class, and Workflow scheduler exist as composition points, not as an
   end-to-end deployment recipe.
 
 ## Non-Decision
@@ -354,7 +362,10 @@ workspace ids into the public session identity.
      R2, and the shared HTTP handler.
    - [x] Add a Worker-side router that forwards public requests to a named
      coordinator Durable Object.
-   - [ ] Workflow-backed run execution.
+   - [x] Add a scheduler boundary for background run kickoff.
+   - [x] Add a Workflow scheduling adapter for Cloudflare bindings.
+   - [ ] Add a Workflow execution callback/runner that resumes the scheduled
+     run through the coordinator Durable Object.
    - [ ] Production R2 or Artifacts workspace binding.
    - [ ] Production `wrangler.toml` deployment wiring.
    - [x] No Docker compatibility shims.

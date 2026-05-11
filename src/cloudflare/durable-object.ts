@@ -7,6 +7,10 @@ import {
   type CloudflareFlueFetchHandler,
   type CloudflareFlueFetchHandlerOptions,
 } from "./fetch-handler.js";
+import {
+  CloudflareWorkflowRunScheduler,
+  type CloudflareWorkflowBindingLike,
+} from "./workflow.js";
 
 export type CloudflareDurableObjectStateLike = {
   storage: DurableObjectStorageLike;
@@ -29,6 +33,7 @@ export type CloudflareFlueDurableObjectEnv = {
   OMA_WORKSPACE?: R2BucketLike;
   OMA_API_TOKEN?: string;
   OMA_PARENT_TOKEN_SECRET_BASE64?: string;
+  OMA_RUN_WORKFLOW?: CloudflareWorkflowBindingLike;
   OMA_RUN_TIMEOUT_MS?: string | number;
   OMA_RATE_LIMIT_RPM?: string | number;
   OMA_VERSION?: string;
@@ -52,9 +57,9 @@ export function createCloudflareFlueDurableObjectHandler(
  *
  * This class owns only the Cloudflare composition boundary: Durable Object
  * SQLite for managed metadata, D1-compatible event/harness state, R2-compatible
- * workspace, and the shared Worker-style OMA HTTP handler. Run execution still
- * goes through the Flue native harness path; Workflow-backed long-running runs
- * are a separate runtime step.
+ * workspace, and the shared Worker-style OMA HTTP handler. When a Workflow
+ * binding is provided, run kickoff is scheduled out of band; the Workflow
+ * runner that resumes and executes the scheduled turn is a separate step.
  */
 export class CloudflareFlueDurableObject<
   Env extends CloudflareFlueDurableObjectEnv = CloudflareFlueDurableObjectEnv,
@@ -90,6 +95,9 @@ export class CloudflareFlueDurableObject<
       r2Bucket: this.env.OMA_WORKSPACE,
       apiToken: this.env.OMA_API_TOKEN,
       parentTokenSecretBase64: this.env.OMA_PARENT_TOKEN_SECRET_BASE64,
+      runScheduler: this.env.OMA_RUN_WORKFLOW
+        ? new CloudflareWorkflowRunScheduler({ workflow: this.env.OMA_RUN_WORKFLOW })
+        : undefined,
       runTimeoutMs: optionalNumber("OMA_RUN_TIMEOUT_MS", this.env.OMA_RUN_TIMEOUT_MS),
       rateLimitRpm: optionalNumber("OMA_RATE_LIMIT_RPM", this.env.OMA_RATE_LIMIT_RPM),
       version: this.env.OMA_VERSION,

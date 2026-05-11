@@ -254,6 +254,15 @@ binding, and serves the same Hono API. It is not a Workflow runtime yet; it is
 the coordinator/metadata object that removes the last fake in-memory store from
 the Cloudflare path.
 
+`ManagedRunScheduler` is the background-run kickoff boundary. The default
+`InlineRunScheduler` preserves the local behavior by running the turn
+fire-and-forget in the current process. Cloudflare composition can instead
+install `CloudflareWorkflowRunScheduler`, which serializes the managed run
+request into a Workflow instance through an `OMA_RUN_WORKFLOW` binding. That is
+only the scheduling half: a production Cloudflare backend still needs the
+Workflow runner/callback that re-enters the coordinator Durable Object and
+executes the scheduled turn.
+
 `createCloudflareFlueWorkerRouter` is the public Worker routing helper. It maps
 incoming HTTP requests to a named coordinator Durable Object via
 `idFromName(...)` and forwards the request to that object. This keeps the

@@ -10,6 +10,11 @@ import { HarnessRegistry } from "../harness/registry.js";
 import type { HarnessAdapter, HarnessCapabilities } from "../harness/types.js";
 import type { GatewayWebSocketClient } from "../runtime/gateway-ws.js";
 import { ParentTokenMinter } from "../runtime/parent-token.js";
+import type {
+  ManagedRunRequest,
+  ManagedRunScheduler,
+  ScheduleManagedRunArgs,
+} from "../runtime/run-scheduler.js";
 import type { ManagedSessionRuntime } from "../runtime/session-runtime.js";
 import { InMemoryStore } from "../store/memory.js";
 import type { QueueStore } from "../store/types.js";
@@ -33,6 +38,7 @@ function makeRouter(opts: {
   passthroughEnv?: Record<string, string>;
   capabilityOverrides?: Partial<HarnessCapabilities>;
   extraHarnesses?: HarnessAdapter[];
+  runScheduler?: ManagedRunScheduler;
 } = {}): {
   router: AgentRouter;
   store: InMemoryStore;
@@ -76,6 +82,7 @@ function makeRouter(opts: {
     passthroughEnv: opts.passthroughEnv ?? {},
     runTimeoutMs: 60_000,
     harnesses: new HarnessRegistry({ adapters: [harness, ...(opts.extraHarnesses ?? [])] }),
+    runScheduler: opts.runScheduler,
   };
   const router = new AgentRouter(
     store.agents,
@@ -192,6 +199,23 @@ function nativeTestHarness(
     ...overrides,
   };
   return adapter;
+}
+
+class RecordingRunScheduler implements ManagedRunScheduler {
+  readonly scheduled: ScheduleManagedRunArgs[] = [];
+
+  constructor(private readonly runImmediately = false) {}
+
+  schedule(args: ScheduleManagedRunArgs): void | Promise<void> {
+    this.scheduled.push(args);
+    if (this.runImmediately) {
+      return args.run().catch(args.onFailure);
+    }
+  }
+
+  requests(): ManagedRunRequest[] {
+    return this.scheduled.map((entry) => entry.request);
+  }
 }
 
 describe("AgentRouter.createSession", () => {
@@ -831,6 +855,70 @@ describe("AgentRouter.runEvent — decision tree", () => {
     expect(queue.size(session.sessionId)).toBe(0);
   });
 
+  it("delegates idle run kickoff to the configured run scheduler", async () => {
+    const runScheduler = new RecordingRunScheduler();
+    const { router, store } = makeRouter({ runScheduler });
+    const agent = store.agents.create({
+      model: "m",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+    });
+    const session = router.createSession(agent.agentId);
+
+    const result = await router.runEvent({
+      sessionId: session.sessionId,
+      content: "scheduled turn",
+      model: "anthropic/claude-sonnet-4-6",
+      thinkingLevel: "high",
+    });
+
+    expect(result.queued).toBe(false);
+    expect(store.sessions.get(session.sessionId)?.status).toBe("starting");
+    expect(runScheduler.requests()).toEqual([
+      {
+        sessionId: session.sessionId,
+        agentId: agent.agentId,
+        content: "scheduled turn",
+        model: "anthropic/claude-sonnet-4-6",
+        thinkingLevel: "high",
+        queued: false,
+      },
+    ]);
+  });
+
+  it("marks the session failed if the run scheduler throws synchronously", async () => {
+    const runScheduler: ManagedRunScheduler = {
+      schedule() {
+        throw new Error("scheduler unavailable");
+      },
+    };
+    const { router, store } = makeRouter({
+      poolStub: { evictSession: async () => {} },
+      runScheduler,
+    });
+    const agent = store.agents.create({
+      model: "m",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+    });
+    const session = router.createSession(agent.agentId);
+
+    const result = await router.runEvent({
+      sessionId: session.sessionId,
+      content: "scheduled turn",
+    });
+
+    expect(result.queued).toBe(false);
+    expect(store.sessions.get(session.sessionId)?.status).toBe("failed");
+    expect(store.sessions.get(session.sessionId)?.error).toBe("scheduler unavailable");
+  });
+
   it("rejects queued per-turn model overrides when the harness cannot patch a live session", async () => {
     const { router, store, queue } = makeRouter({
       capabilityOverrides: {
@@ -952,6 +1040,89 @@ describe("AgentRouter native harness runtime", () => {
     expect(finished?.status).toBe("idle");
     expect(finished?.tokensIn).toBe(11);
     expect(finished?.tokensOut).toBe(7);
+  });
+
+  it("schedules queued follow-up turns through the same run scheduler", async () => {
+    const { eventReader } = managedEventStore();
+    const runScheduler = new RecordingRunScheduler(true);
+    const releaseTurn: Array<() => void> = [];
+    let turnIndex = 0;
+    const invokeTurn = vi.fn(async (args) => {
+      const index = turnIndex++;
+      await new Promise<void>((resolve) => releaseTurn.push(resolve));
+      return {
+        output: `native done ${index}`,
+        tokensIn: 1,
+        tokensOut: 1,
+        model: args.agent?.model,
+        events: [
+          {
+            eventId: `evt_native_user_${index}`,
+            sessionId: args.sessionId,
+            type: "user.message" as const,
+            content: args.content,
+            createdAt: index * 10 + 1,
+          },
+          {
+            eventId: `evt_native_agent_${index}`,
+            sessionId: args.sessionId,
+            type: "agent.message" as const,
+            content: `native done ${index}`,
+            createdAt: index * 10 + 2,
+            tokensIn: 1,
+            tokensOut: 1,
+            model: args.agent?.model,
+          },
+        ],
+      };
+    });
+    const { router, store } = makeRouter({
+      extraHarnesses: [nativeTestHarness({ invokeTurn })],
+      poolStub: {
+        acquireForSession: vi.fn(async () => {
+          throw new Error("native harness should not acquire a container");
+        }),
+        evictSession: async () => {},
+      },
+      eventReaderStub: eventReader,
+      runScheduler,
+    });
+    const agent = store.agents.create({
+      model: "flue/native-test",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+      harnessId: "native-test",
+    });
+    const session = router.createSession(agent.agentId);
+
+    await router.runEvent({ sessionId: session.sessionId, content: "first" });
+    await waitForCondition("first turn to start", () => invokeTurn.mock.calls.length === 1);
+
+    const queued = await router.runEvent({
+      sessionId: session.sessionId,
+      content: "second",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+    expect(queued.queued).toBe(true);
+
+    releaseTurn[0]?.();
+    await waitForCondition("queued turn to be scheduled", () => runScheduler.scheduled.length === 2);
+    expect(runScheduler.requests()).toMatchObject([
+      { content: "first", queued: false },
+      {
+        content: "second",
+        model: "anthropic/claude-sonnet-4-6",
+        queued: true,
+      },
+    ]);
+
+    releaseTurn[1]?.();
+    await waitForSessionToStopRunning(store, session.sessionId);
+    expect(invokeTurn).toHaveBeenCalledTimes(2);
+    expect(store.sessions.get(session.sessionId)?.status).toBe("idle");
   });
 
   it("streams native harness turns without acquiring a container endpoint", async () => {
