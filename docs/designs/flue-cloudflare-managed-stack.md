@@ -327,13 +327,13 @@ workspace ids into the public session identity.
    - Decide how Flue task lineage maps to OMA child sessions.
 
 6. [ ] Add Cloudflare runtime prototype.
-   - Add a router factory that wires D1 event/state stores, Flue, and a
+   - [x] Add a router factory that wires D1 event/state stores, Flue, and a
      native-only runtime without Docker compatibility shims.
-   - Add an R2-compatible managed workspace backend.
-   - DO-backed metadata/session state.
-   - Workflow-backed run execution.
-   - Production R2 or Artifacts workspace binding.
-   - No Docker compatibility shims.
+   - [x] Add an R2-compatible managed workspace backend.
+   - [ ] DO-backed metadata/session state.
+   - [ ] Workflow-backed run execution.
+   - [ ] Production R2 or Artifacts workspace binding.
+   - [x] No Docker compatibility shims.
 
 7. [ ] Promote Cloudflare runtime only after it proves:
    - durable event replay after restart/hibernation;
