@@ -10,8 +10,9 @@ export type ManagedEventLogFollowOptions = {
 
 export type ManagedEventLog = {
   /**
-   * In-process state root used by managed workspace operations. For the
-   * OpenClaw backend this is the host-mounted Pi/OpenClaw state directory.
+   * Legacy in-process state root for local JSONL readers and Docker harness
+   * spawn configuration. New workspace operations should depend on
+   * ManagedWorkspace instead of reaching through the event log.
    */
   readonly stateRoot: string;
   appendEvents?(agentId: string, sessionId: string, events: Event[]): void;

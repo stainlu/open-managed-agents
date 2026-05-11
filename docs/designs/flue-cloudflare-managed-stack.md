@@ -64,8 +64,8 @@ Docker-specific assumptions that must move behind a runtime boundary:
 - `Container` assumes `baseUrl` + bearer token invocation.
 - `SessionContainerPool` assumes live containers can be warmed, adopted, and
   listed by Docker label.
-- `ManagedEventLog.stateRoot` assumes the orchestrator can read a local
-  filesystem path.
+- legacy local file/event paths assume the orchestrator can read a local
+  `stateRoot` filesystem path.
 - Limited networking is implemented with Docker bridge networks and an
   egress-proxy sidecar.
 - Workspace operations assume host bind mounts.
@@ -223,6 +223,8 @@ workspace ids into the public session identity.
    - Stop `AgentRouter` from reaching directly into `pool.runtime`.
 
 2. Split event storage from local `stateRoot`.
+   - Add `ManagedWorkspace` so workspace file APIs stop reaching through
+     `ManagedEventLog.stateRoot`.
    - Keep `OpenClawJsonlEventLog` for Docker/OpenClaw.
    - Add async-friendly managed event log shape for Cloudflare.
    - Preserve sync interface until the router migration is scheduled.

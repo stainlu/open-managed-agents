@@ -1,4 +1,3 @@
-import { join } from "node:path";
 import {
   HarnessControlError,
   HarnessInvocationError,
@@ -32,6 +31,12 @@ import type {
   VaultStore,
 } from "../store/types.js";
 import type { VaultCredentialMcpOAuth } from "../store/types.js";
+import {
+  WorkspaceError,
+  type ManagedWorkspace,
+  type WorkspaceEntry,
+  type WorkspaceWriteResult,
+} from "../workspace/types.js";
 import type { AgentConfig, EnvironmentConfig, Event, Session } from "./types.js";
 import { estimateZenMuxTurnCostUsd } from "./zenmux-pricing.js";
 
@@ -154,6 +159,7 @@ export class AgentRouter {
     private readonly environments: EnvironmentStore,
     private readonly sessions: SessionStore,
     private readonly events: ManagedEventLog,
+    private readonly workspace: ManagedWorkspace,
     private readonly pool: ManagedSessionRuntime,
     private readonly queue: QueueStore,
     private readonly vaults: VaultStore,
@@ -917,53 +923,24 @@ export class AgentRouter {
 
   /**
    * List files in an agent's workspace at the given relative path (empty
-   * = workspace root). Returns entries that live inside Pi's workspace
-   * directory. Rejects path traversal.
+   * = workspace root). Rejects path traversal.
    *
-   * The "workspace" here is the host bind mount at `<stateRoot>/<agentId>/`
-   * that openclaw uses as its `cwd` inside the container. Agents read/write
-   * here when a session invokes file tools, so a developer debugging "what
-   * did my agent produce" starts here.
+   * The concrete workspace backend decides whether the files are local
+   * bind mounts, object storage, or a provider-native workspace. The router
+   * validates agent ownership and maps storage errors into API errors.
    */
   async listFiles(
     agentId: string,
     sessionId: string,
     relPath = "",
-  ): Promise<Array<{ name: string; path: string; type: "file" | "dir"; size: number; mtime: number }>> {
+  ): Promise<WorkspaceEntry[]> {
     const agent = this.agents.get(agentId);
     if (!agent) {
       throw new RouterError("agent_not_found", `agent ${agentId} does not exist`);
     }
-    const { fullPath, relNormalized } = this.resolveWorkspacePath(agentId, sessionId, relPath);
-    const { readdir, stat } = await import("node:fs/promises");
-    let entries: import("node:fs").Dirent[];
-    try {
-      entries = await readdir(fullPath, { withFileTypes: true });
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ENOENT" || code === "ENOTDIR") {
-        throw new RouterError("file_not_found", `workspace path not found: ${relNormalized}`);
-      }
-      throw err;
-    }
-    const { join } = await import("node:path");
-    const result: Array<{ name: string; path: string; type: "file" | "dir"; size: number; mtime: number }> = [];
-    for (const e of entries) {
-      try {
-        const st = await stat(join(fullPath, e.name));
-        result.push({
-          name: e.name,
-          path: relNormalized ? `${relNormalized}/${e.name}` : e.name,
-          type: e.isDirectory() ? "dir" : "file",
-          size: st.size,
-          mtime: st.mtimeMs,
-        });
-      } catch {
-        /* broken symlink or permission issue — skip it */
-      }
-    }
-    result.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));
-    return result;
+    return this.withWorkspaceError(() =>
+      this.workspace.listFiles(agentId, sessionId, relPath),
+    );
   }
 
   /**
@@ -977,24 +954,9 @@ export class AgentRouter {
     if (!agent) {
       throw new RouterError("agent_not_found", `agent ${agentId} does not exist`);
     }
-    const { fullPath, relNormalized } = this.resolveWorkspacePath(agentId, sessionId, relPath);
-    const { readFile, stat } = await import("node:fs/promises");
-    try {
-      const st = await stat(fullPath);
-      if (!st.isFile()) {
-        throw new RouterError("file_not_found", `not a file: ${relNormalized}`);
-      }
-      const buf = await readFile(fullPath);
-      if (buf.length > maxBytes) return buf.subarray(0, maxBytes);
-      return buf;
-    } catch (err) {
-      if (err instanceof RouterError) throw err;
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ENOENT") {
-        throw new RouterError("file_not_found", `file not found: ${relNormalized}`);
-      }
-      throw err;
-    }
+    return this.withWorkspaceError(() =>
+      this.workspace.readFile(agentId, sessionId, relPath, { maxBytes }),
+    );
   }
 
   /**
@@ -1004,20 +966,19 @@ export class AgentRouter {
    * is shared with whatever the agent is doing, so coordinate externally
    * if you're writing into an active workspace.
    */
-  async writeFile(agentId: string, sessionId: string, relPath: string, content: Buffer): Promise<{ size: number; path: string }> {
+  async writeFile(
+    agentId: string,
+    sessionId: string,
+    relPath: string,
+    content: Buffer,
+  ): Promise<WorkspaceWriteResult> {
     const agent = this.agents.get(agentId);
     if (!agent) {
       throw new RouterError("agent_not_found", `agent ${agentId} does not exist`);
     }
-    const { fullPath, relNormalized } = this.resolveWorkspacePath(agentId, sessionId, relPath);
-    if (!relNormalized) {
-      throw new RouterError("invalid_path", `refusing to write to workspace root`);
-    }
-    const { writeFile, mkdir } = await import("node:fs/promises");
-    const { dirname } = await import("node:path");
-    await mkdir(dirname(fullPath), { recursive: true });
-    await writeFile(fullPath, content);
-    return { size: content.length, path: relNormalized };
+    return this.withWorkspaceError(() =>
+      this.workspace.writeFile(agentId, sessionId, relPath, content),
+    );
   }
 
   /** Delete a file (not a directory) from an agent's workspace. */
@@ -1026,58 +987,20 @@ export class AgentRouter {
     if (!agent) {
       throw new RouterError("agent_not_found", `agent ${agentId} does not exist`);
     }
-    const { fullPath, relNormalized } = this.resolveWorkspacePath(agentId, sessionId, relPath);
-    if (!relNormalized) {
-      throw new RouterError("invalid_path", `refusing to delete workspace root`);
-    }
-    const { unlink } = await import("node:fs/promises");
+    return this.withWorkspaceError(() =>
+      this.workspace.deleteFile(agentId, sessionId, relPath),
+    );
+  }
+
+  private async withWorkspaceError<T>(op: () => Promise<T>): Promise<T> {
     try {
-      await unlink(fullPath);
+      return await op();
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ENOENT") {
-        throw new RouterError("file_not_found", `file not found: ${relNormalized}`);
-      }
-      if (code === "EISDIR" || code === "EPERM") {
-        throw new RouterError("invalid_path", `not a file: ${relNormalized}`);
+      if (err instanceof WorkspaceError) {
+        throw new RouterError(err.code, err.message);
       }
       throw err;
     }
-  }
-
-  private resolveWorkspacePath(
-    agentId: string,
-    sessionId: string,
-    relPath: string,
-  ): { fullPath: string; relNormalized: string } {
-    // Normalize + enforce confinement in one place so every file API entry
-    // point shares the same rules: strip leading slashes, collapse `..`,
-    // reject anything whose resolved path escapes the agent workspace.
-    const cleaned = (relPath || "")
-      .replace(/^\/+/, "")
-      .split(/[\\/]+/)
-      .filter((seg) => seg !== "" && seg !== ".");
-    for (const seg of cleaned) {
-      if (seg === "..") {
-        throw new RouterError("invalid_path", `path traversal not allowed`);
-      }
-      if (seg.includes("\0")) {
-        throw new RouterError("invalid_path", `invalid character in path`);
-      }
-    }
-    const relNormalized = cleaned.join("/");
-    const workspaceRoot = this.events.stateRoot;
-    const agentRoot = `${workspaceRoot}/${agentId}/sessions/${sessionId}`;
-    const fullPath = relNormalized ? `${agentRoot}/${relNormalized}` : agentRoot;
-    // Final belt-and-suspenders check — a realpath() resolve would follow
-    // symlinks and verify confinement, but that requires the path to
-    // already exist. For writes to a new file, realpath would fail.
-    // Instead we rely on the segment-based `..` rejection above plus
-    // ensuring the final path starts with the agent root prefix.
-    if (!fullPath.startsWith(agentRoot)) {
-      throw new RouterError("invalid_path", `path escapes workspace`);
-    }
-    return { fullPath, relNormalized };
   }
 
   /**

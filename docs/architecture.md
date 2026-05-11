@@ -159,7 +159,9 @@ On startup, `src/index.ts` attempts selective recovery instead of blindly failin
 `ManagedEventLog` is the event boundary used by the server and router. It lets
 the public API read normalized managed events without caring whether the native
 source is Pi JSONL, adapter-emitted JSONL, or a future harness-native event
-stream.
+stream. `stateRoot` remains on this interface only as a legacy local JSONL /
+Docker harness configuration path; new workspace operations use
+`ManagedWorkspace`.
 
 Current implementations:
 
@@ -167,6 +169,19 @@ Current implementations:
 - **`ManagedJsonlEventLog`** stores already-normalized adapter events.
 - **`CompositeManagedEventLog`** tries adapter-normalized events first and falls
   back to OpenClaw read-through when needed.
+
+### Managed Workspace (`src/workspace/`)
+
+`ManagedWorkspace` is the workspace file boundary used by the router's public
+workspace CRUD routes. It deliberately sits beside, not inside,
+`ManagedEventLog`: event history and workspace storage are different resources.
+
+- **`LocalManagedWorkspace`** maps the current Docker/OpenClaw layout to
+  `<stateRoot>/<agentId>/sessions/<sessionId>/`, preserving the existing local
+  behavior.
+- Future cloud runtimes can implement the same interface over Artifacts, R2,
+  object storage, or a provider-native workspace without exposing local
+  filesystem paths through the event-log contract.
 
 ### OpenClaw JSONL Event Source (`src/harness/openclaw-events.ts`)
 

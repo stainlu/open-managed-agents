@@ -13,6 +13,7 @@ import { ParentTokenMinter } from "../runtime/parent-token.js";
 import type { ManagedSessionRuntime } from "../runtime/session-runtime.js";
 import { InMemoryStore } from "../store/memory.js";
 import type { QueueStore } from "../store/types.js";
+import { LocalManagedWorkspace } from "../workspace/local.js";
 import { clearZenMuxCatalogCache } from "./zenmux-pricing.js";
 import {
   AgentRouter,
@@ -50,6 +51,7 @@ function makeRouter(opts: {
   const pool = poolStub as ManagedSessionRuntime;
   const eventReader = (opts.eventReaderStub ??
     new OpenClawJsonlEventLog("/tmp/does-not-exist")) as ManagedEventLog;
+  const workspace = new LocalManagedWorkspace(eventReader.stateRoot);
   const harness = new OpenClawHarnessAdapter({
     runtimeImage: "test-image",
     hostStateRoot: "/tmp/test-state",
@@ -78,6 +80,7 @@ function makeRouter(opts: {
     store.environments,
     store.sessions,
     eventReader,
+    workspace,
     pool,
     queue,
     store.vaults,

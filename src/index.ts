@@ -36,6 +36,7 @@ import {
   buildStore,
   type StoreBackend,
 } from "./store/index.js";
+import { LocalManagedWorkspace } from "./workspace/local.js";
 
 const log = getLogger("index");
 
@@ -290,6 +291,7 @@ async function main(): Promise<void> {
     new ManagedJsonlEventLog(stateRoot),
     new OpenClawJsonlEventLog(stateRoot),
   ]);
+  const workspace = new LocalManagedWorkspace(stateRoot);
 
   // Per-session container pool. isBusy closes over the session store so the
   // sweeper can skip containers whose session currently has a run in flight
@@ -475,6 +477,7 @@ async function main(): Promise<void> {
     store.environments,
     store.sessions,
     eventReader,
+    workspace,
     pool,
     store.queue,
     store.vaults,
