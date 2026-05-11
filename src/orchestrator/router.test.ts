@@ -1042,6 +1042,136 @@ describe("AgentRouter native harness runtime", () => {
     expect(finished?.tokensOut).toBe(7);
   });
 
+  it("executes a scheduled native run after run admission already happened", async () => {
+    const { eventReader } = managedEventStore();
+    const invokeTurn = vi.fn(async (args) => ({
+      output: "scheduled native done",
+      tokensIn: 3,
+      tokensOut: 4,
+      model: args.agent?.model,
+      events: [
+        {
+          eventId: "evt_scheduled_user",
+          sessionId: args.sessionId,
+          type: "user.message" as const,
+          content: args.content,
+          createdAt: 1,
+        },
+        {
+          eventId: "evt_scheduled_agent",
+          sessionId: args.sessionId,
+          type: "agent.message" as const,
+          content: "scheduled native done",
+          createdAt: 2,
+          tokensIn: 3,
+          tokensOut: 4,
+          model: args.agent?.model,
+        },
+      ],
+    }));
+    const { router, store } = makeRouter({
+      extraHarnesses: [nativeTestHarness({ invokeTurn })],
+      poolStub: {
+        acquireForSession: vi.fn(async () => {
+          throw new Error("native harness should not acquire a container");
+        }),
+        evictSession: async () => {},
+      },
+      eventReaderStub: eventReader,
+    });
+    const agent = store.agents.create({
+      model: "flue/native-test",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+      harnessId: "native-test",
+    });
+    const session = router.createSession(agent.agentId);
+    store.sessions.beginRun(session.sessionId);
+    store.sessions.bumpTurns(session.sessionId);
+
+    const result = await router.executeScheduledRun({
+      sessionId: session.sessionId,
+      agentId: agent.agentId,
+      content: "scheduled",
+      queued: false,
+    });
+
+    expect(result).toEqual({ status: "executed" });
+    expect(invokeTurn).toHaveBeenCalledTimes(1);
+    expect(store.sessions.get(session.sessionId)?.status).toBe("idle");
+    expect(store.sessions.get(session.sessionId)?.tokensIn).toBe(3);
+    expect(store.sessions.get(session.sessionId)?.tokensOut).toBe(4);
+  });
+
+  it("skips a scheduled run that is no longer inflight", async () => {
+    const invokeTurn = vi.fn(async () => ({
+      output: "should not run",
+      tokensIn: 1,
+      tokensOut: 1,
+    }));
+    const { router, store } = makeRouter({
+      extraHarnesses: [nativeTestHarness({ invokeTurn })],
+    });
+    const agent = store.agents.create({
+      model: "flue/native-test",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+      harnessId: "native-test",
+    });
+    const session = router.createSession(agent.agentId);
+
+    await expect(router.executeScheduledRun({
+      sessionId: session.sessionId,
+      agentId: agent.agentId,
+      content: "duplicate",
+      queued: false,
+    })).resolves.toEqual({
+      status: "skipped",
+      reason: "session_not_inflight",
+    });
+    expect(invokeTurn).not.toHaveBeenCalled();
+  });
+
+  it("marks a scheduled run failed without throwing to the Workflow runner", async () => {
+    const invokeTurn = vi.fn(async () => {
+      throw new Error("native scheduled failure");
+    });
+    const { router, store } = makeRouter({
+      extraHarnesses: [nativeTestHarness({ invokeTurn })],
+      poolStub: { evictSession: async () => {} },
+    });
+    const agent = store.agents.create({
+      model: "flue/native-test",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+      harnessId: "native-test",
+    });
+    const session = router.createSession(agent.agentId);
+    store.sessions.beginRun(session.sessionId);
+    store.sessions.bumpTurns(session.sessionId);
+
+    await expect(router.executeScheduledRun({
+      sessionId: session.sessionId,
+      agentId: agent.agentId,
+      content: "fail",
+      queued: false,
+    })).resolves.toEqual({
+      status: "failed",
+      error: "native scheduled failure",
+    });
+    expect(store.sessions.get(session.sessionId)?.status).toBe("failed");
+    expect(store.sessions.get(session.sessionId)?.error).toBe("native scheduled failure");
+  });
+
   it("schedules queued follow-up turns through the same run scheduler", async () => {
     const { eventReader } = managedEventStore();
     const runScheduler = new RecordingRunScheduler(true);

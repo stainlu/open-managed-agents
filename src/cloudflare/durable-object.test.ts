@@ -26,7 +26,11 @@ import {
   CloudflareFlueDurableObject,
   createCloudflareFlueDurableObjectHandler,
 } from "./durable-object.js";
-import type { CloudflareWorkflowBindingLike } from "./workflow.js";
+import {
+  MANAGED_RUN_INTERNAL_PATH,
+  MANAGED_RUN_INTERNAL_TOKEN_HEADER,
+  type CloudflareWorkflowBindingLike,
+} from "./workflow.js";
 
 let tmpDir: string;
 
@@ -164,6 +168,7 @@ describe("CloudflareFlueDurableObject", () => {
           OMA_DB: db,
           OMA_WORKSPACE: new FakeR2Bucket(),
           OMA_RUN_WORKFLOW: workflow,
+          OMA_WORKFLOW_INTERNAL_TOKEN: "secret",
         },
       );
 
@@ -204,6 +209,123 @@ describe("CloudflareFlueDurableObject", () => {
     }
   });
 
+  it("executes token-protected internal Workflow run requests through the router", async () => {
+    const doBacking = new Database(join(tmpDir, "metadata.db"));
+    const doStorage = new FakeDurableObjectStorage(doBacking);
+    const { db, close } = sqliteD1();
+
+    try {
+      const object = new CloudflareFlueDurableObject(
+        { storage: doStorage },
+        {
+          OMA_DB: db,
+          OMA_WORKSPACE: new FakeR2Bucket(),
+          OMA_WORKFLOW_INTERNAL_TOKEN: "secret",
+        },
+      );
+
+      const response = await object.fetch(new Request(
+        `https://oma.example${MANAGED_RUN_INTERNAL_PATH}`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            [MANAGED_RUN_INTERNAL_TOKEN_HEADER]: "secret",
+          },
+          body: JSON.stringify({
+            sessionId: "ses_missing",
+            agentId: "agt_missing",
+            content: "hello",
+            queued: false,
+          }),
+        },
+      ));
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({
+        status: "skipped",
+        reason: "session_not_found",
+      });
+    } finally {
+      close();
+      doBacking.close();
+    }
+  });
+
+  it("rejects internal Workflow run requests without the shared token", async () => {
+    const doBacking = new Database(join(tmpDir, "metadata.db"));
+    const doStorage = new FakeDurableObjectStorage(doBacking);
+    const { db, close } = sqliteD1();
+
+    try {
+      const object = new CloudflareFlueDurableObject(
+        { storage: doStorage },
+        {
+          OMA_DB: db,
+          OMA_WORKSPACE: new FakeR2Bucket(),
+          OMA_WORKFLOW_INTERNAL_TOKEN: "secret",
+        },
+      );
+
+      const response = await object.fetch(new Request(
+        `https://oma.example${MANAGED_RUN_INTERNAL_PATH}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            sessionId: "ses_missing",
+            agentId: "agt_missing",
+            content: "hello",
+            queued: false,
+          }),
+        },
+      ));
+
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toEqual({ error: "forbidden" });
+    } finally {
+      close();
+      doBacking.close();
+    }
+  });
+
+  it("rejects malformed internal Workflow run payloads", async () => {
+    const doBacking = new Database(join(tmpDir, "metadata.db"));
+    const doStorage = new FakeDurableObjectStorage(doBacking);
+    const { db, close } = sqliteD1();
+
+    try {
+      const object = new CloudflareFlueDurableObject(
+        { storage: doStorage },
+        {
+          OMA_DB: db,
+          OMA_WORKSPACE: new FakeR2Bucket(),
+          OMA_WORKFLOW_INTERNAL_TOKEN: "secret",
+        },
+      );
+
+      const response = await object.fetch(new Request(
+        `https://oma.example${MANAGED_RUN_INTERNAL_PATH}`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            [MANAGED_RUN_INTERNAL_TOKEN_HEADER]: "secret",
+          },
+          body: JSON.stringify({ sessionId: "ses_missing" }),
+        },
+      ));
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: "invalid_managed_run_request",
+      });
+    } finally {
+      close();
+      doBacking.close();
+    }
+  });
+
   it("fails loudly when required platform bindings are missing", async () => {
     const doBacking = new Database(join(tmpDir, "metadata.db"));
     const doStorage = new FakeDurableObjectStorage(doBacking);
@@ -217,6 +339,29 @@ describe("CloudflareFlueDurableObject", () => {
 
       expect(() => object.fetch(new Request("https://oma.example/healthz")))
         .toThrow(/OMA_WORKSPACE/);
+    } finally {
+      close();
+      doBacking.close();
+    }
+  });
+
+  it("fails loudly when Workflow scheduling lacks an internal re-entry token", async () => {
+    const doBacking = new Database(join(tmpDir, "metadata.db"));
+    const doStorage = new FakeDurableObjectStorage(doBacking);
+    const { db, close } = sqliteD1();
+
+    try {
+      const object = new CloudflareFlueDurableObject(
+        { storage: doStorage },
+        {
+          OMA_DB: db,
+          OMA_WORKSPACE: new FakeR2Bucket(),
+          OMA_RUN_WORKFLOW: new FakeWorkflow(),
+        },
+      );
+
+      expect(() => object.fetch(new Request("https://oma.example/healthz")))
+        .toThrow(/OMA_WORKFLOW_INTERNAL_TOKEN/);
     } finally {
       close();
       doBacking.close();

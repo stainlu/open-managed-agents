@@ -3,7 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { ManagedRunRequest } from "../runtime/run-scheduler.js";
 import {
   CloudflareWorkflowRunScheduler,
+  executeManagedRunOnCoordinator,
+  MANAGED_RUN_INTERNAL_PATH,
+  MANAGED_RUN_INTERNAL_TOKEN_HEADER,
+  runCloudflareManagedRunWorkflow,
   type CloudflareWorkflowBindingLike,
+  type CloudflareWorkflowStepLike,
 } from "./workflow.js";
 
 describe("CloudflareWorkflowRunScheduler", () => {
@@ -57,6 +62,50 @@ describe("CloudflareWorkflowRunScheduler", () => {
   });
 });
 
+describe("Cloudflare managed run Workflow runner", () => {
+  it("executes the Workflow step by posting the managed run request to the coordinator", async () => {
+    const request = runRequest({ content: "from workflow" });
+    const coordinator = new FakeCoordinator(async (incoming) => {
+      expect(new URL(incoming.url).pathname).toBe(MANAGED_RUN_INTERNAL_PATH);
+      expect(incoming.headers.get(MANAGED_RUN_INTERNAL_TOKEN_HEADER)).toBe("secret");
+      expect(await incoming.json()).toEqual(request);
+      return Response.json({ status: "executed" });
+    });
+    const step = new FakeStep();
+
+    const result = await runCloudflareManagedRunWorkflow(
+      { payload: request },
+      step,
+      {
+        OMA_COORDINATOR: coordinator,
+        OMA_WORKFLOW_INTERNAL_TOKEN: "secret",
+      },
+    );
+
+    expect(result).toEqual({ status: "executed" });
+    expect(step.calls).toEqual([
+      {
+        name: "execute managed run",
+        config: { retries: { limit: 3, delay: "5 seconds", backoff: "exponential" } },
+      },
+    ]);
+  });
+
+  it("throws on coordinator non-2xx responses so Workflow step retry can apply", async () => {
+    const coordinator = new FakeCoordinator(async () =>
+      new Response("not ready", { status: 503 }),
+    );
+
+    await expect(executeManagedRunOnCoordinator(
+      runRequest(),
+      {
+        OMA_COORDINATOR: coordinator,
+        OMA_WORKFLOW_INTERNAL_TOKEN: "secret",
+      },
+    )).rejects.toThrow(/503 not ready/);
+  });
+});
+
 function runRequest(patch: Partial<ManagedRunRequest> = {}): ManagedRunRequest {
   return {
     sessionId: patch.sessionId ?? "ses_1",
@@ -74,5 +123,30 @@ class FakeWorkflow implements CloudflareWorkflowBindingLike {
   create(args: { id?: string; params: ManagedRunRequest }): { id: string } {
     this.created.push(args);
     return { id: args.id ?? `workflow-${this.created.length}` };
+  }
+}
+
+class FakeStep implements CloudflareWorkflowStepLike {
+  readonly calls: Array<{ name: string; config: Record<string, unknown> }> = [];
+
+  async do<T>(
+    name: string,
+    config: Record<string, unknown>,
+    callback: () => T | Promise<T>,
+  ): Promise<T> {
+    this.calls.push({ name, config });
+    return await callback();
+  }
+}
+
+class FakeCoordinator {
+  constructor(private readonly handler: (request: Request) => Response | Promise<Response>) {}
+
+  idFromName(name: string): string {
+    return name;
+  }
+
+  get(id: string): { fetch: (request: Request) => Response | Promise<Response> } {
+    return { fetch: this.handler };
   }
 }

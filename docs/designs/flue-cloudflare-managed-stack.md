@@ -82,6 +82,20 @@ Done in OMA:
   adapter. A Durable Object with `OMA_RUN_WORKFLOW` configured creates a
   Workflow instance from the managed run request instead of executing the run
   inline inside the HTTP request path.
+- `AgentRouter.executeScheduledRun()` now exists as the re-entry point for
+  out-of-process schedulers. It executes a previously admitted run without
+  calling `beginRun()` or mutating the queue again, and treats repeated
+  deliveries after the session leaves `starting`/`running` as idempotent skips.
+- The Cloudflare Durable Object now exposes a token-protected internal
+  `/_oma/internal/runs/execute` route. Workflow runners can post a
+  `ManagedRunRequest` back to the coordinator without exposing Cloudflare ids
+  in OMA's public API. Deployments that configure `OMA_RUN_WORKFLOW` must also
+  configure `OMA_WORKFLOW_INTERNAL_TOKEN`; otherwise the Durable Object fails
+  loudly instead of enqueueing runs that cannot execute.
+- `runCloudflareManagedRunWorkflow()` now exists as a type-light Workflow
+  runner helper. It wraps coordinator re-entry in a retryable Workflow step
+  while letting semantic run failures become managed session failures instead
+  of blindly retrying user turns.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
 - Harness adapters now declare a runtime mode. Existing adapters remain
@@ -116,10 +130,9 @@ Still open:
   approvals/deny policy, Cloudflare-backed Flue session persistence, and
   first-class OMA child sessions for Flue tasks are not wired yet.
 - Production Cloudflare deployment wiring still does not exist: no
-  `wrangler.toml`, binding migration story, or Workflow runner that resumes a
-  scheduled managed run through the coordinator DO/router. The Worker router,
-  DO class, and Workflow scheduler exist as composition points, not as an
-  end-to-end deployment recipe.
+  `wrangler.toml`, binding migration story, or live Workflow deployment test.
+  The Worker router, DO class, Workflow scheduler, and Workflow runner helper
+  exist as composition points, not as an end-to-end deployment recipe.
 
 ## Non-Decision
 
@@ -364,8 +377,9 @@ workspace ids into the public session identity.
      coordinator Durable Object.
    - [x] Add a scheduler boundary for background run kickoff.
    - [x] Add a Workflow scheduling adapter for Cloudflare bindings.
-   - [ ] Add a Workflow execution callback/runner that resumes the scheduled
+   - [x] Add a Workflow execution callback/runner that resumes the scheduled
      run through the coordinator Durable Object.
+   - [x] Add token-gated internal coordinator re-entry for scheduled runs.
    - [ ] Production R2 or Artifacts workspace binding.
    - [ ] Production `wrangler.toml` deployment wiring.
    - [x] No Docker compatibility shims.

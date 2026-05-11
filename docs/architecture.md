@@ -259,9 +259,16 @@ the Cloudflare path.
 fire-and-forget in the current process. Cloudflare composition can instead
 install `CloudflareWorkflowRunScheduler`, which serializes the managed run
 request into a Workflow instance through an `OMA_RUN_WORKFLOW` binding. That is
-only the scheduling half: a production Cloudflare backend still needs the
-Workflow runner/callback that re-enters the coordinator Durable Object and
-executes the scheduled turn.
+paired with `AgentRouter.executeScheduledRun()`, a token-protected internal
+Durable Object route, and `runCloudflareManagedRunWorkflow()`, so a Workflow
+runner can post the stored `ManagedRunRequest` back to the coordinator and
+execute a previously admitted turn without calling `beginRun()` or mutating the
+queue a second time. Repeated deliveries after the session leaves
+`starting`/`running` are treated as idempotent skips; semantic turn failures
+become managed session failures instead of automatic full-turn retries. The
+conventional Durable Object requires `OMA_WORKFLOW_INTERNAL_TOKEN` whenever
+`OMA_RUN_WORKFLOW` is configured, so scheduling cannot be enabled without the
+corresponding private re-entry credential.
 
 `createCloudflareFlueWorkerRouter` is the public Worker routing helper. It maps
 incoming HTTP requests to a named coordinator Durable Object via

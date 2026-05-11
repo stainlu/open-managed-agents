@@ -22,7 +22,10 @@ import type {
 } from "../runtime/container.js";
 import { PoolCapacityError } from "../runtime/pool.js";
 import {
+  errorMessage,
   InlineRunScheduler,
+  type ManagedRunExecutionResult,
+  type ManagedRunRequest,
   type ManagedRunScheduler,
 } from "../runtime/run-scheduler.js";
 import {
@@ -647,6 +650,50 @@ export class AgentRouter {
     });
 
     return { session: runningSession, queued: false };
+  }
+
+  /**
+   * Execute a run that was already admitted by runEvent() and handed to an
+   * out-of-process scheduler, such as Cloudflare Workflows.
+   *
+   * This deliberately does not call beginRun(), bump turns, or mutate the
+   * queue. Those admission decisions happened before scheduling. The method is
+   * also idempotent enough for Workflow retries: once the session is no longer
+   * inflight, a repeated delivery becomes a no-op instead of duplicating a
+   * turn.
+   */
+  async executeScheduledRun(
+    request: ManagedRunRequest,
+  ): Promise<ManagedRunExecutionResult> {
+    const session = this.sessions.get(request.sessionId);
+    if (!session) {
+      return { status: "skipped", reason: "session_not_found" };
+    }
+    if (session.agentId !== request.agentId) {
+      return { status: "skipped", reason: "agent_mismatch" };
+    }
+    if (!isSessionInflight(session)) {
+      return { status: "skipped", reason: "session_not_inflight" };
+    }
+    const agent = this.agents.get(request.agentId);
+    if (!agent) {
+      return { status: "skipped", reason: "agent_not_found" };
+    }
+
+    addContext({ sessionId: request.sessionId, agentId: request.agentId });
+    try {
+      await this.executeInBackground(
+        request.sessionId,
+        agent,
+        request.content,
+        request.model,
+        request.thinkingLevel as AgentConfig["thinkingLevel"] | undefined,
+      );
+      return { status: "executed" };
+    } catch (err) {
+      this.handleBackgroundFailure(request.sessionId, err);
+      return { status: "failed", error: errorMessage(err) };
+    }
   }
 
   /**
@@ -1792,7 +1839,7 @@ export class AgentRouter {
     void this.pool.evictSession(sessionId).catch(() => {
       /* best-effort */
     });
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     sessionRunFailuresTotal.inc();
     log.error({ session_id: sessionId, err }, "session run failed");
     this.sessions.endRunFailure(sessionId, msg);

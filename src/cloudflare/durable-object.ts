@@ -1,5 +1,9 @@
 import type { D1DatabaseLike } from "../events/d1.js";
-import { DurableObjectSqlStore, type DurableObjectStorageLike } from "../store/durable-object-sql.js";
+import { isManagedRunRequest } from "../runtime/run-scheduler.js";
+import {
+  DurableObjectSqlStore,
+  type DurableObjectStorageLike,
+} from "../store/durable-object-sql.js";
 import type { R2BucketLike } from "../workspace/r2.js";
 import type { ManagedWorkspace } from "../workspace/types.js";
 import {
@@ -9,6 +13,8 @@ import {
 } from "./fetch-handler.js";
 import {
   CloudflareWorkflowRunScheduler,
+  MANAGED_RUN_INTERNAL_PATH,
+  MANAGED_RUN_INTERNAL_TOKEN_HEADER,
   type CloudflareWorkflowBindingLike,
 } from "./workflow.js";
 
@@ -34,6 +40,7 @@ export type CloudflareFlueDurableObjectEnv = {
   OMA_API_TOKEN?: string;
   OMA_PARENT_TOKEN_SECRET_BASE64?: string;
   OMA_RUN_WORKFLOW?: CloudflareWorkflowBindingLike;
+  OMA_WORKFLOW_INTERNAL_TOKEN?: string;
   OMA_RUN_TIMEOUT_MS?: string | number;
   OMA_RATE_LIMIT_RPM?: string | number;
   OMA_VERSION?: string;
@@ -59,7 +66,7 @@ export function createCloudflareFlueDurableObjectHandler(
  * SQLite for managed metadata, D1-compatible event/harness state, R2-compatible
  * workspace, and the shared Worker-style OMA HTTP handler. When a Workflow
  * binding is provided, run kickoff is scheduled out of band; the Workflow
- * runner that resumes and executes the scheduled turn is a separate step.
+ * runner resumes execution through the token-protected internal route.
  */
 export class CloudflareFlueDurableObject<
   Env extends CloudflareFlueDurableObjectEnv = CloudflareFlueDurableObjectEnv,
@@ -72,7 +79,32 @@ export class CloudflareFlueDurableObject<
   ) {}
 
   fetch(request: Request): Response | Promise<Response> {
+    const url = new URL(request.url);
+    if (request.method === "POST" && url.pathname === MANAGED_RUN_INTERNAL_PATH) {
+      return this.executeInternalManagedRun(request);
+    }
     return this.getHandler().fetch(request, this.env, undefined);
+  }
+
+  protected async executeInternalManagedRun(request: Request): Promise<Response> {
+    const expectedToken = this.env.OMA_WORKFLOW_INTERNAL_TOKEN;
+    const providedToken = request.headers.get(MANAGED_RUN_INTERNAL_TOKEN_HEADER);
+    if (!expectedToken || providedToken !== expectedToken) {
+      return jsonResponse({ error: "forbidden" }, 403);
+    }
+
+    let payload: unknown;
+    try {
+      payload = await request.json();
+    } catch {
+      return jsonResponse({ error: "invalid_json" }, 400);
+    }
+    if (!isManagedRunRequest(payload)) {
+      return jsonResponse({ error: "invalid_managed_run_request" }, 400);
+    }
+
+    const result = await this.getHandler().stack.router.executeScheduledRun(payload);
+    return jsonResponse(result, 200);
   }
 
   protected getHandler(): CloudflareFlueFetchHandler {
@@ -88,6 +120,11 @@ export class CloudflareFlueDurableObject<
     }
     if (!this.env.OMA_WORKSPACE) {
       throw new Error("CloudflareFlueDurableObject requires OMA_WORKSPACE R2 binding");
+    }
+    if (this.env.OMA_RUN_WORKFLOW && !this.env.OMA_WORKFLOW_INTERNAL_TOKEN) {
+      throw new Error(
+        "CloudflareFlueDurableObject requires OMA_WORKFLOW_INTERNAL_TOKEN when OMA_RUN_WORKFLOW is configured",
+      );
     }
     return createCloudflareFlueDurableObjectHandler({
       state: this.state,
@@ -108,6 +145,13 @@ export class CloudflareFlueDurableObject<
       ),
     });
   }
+}
+
+function jsonResponse(body: unknown, status: number): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
 }
 
 export abstract class ConfigurableCloudflareFlueDurableObject<
