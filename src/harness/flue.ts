@@ -55,6 +55,11 @@ export type FlueHarnessAdapterConfig = {
 
 type FlueRuntimeEvent = {
   type?: string;
+  runId?: string;
+  parentRunId?: string;
+  kind?: string;
+  status?: string;
+  eventIndex?: number;
   text?: string;
   delta?: string;
   content?: string;
@@ -954,6 +959,32 @@ function mapFlueEvent(
   createdAt: number,
 ): Event | undefined {
   switch (event.type) {
+    case "run_start":
+      return {
+        eventId,
+        sessionId,
+        type: "session.run_start",
+        content: runLifecycleContent("started", event),
+        createdAt,
+        runId: event.runId,
+        runKind: event.kind,
+        parentRunId: event.parentRunId,
+        eventIndex: finiteEventIndex(event.eventIndex),
+      };
+    case "run_end":
+      return {
+        eventId,
+        sessionId,
+        type: "session.run_end",
+        content: runLifecycleContent("ended", event),
+        createdAt,
+        runId: event.runId,
+        runKind: event.kind,
+        runStatus: event.status,
+        parentRunId: event.parentRunId,
+        eventIndex: finiteEventIndex(event.eventIndex),
+        isError: event.status === "failed",
+      };
     case "thinking_end":
       return {
         eventId,
@@ -1023,6 +1054,24 @@ function mapFlueEvent(
     default:
       return undefined;
   }
+}
+
+function runLifecycleContent(action: "started" | "ended", event: FlueRuntimeEvent): string {
+  const parts = [`Flue run ${action}`];
+  if (event.runId) parts.push(event.runId);
+  const details = [
+    event.kind ? `kind=${event.kind}` : undefined,
+    event.status ? `status=${event.status}` : undefined,
+    event.parentRunId ? `parent=${event.parentRunId}` : undefined,
+  ].filter(Boolean);
+  if (details.length > 0) parts.push(`(${details.join(", ")})`);
+  return parts.join(" ");
+}
+
+function finiteEventIndex(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.trunc(value)
+    : undefined;
 }
 
 function stringifyContent(value: unknown): string {

@@ -471,7 +471,9 @@ export type EventType =
   | "session.model_change"
   | "session.thinking_level_change"
   | "session.compaction"
-  | "session.runtime_notice";
+  | "session.runtime_notice"
+  | "session.run_start"
+  | "session.run_end";
 
 export type Event = {
   eventId: string;
@@ -493,6 +495,16 @@ export type Event = {
   /** Approval request id — populated on agent.tool_confirmation_request.
    *  The client must include this in `user.tool_confirmation.toolUseId`. */
   approvalId?: string;
+  /** Stable run id for harnesses that expose first-class run lifecycle. */
+  runId?: string;
+  /** Run kind, for example prompt, skill, task, shell, or webhook. */
+  runKind?: string;
+  /** Terminal run status on session.run_end events. */
+  runStatus?: string;
+  /** Parent run id when a harness exposes nested task/run lineage. */
+  parentRunId?: string;
+  /** Harness-native monotonic event index when available. */
+  eventIndex?: number;
 };
 
 // Clients post events to sessions. The two event types are:

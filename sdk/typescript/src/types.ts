@@ -145,6 +145,11 @@ export interface Event {
   tool_arguments?: Record<string, unknown> | null;
   is_error?: boolean | null;
   approval_id?: string | null;
+  run_id?: string | null;
+  run_kind?: string | null;
+  run_status?: string | null;
+  parent_run_id?: string | null;
+  event_index?: number | null;
 }
 
 export interface SendEventResult {

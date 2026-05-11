@@ -248,6 +248,8 @@ Supported event types:
 - `session.thinking_level_change`
 - `session.compaction`
 - `session.runtime_notice`
+- `session.run_start`
+- `session.run_end`
 
 Managed event invariants:
 

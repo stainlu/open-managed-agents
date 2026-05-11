@@ -555,6 +555,11 @@ function eventResponse(event: Event) {
     tool_arguments: event.toolArguments,
     is_error: event.isError,
     approval_id: event.approvalId,
+    run_id: event.runId,
+    run_kind: event.runKind,
+    run_status: event.runStatus,
+    parent_run_id: event.parentRunId,
+    event_index: event.eventIndex,
   };
 }
 

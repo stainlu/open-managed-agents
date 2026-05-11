@@ -152,6 +152,8 @@ export const AdapterServerEventTypeSchema = z.enum([
   "session.thinking_level_change",
   "session.compaction",
   "session.runtime_notice",
+  "session.run_start",
+  "session.run_end",
 ]);
 
 export const AdapterServerManagedEventSchema = z
@@ -170,6 +172,11 @@ export const AdapterServerManagedEventSchema = z
     tool_arguments: z.record(z.string(), z.unknown()).optional(),
     is_error: z.boolean().optional(),
     approval_id: z.string().min(1).optional(),
+    run_id: z.string().min(1).optional(),
+    run_kind: z.string().min(1).optional(),
+    run_status: z.string().min(1).optional(),
+    parent_run_id: z.string().min(1).optional(),
+    event_index: z.number().int().nonnegative().optional(),
   })
   .strict();
 

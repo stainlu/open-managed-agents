@@ -258,6 +258,11 @@ function adapterEventToManagedEvent(event: AdapterServerStartTurnResponse["event
     toolArguments: event.tool_arguments,
     isError: event.is_error,
     approvalId: event.approval_id,
+    runId: event.run_id,
+    runKind: event.run_kind,
+    runStatus: event.run_status,
+    parentRunId: event.parent_run_id,
+    eventIndex: event.event_index,
   };
 }
 

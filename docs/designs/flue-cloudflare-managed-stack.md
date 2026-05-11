@@ -75,12 +75,14 @@ Done in OMA:
 - `FlueHarnessAdapter` now exists as an opt-in native prompt driver. It runs
   blocking and streamed Flue prompt turns through an SDK bridge, emits managed
   `user.message` / `agent.message` boundary events, maps selected Flue thinking
-  and tool runtime events, streams Flue text deltas as OpenAI-compatible chat
-  chunks, appends normalized managed events while streamed turns are still
-  running, cancels active prompt calls with Flue's native `AbortSignal` path,
-  persists Flue session data through OMA-managed local harness state, and fails
-  loudly for unsupported OMA tool mapping. A D1-compatible store exists for the
-  same harness-state contract, but it is not wired into a Cloudflare runtime yet.
+  and tool runtime events, preserves Flue `run_start` / `run_end` lifecycle
+  events as OMA `session.run_start` / `session.run_end`, streams Flue text
+  deltas as OpenAI-compatible chat chunks, appends normalized managed events
+  while streamed turns are still running, cancels active prompt calls with
+  Flue's native `AbortSignal` path, persists Flue session data through
+  OMA-managed local harness state, and fails loudly for unsupported OMA tool
+  mapping. A D1-compatible store exists for the same harness-state contract,
+  but it is not wired into a Cloudflare runtime yet.
 
 Started upstream in Flue:
 

@@ -65,6 +65,12 @@ describe("FlueHarnessAdapter", () => {
       model: { id: args.model ?? args.agent.model },
       events: [
         {
+          type: "run_start",
+          runId: "run_01",
+          kind: "prompt",
+          eventIndex: 0,
+        },
+        {
           type: "thinking_end",
           content: "short plan",
         },
@@ -80,6 +86,13 @@ describe("FlueHarnessAdapter", () => {
           toolCallId: "tool_1",
           result: { stdout: "/workspace" },
           isError: false,
+        },
+        {
+          type: "run_end",
+          runId: "run_01",
+          kind: "prompt",
+          status: "completed",
+          eventIndex: 3,
         },
       ],
     }));
@@ -120,11 +133,25 @@ describe("FlueHarnessAdapter", () => {
     });
     expect(result.events?.map((event) => event.type)).toEqual([
       "user.message",
+      "session.run_start",
       "agent.thinking",
       "agent.tool_use",
       "agent.tool_result",
+      "session.run_end",
       "agent.message",
     ]);
+    expect(result.events?.find((event) => event.type === "session.run_start")).toMatchObject({
+      runId: "run_01",
+      runKind: "prompt",
+      eventIndex: 0,
+    });
+    expect(result.events?.find((event) => event.type === "session.run_end")).toMatchObject({
+      runId: "run_01",
+      runKind: "prompt",
+      runStatus: "completed",
+      eventIndex: 3,
+      isError: false,
+    });
     const createdAts = result.events?.map((event) => event.createdAt) ?? [];
     expect(createdAts).toEqual([...createdAts].sort((a, b) => a - b));
     expect(result.events?.at(-1)).toMatchObject({
