@@ -9,7 +9,9 @@ import { OpenClawHarnessAdapter } from "./harness/openclaw.js";
 import { HermesHarnessAdapter } from "./harness/hermes.js";
 import { CodexHarnessAdapter } from "./harness/codex.js";
 import { ClaudeAgentSdkHarnessAdapter } from "./harness/claude-agent-sdk.js";
+import { FlueHarnessAdapter } from "./harness/flue.js";
 import { HarnessRegistry } from "./harness/registry.js";
+import type { HarnessAdapter } from "./harness/types.js";
 import { getLogger, rootLogger } from "./log.js";
 import {
   containerBootDurationSeconds,
@@ -463,8 +465,18 @@ async function main(): Promise<void> {
     environments: store.environments,
   });
 
+  const harnessAdapters: HarnessAdapter[] = [
+    harness,
+    hermesHarness,
+    codexHarness,
+    claudeAgentSdkHarness,
+  ];
+  if (process.env.OMA_ENABLE_FLUE_HARNESS === "1") {
+    harnessAdapters.push(new FlueHarnessAdapter({ passthroughEnv }));
+  }
+
   const harnesses = new HarnessRegistry({
-    adapters: [harness, hermesHarness, codexHarness, claudeAgentSdkHarness],
+    adapters: harnessAdapters,
   });
   const routerCfg: RouterConfig = {
     passthroughEnv,

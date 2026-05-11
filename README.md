@@ -51,6 +51,8 @@ Working today:
 - D1-compatible managed event-log backend for cloud stores.
 - Harness runtime mode boundary: container adapters still use managed runtime
   endpoints, while native adapters can run turns without Docker spawn options.
+- Experimental Flue native harness driver for prompt turns, opt-in via
+  `OMA_ENABLE_FLUE_HARNESS=1`.
 - Experimental Hermes adapter runtime via direct `AIAgent` integration.
 - Experimental Codex adapter runtime via `codex app-server`.
 - Experimental Claude Agent SDK adapter runtime via `@anthropic-ai/claude-agent-sdk`.
@@ -59,7 +61,8 @@ Working today:
 
 Not done yet:
 
-- Flue harness driver.
+- Full Flue parity: streaming, managed cancellation, tool policy, MCP, durable
+  Flue session-store bridge, and OMA first-class child sessions for Flue tasks.
 - Cloudflare-native managed session runtime.
 - Cloudflare runtime wiring that uses the cloud managed event store in
   production.

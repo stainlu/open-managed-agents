@@ -94,11 +94,15 @@ Current adapters:
 | `hermes` | experimental | in-container `oma.adapter.v1` HTTP/SSE server wrapping Hermes `AIAgent` directly |
 | `codex` | experimental | in-container `oma.adapter.v1` HTTP/SSE server driving `codex app-server` JSON-RPC |
 | `claude-agent-sdk` | experimental | in-container `oma.adapter.v1` HTTP/SSE server driving `@anthropic-ai/claude-agent-sdk` `query()` |
+| `flue` | experimental / opt-in | native SDK bridge for Flue prompt turns, enabled with `OMA_ENABLE_FLUE_HARNESS=1` |
 
 Unsupported behavior is capability-gated. For example, Hermes MCP, compaction,
 and managed subagents, Codex MCP, Codex per-tool deny policy, and Codex managed
 subagents, plus Claude Agent SDK managed subagents and manual compaction, are
-rejected explicitly instead of being silently faked.
+rejected explicitly instead of being silently faked. The same rule applies to
+Flue: streaming, managed cancellation, OMA tool-policy mapping, MCP, and
+first-class managed child sessions for Flue tasks are not claimed until the
+adapter actually owns those surfaces.
 
 ### Runtime Substrate
 

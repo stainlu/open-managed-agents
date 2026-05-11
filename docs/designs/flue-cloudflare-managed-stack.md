@@ -54,6 +54,10 @@ Done in OMA:
 - `AgentRouter` can start blocking and streaming turns for native harnesses
   without acquiring a container. Native harnesses must still emit/append managed
   events so the normal OMA session accounting path can prove turn advancement.
+- `FlueHarnessAdapter` now exists as an opt-in native prompt driver. It runs
+  blocking Flue prompt turns through an SDK bridge, emits managed
+  `user.message` / `agent.message` boundary events, maps selected Flue thinking
+  and tool runtime events, and fails loudly for unsupported OMA tool mapping.
 
 Started upstream in Flue:
 
@@ -65,7 +69,9 @@ Still open:
 
 - `ManagedEventLog.stateRoot` still exists as an optional legacy local-Docker
   escape hatch.
-- The Flue harness driver does not exist yet.
+- The Flue harness driver is prompt-only: streaming, managed cancellation, MCP,
+  tool approvals/deny policy, durable Flue session-store bridge, and
+  first-class OMA child sessions for Flue tasks are not wired yet.
 - The Cloudflare runtime prototype does not exist yet, so the D1-compatible
   event store is not wired into a production Cloudflare runtime path.
 
@@ -278,18 +284,25 @@ workspace ids into the public session identity.
    - Require `baseUrl`/token only inside endpoint-backed adapters.
    - Skip container warm/acquire for native blocking and streaming turns.
 
-4. [ ] Add Flue harness driver locally.
+4. [x] Add Flue harness driver locally.
    - Start with Node execution against Flue's API.
    - Emit normalized events at prompt boundaries first.
-   - Add finer event fidelity as Flue upstream hooks land.
+   - Add a capability-honest adapter surface that does not fake streaming,
+     cancellation, tool policy, MCP, or first-class task sessions.
 
-5. [ ] Add Cloudflare runtime prototype.
+5. [ ] Deepen Flue driver parity.
+   - Wire durable Flue session-store deltas to OMA-managed storage.
+   - Retain active prompt call handles for cancellation.
+   - Map Flue event streams into OMA SSE without waiting for final result.
+   - Decide how Flue task lineage maps to OMA child sessions.
+
+6. [ ] Add Cloudflare runtime prototype.
    - DO-backed session state.
    - Workflow-backed run execution.
    - R2 or Artifacts workspace.
    - No Docker compatibility shims.
 
-6. [ ] Promote Cloudflare runtime only after it proves:
+7. [ ] Promote Cloudflare runtime only after it proves:
    - durable event replay after restart/hibernation;
    - cancellation path;
    - queued turns;
