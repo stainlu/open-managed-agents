@@ -319,7 +319,7 @@ async function main(): Promise<void> {
       const session = store.sessions.get(sessionId);
       if (!session?.ephemeral) return;
       try {
-        eventReader.deleteBySession(session.agentId, sessionId);
+        await eventReader.deleteBySession(session.agentId, sessionId);
       } catch (err) {
         log.warn(
           { err, session_id: sessionId },
@@ -890,12 +890,12 @@ async function main(): Promise<void> {
     5 * 60_000, // 5 min
   );
   const warnedSessions = new Set<string>();
-  const sampleJsonl = (): void => {
+  const sampleJsonl = async (): Promise<void> => {
     let total = 0;
     let max = 0;
     let overThreshold = 0;
     for (const session of store.sessions.list()) {
-      const stat = eventReader.statSessionLog(session.agentId, session.sessionId);
+      const stat = await eventReader.statSessionLog(session.agentId, session.sessionId);
       if (!stat) continue;
       total += stat.bytes;
       if (stat.bytes > max) max = stat.bytes;
@@ -921,8 +921,13 @@ async function main(): Promise<void> {
     sessionJsonlBytesMax.set(max);
     sessionJsonlOverThreshold.set(overThreshold);
   };
-  sampleJsonl();
-  const jsonlSamplerHandle = setInterval(sampleJsonl, jsonlSampleIntervalMs);
+  const runJsonlSample = (): void => {
+    void sampleJsonl().catch((err) => {
+      log.warn({ err }, "session JSONL size sample failed");
+    });
+  };
+  runJsonlSample();
+  const jsonlSamplerHandle = setInterval(runJsonlSample, jsonlSampleIntervalMs);
   jsonlSamplerHandle.unref();
 
   // Graceful shutdown: detach from pool-managed containers and close the

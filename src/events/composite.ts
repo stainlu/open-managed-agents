@@ -4,50 +4,58 @@ import { mergeManagedEventsForSession } from "./normalize.js";
 
 export class CompositeManagedEventLog implements ManagedEventLog {
   constructor(
-    public readonly stateRoot: string,
+    public readonly stateRoot: string | undefined,
     private readonly logs: ManagedEventLog[],
   ) {}
 
-  appendEvents(agentId: string, sessionId: string, events: Event[]): void {
+  async appendEvents(agentId: string, sessionId: string, events: Event[]): Promise<void> {
     for (const log of this.logs) {
       if (!log.appendEvents) continue;
-      log.appendEvents(agentId, sessionId, events);
+      await log.appendEvents(agentId, sessionId, events);
       return;
     }
   }
 
-  listBySession(agentId: string, sessionId: string): Event[] {
+  async listBySession(agentId: string, sessionId: string): Promise<Event[]> {
+    const eventsByLog = await Promise.all(
+      this.logs.map((log) => log.listBySession(agentId, sessionId)),
+    );
     return mergeManagedEventsForSession(
       sessionId,
-      this.logs.flatMap((log) => log.listBySession(agentId, sessionId)),
+      eventsByLog.flat(),
     );
   }
 
-  latestAgentMessage(agentId: string, sessionId: string): Event | undefined {
-    return findLast(this.listBySession(agentId, sessionId), (e) => e.type === "agent.message");
+  async latestAgentMessage(agentId: string, sessionId: string): Promise<Event | undefined> {
+    return findLast(
+      await this.listBySession(agentId, sessionId),
+      (e) => e.type === "agent.message",
+    );
   }
 
-  latestAgentOutcome(agentId: string, sessionId: string): Event | undefined {
+  async latestAgentOutcome(agentId: string, sessionId: string): Promise<Event | undefined> {
     return findLast(
-      this.listBySession(agentId, sessionId),
+      await this.listBySession(agentId, sessionId),
       (e) => e.type === "agent.message" || e.type === "agent.tool_result",
     );
   }
 
-  countUserTurns(agentId: string, sessionId: string): number {
-    return this.listBySession(agentId, sessionId).filter((e) => e.type === "user.message").length;
+  async countUserTurns(agentId: string, sessionId: string): Promise<number> {
+    return (await this.listBySession(agentId, sessionId))
+      .filter((e) => e.type === "user.message").length;
   }
 
-  statSessionLog(agentId: string, sessionId: string): { bytes: number } | undefined {
-    const stats = this.logs
-      .map((log) => log.statSessionLog(agentId, sessionId))
+  async statSessionLog(agentId: string, sessionId: string): Promise<{ bytes: number } | undefined> {
+    const stats = (await Promise.all(
+      this.logs.map((log) => log.statSessionLog(agentId, sessionId)),
+    ))
       .filter((stat): stat is { bytes: number } => stat !== undefined);
     if (stats.length === 0) return undefined;
     return { bytes: stats.reduce((sum, stat) => sum + stat.bytes, 0) };
   }
 
-  deleteBySession(agentId: string, sessionId: string): void {
-    for (const log of this.logs) log.deleteBySession(agentId, sessionId);
+  async deleteBySession(agentId: string, sessionId: string): Promise<void> {
+    await Promise.all(this.logs.map((log) => log.deleteBySession(agentId, sessionId)));
   }
 
   async *follow(
@@ -58,7 +66,7 @@ export class CompositeManagedEventLog implements ManagedEventLog {
     const pollMs = opts.pollIntervalMs ?? 100;
     const idleTimeoutMs = opts.idleTimeoutMs ?? 30_000;
     const seen = new Set<string>();
-    const catchUp = this.listBySession(agentId, sessionId);
+    const catchUp = await this.listBySession(agentId, sessionId);
     let cursorSeen = opts.afterEventId === undefined;
     if (opts.afterEventId && !catchUp.some((e) => e.eventId === opts.afterEventId)) {
       cursorSeen = true;
@@ -76,7 +84,7 @@ export class CompositeManagedEventLog implements ManagedEventLog {
     while (!opts.signal?.aborted) {
       await sleepWithAbort(pollMs, opts.signal).catch(() => undefined);
       if (opts.signal?.aborted) return;
-      for (const event of this.listBySession(agentId, sessionId)) {
+      for (const event of await this.listBySession(agentId, sessionId)) {
         if (seen.has(event.eventId)) continue;
         seen.add(event.eventId);
         lastYieldAt = Date.now();

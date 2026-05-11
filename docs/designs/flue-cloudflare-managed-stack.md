@@ -1,6 +1,7 @@
 # Flue + Cloudflare Managed Stack
 
-Status: target architecture, current as of 2026-05-11.
+Status: target architecture plus current implementation progress, current as of
+2026-05-11.
 
 ## Decision
 
@@ -27,6 +28,40 @@ Client / SDK
 Docker stays a supported runtime. Cloudflare becomes the SOTA runtime target for
 the Flue harness because it gives the same session / harness / sandbox split as
 Claude Managed Agents without closing the stack around one vendor harness.
+
+## Implementation Progress
+
+Done in OMA:
+
+- `ManagedSessionRuntime` now exists in `src/runtime/session-runtime.ts`.
+- `SessionContainerPool` implements that boundary while keeping the Docker
+  backend behavior intact.
+- `AgentRouter` depends on `ManagedSessionRuntime` instead of the concrete pool.
+- `ManagedWorkspace` now exists in `src/workspace/types.ts`.
+- `LocalManagedWorkspace` preserves the current Docker/OpenClaw workspace
+  layout while keeping router workspace CRUD off the event-log `stateRoot`.
+- `ManagedEventLog` methods are now awaitable, and router/server call sites
+  await event reads, writes, stats, and deletes.
+- `CompositeManagedEventLog` can compose sync local JSONL readers with future
+  async/cloud stores.
+- `D1ManagedEventLog` now exists as a concrete D1-compatible managed event
+  backend with append, list, latest, count, stat, delete, and polling follow.
+- `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
+  need to fake a local filesystem path.
+
+Started upstream in Flue:
+
+- Task/run telemetry is being shaped as Flue-native runtime behavior, not as an
+  OMA-only patch. OMA should keep mapping those events into its normalized
+  `Event` model once the Flue surface stabilizes.
+
+Still open:
+
+- `ManagedEventLog.stateRoot` still exists as an optional legacy local-Docker
+  escape hatch.
+- The Flue harness driver does not exist yet.
+- The Cloudflare runtime prototype does not exist yet, so the D1-compatible
+  event store is not wired into a production Cloudflare runtime path.
 
 ## Non-Decision
 
@@ -217,30 +252,32 @@ workspace ids into the public session identity.
 
 ## Migration Plan
 
-1. Name the runtime boundary.
+1. [x] Name the runtime boundary.
    - Add `ManagedSessionRuntime` types.
    - Make `SessionContainerPool` structurally satisfy the contract.
    - Stop `AgentRouter` from reaching directly into `pool.runtime`.
 
-2. Split event storage from local `stateRoot`.
+2. [x] Make the event/workspace boundary async-friendly.
    - Add `ManagedWorkspace` so workspace file APIs stop reaching through
      `ManagedEventLog.stateRoot`.
    - Keep `OpenClawJsonlEventLog` for Docker/OpenClaw.
    - Add async-friendly managed event log shape for Cloudflare.
-   - Preserve sync interface until the router migration is scheduled.
+   - Migrate router/server call sites to await managed event operations while
+     allowing local JSONL readers to stay synchronous internally.
+   - Add a D1-compatible managed event backend.
 
-3. Add Flue harness driver locally.
+3. [ ] Add Flue harness driver locally.
    - Start with Node execution against Flue's API.
    - Emit normalized events at prompt boundaries first.
    - Add finer event fidelity as Flue upstream hooks land.
 
-4. Add Cloudflare runtime prototype.
+4. [ ] Add Cloudflare runtime prototype.
    - DO-backed session state.
    - Workflow-backed run execution.
    - R2 or Artifacts workspace.
    - No Docker compatibility shims.
 
-5. Promote Cloudflare runtime only after it proves:
+5. [ ] Promote Cloudflare runtime only after it proves:
    - durable event replay after restart/hibernation;
    - cancellation path;
    - queued turns;

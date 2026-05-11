@@ -139,9 +139,10 @@ module has one job:
 
 The durable orchestrator state: agents, environments, session metadata, queues,
 audit rows, vault metadata, local secrets, and user-token records. Events are
-not stored in SQLite. They live behind the `ManagedEventLog` interface:
-OpenClaw sessions are read through Pi/OpenClaw JSONL, while adapter-server
-harnesses such as Hermes can emit normalized managed JSONL.
+not stored in the orchestrator metadata tables. They live behind the
+`ManagedEventLog` interface: OpenClaw sessions are read through Pi/OpenClaw
+JSONL, adapter-server harnesses such as Hermes can emit normalized managed
+JSONL, and cloud runtimes can use a D1-compatible managed event table.
 
 - **`AgentStore`**, **`EnvironmentStore`**, and **`SessionStore`** — interfaces in `src/store/types.ts`. Synchronous methods (both backends are sync; we don't introduce speculative async).
 - **`SqliteStore`** (default, `src/store/sqlite.ts`) — `better-sqlite3`, WAL journal mode, `foreign_keys = ON`, CHECK constraints on session status. Core tables include `agents`, `agent_versions` (immutable version history), `environments`, `sessions`, durable queued events, audit events, key/value secrets, vaults + vault credentials, session/container adoption records, and local users. Sessions cascade on agent delete is **off** — sessions outlive their template. Additive column migrations (for example `ephemeral`, `environment_id`, `version`, `archived_at`, `permission_policy_json`, `thinking_level`, `channels`, `vault_id`) are gated on `PRAGMA table_info` checks and ALTERs on startup.
@@ -158,15 +159,19 @@ On startup, `src/index.ts` attempts selective recovery instead of blindly failin
 
 `ManagedEventLog` is the event boundary used by the server and router. It lets
 the public API read normalized managed events without caring whether the native
-source is Pi JSONL, adapter-emitted JSONL, or a future harness-native event
-stream. `stateRoot` remains on this interface only as a legacy local JSONL /
-Docker harness configuration path; new workspace operations use
+source is Pi JSONL, adapter-emitted JSONL, a SQL-backed managed event table, or
+a future harness-native event stream. Event operations are awaitable so local
+JSONL readers can stay cheap while Cloudflare/D1-style stores can perform real
+async I/O. `stateRoot` remains on this interface only as a legacy local JSONL /
+Docker harness configuration path and is optional; new workspace operations use
 `ManagedWorkspace`.
 
 Current implementations:
 
 - **`OpenClawJsonlEventLog`** maps OpenClaw/Pi JSONL into managed events.
 - **`ManagedJsonlEventLog`** stores already-normalized adapter events.
+- **`D1ManagedEventLog`** stores normalized managed events in a D1-compatible
+  SQL table for cloud runtimes.
 - **`CompositeManagedEventLog`** tries adapter-normalized events first and falls
   back to OpenClaw read-through when needed.
 

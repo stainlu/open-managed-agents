@@ -475,7 +475,7 @@ async function sessionResponse(
   passthroughEnv: Record<string, string> | undefined,
   containers?: SessionContainerStore,
 ) {
-  const latestAgent = events.latestAgentMessage(session.agentId, session.sessionId);
+  const latestAgent = await events.latestAgentMessage(session.agentId, session.sessionId);
   const containerRow = containers?.get(session.sessionId);
   const tokensIn = Math.max(session.tokensIn, latestAgent?.tokensIn ?? 0);
   const tokensOut = Math.max(session.tokensOut, latestAgent?.tokensOut ?? 0);
@@ -1474,7 +1474,7 @@ export function buildApp(deps: ServerDeps): Hono {
       });
       return handleRouterError(err, c);
     }
-    deps.events.deleteBySession(session.agentId, session.sessionId);
+    await deps.events.deleteBySession(session.agentId, session.sessionId);
     deps.sessions.delete(sessionId);
     writeAudit(deps.audit, c, {
       action: "session.delete",
@@ -1659,7 +1659,7 @@ export function buildApp(deps: ServerDeps): Hono {
     }
   });
 
-  app.get("/v1/sessions/:sessionId/events", (c) => {
+  app.get("/v1/sessions/:sessionId/events", async (c) => {
     const sessionId = c.req.param("sessionId");
     const session = getScopedSession(c, sessionId);
     if (!session) {
@@ -1864,9 +1864,10 @@ export function buildApp(deps: ServerDeps): Hono {
       });
     }
 
-    const events = deps.events
-      .listBySession(session.agentId, session.sessionId)
-      .map(eventResponse);
+    const events = (await deps.events.listBySession(
+      session.agentId,
+      session.sessionId,
+    )).map(eventResponse);
     return c.json({ session_id: sessionId, events, count: events.length });
   });
 
@@ -2061,10 +2062,10 @@ export function buildApp(deps: ServerDeps): Hono {
     // are reaped together by the idle sweeper. Best-effort throughout:
     // a cleanup failure must not mask the original error the caller
     // actually cares about.
-    const cleanupEphemeralOnError = (): void => {
+    const cleanupEphemeralOnError = async (): Promise<void> => {
       if (!isEphemeral) return;
       try {
-        deps.events.deleteBySession(agentId, session.sessionId);
+        await deps.events.deleteBySession(agentId, session.sessionId);
       } catch {
         /* best-effort */
       }
@@ -2090,7 +2091,7 @@ export function buildApp(deps: ServerDeps): Hono {
           content: lastUserContent,
         });
       } catch (err) {
-        cleanupEphemeralOnError();
+        await cleanupEphemeralOnError();
         if (err instanceof RouterError) {
           const status = err.code === "session_busy" ? 409 : 500;
           return c.json({ error: { message: err.message, type: err.code } }, status);
@@ -2116,7 +2117,7 @@ export function buildApp(deps: ServerDeps): Hono {
               error: "client disconnected before stream completed",
             });
             finalized = true;
-            cleanupEphemeralOnError();
+            await cleanupEphemeralOnError();
             return;
           }
           finalizeStarted = true;
@@ -2134,12 +2135,12 @@ export function buildApp(deps: ServerDeps): Hono {
                 : String(finalizeErr);
               await handle.abort(finalizeMsg);
               await handle.finalize({ ok: false, error: finalizeMsg });
-              cleanupEphemeralOnError();
+              await cleanupEphemeralOnError();
             }
           } else {
             await handle.abort(msg);
             await handle.finalize({ ok: false, error: msg });
-            cleanupEphemeralOnError();
+            await cleanupEphemeralOnError();
           }
           finalized = true;
           if (!sse.aborted && !sse.closed) {
@@ -2163,14 +2164,14 @@ export function buildApp(deps: ServerDeps): Hono {
             }).catch(() => {
               /* best-effort */
             });
-            cleanupEphemeralOnError();
+            await cleanupEphemeralOnError();
           }
         }
       });
     }
 
     // Stale-detection snapshot (non-streaming path).
-    const beforeOutcome = deps.events.latestAgentOutcome(agentId, session.sessionId);
+    const beforeOutcome = await deps.events.latestAgentOutcome(agentId, session.sessionId);
     const beforeEventId = beforeOutcome?.eventId;
 
     try {
@@ -2180,7 +2181,7 @@ export function buildApp(deps: ServerDeps): Hono {
         rejectIfBusy: true,
       });
     } catch (err) {
-      cleanupEphemeralOnError();
+      await cleanupEphemeralOnError();
       if (err instanceof RouterError) {
         const status = err.code === "session_busy" ? 409 : 500;
         return c.json(
@@ -2206,7 +2207,7 @@ export function buildApp(deps: ServerDeps): Hono {
     while (Date.now() - pollStart < CHAT_COMPLETION_TIMEOUT_MS) {
       const current = deps.sessions.get(session.sessionId);
       if (!current) {
-        cleanupEphemeralOnError();
+        await cleanupEphemeralOnError();
         return c.json(
           {
             error: {
@@ -2227,7 +2228,7 @@ export function buildApp(deps: ServerDeps): Hono {
     }
 
     if (!finalSession) {
-      cleanupEphemeralOnError();
+      await cleanupEphemeralOnError();
       return c.json(
         {
           error: {
@@ -2240,7 +2241,7 @@ export function buildApp(deps: ServerDeps): Hono {
     }
 
     if (finalSession.status === "failed") {
-      cleanupEphemeralOnError();
+      await cleanupEphemeralOnError();
       return c.json(
         {
           error: {
@@ -2255,10 +2256,10 @@ export function buildApp(deps: ServerDeps): Hono {
     // Read post-run assistant-side outcome and verify it's different from
     // the snapshot. A tool-only turn can legitimately finish with a new
     // agent.tool_result and no final agent.message.
-    const afterOutcome = deps.events.latestAgentOutcome(agentId, session.sessionId);
-    const afterMsg = deps.events.latestAgentMessage(agentId, session.sessionId);
+    const afterOutcome = await deps.events.latestAgentOutcome(agentId, session.sessionId);
+    const afterMsg = await deps.events.latestAgentMessage(agentId, session.sessionId);
     if (!afterOutcome || afterOutcome.eventId === beforeEventId) {
-      cleanupEphemeralOnError();
+      await cleanupEphemeralOnError();
       return c.json(
         {
           error: {

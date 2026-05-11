@@ -51,11 +51,12 @@ function makeRouter(opts: {
   const pool = poolStub as ManagedSessionRuntime;
   const eventReader = (opts.eventReaderStub ??
     new OpenClawJsonlEventLog("/tmp/does-not-exist")) as ManagedEventLog;
-  const workspace = new LocalManagedWorkspace(eventReader.stateRoot);
+  const stateRoot = eventReader.stateRoot ?? "/tmp/does-not-exist";
+  const workspace = new LocalManagedWorkspace(stateRoot);
   const harness = new OpenClawHarnessAdapter({
     runtimeImage: "test-image",
     hostStateRoot: "/tmp/test-state",
-    stateRoot: eventReader.stateRoot,
+    stateRoot,
     network: "test-net",
     gatewayPort: 18789,
     passthroughEnv: opts.passthroughEnv ?? {},

@@ -740,7 +740,7 @@ export class AgentRouter {
       }
 
       this.sessions.markRunning(args.sessionId);
-      const beforeTurn = this.snapshotTurnProgress(agent.agentId, args.sessionId);
+      const beforeTurn = await this.snapshotTurnProgress(agent.agentId, args.sessionId);
 
       const runEnd = sessionRunDurationSeconds.startTimer();
       let stream: HarnessStreamingTurn;
@@ -785,7 +785,7 @@ export class AgentRouter {
         if (!isSessionInflight(current)) return;
         if (outcome.ok) {
           if (stream.events && stream.events.length > 0) {
-            router.events.appendEvents?.(agent.agentId, args.sessionId, stream.events);
+            await router.events.appendEvents?.(agent.agentId, args.sessionId, stream.events);
           }
           const completion = stream.result;
           const latest = await router.waitForTurnAdvanced(
@@ -795,7 +795,7 @@ export class AgentRouter {
             completion,
             harness,
           );
-          router.mirrorVisibleEvents(agent.agentId, args.sessionId);
+          await router.mirrorVisibleEvents(agent.agentId, args.sessionId);
           const tokensIn = latest?.tokensIn ?? completion?.tokensIn ?? 0;
           const tokensOut = latest?.tokensOut ?? completion?.tokensOut ?? 0;
           const costUsd = await router.resolveRunCostUsd(
@@ -1318,7 +1318,7 @@ export class AgentRouter {
       "turn pre-LLM timings (receipt → chat.completions dispatch)",
     );
     this.sessions.markRunning(sessionId);
-    const beforeTurn = this.snapshotTurnProgress(agent.agentId, sessionId);
+    const beforeTurn = await this.snapshotTurnProgress(agent.agentId, sessionId);
 
     // Phase 2: Invoke chat completions. NOT retryable — Pi writes
     // user.message to JSONL immediately on HTTP receipt. Even connect-
@@ -1346,7 +1346,7 @@ export class AgentRouter {
     );
 
     if (completion.events && completion.events.length > 0) {
-      this.events.appendEvents?.(agent.agentId, sessionId, completion.events);
+      await this.events.appendEvents?.(agent.agentId, sessionId, completion.events);
     }
 
     const latestAgent = await this.waitForTurnAdvanced(
@@ -1359,7 +1359,7 @@ export class AgentRouter {
       },
       harness,
     );
-    this.mirrorVisibleEvents(agent.agentId, sessionId);
+    await this.mirrorVisibleEvents(agent.agentId, sessionId);
     const tokensIn = latestAgent?.tokensIn ?? completion.tokensIn;
     const tokensOut = latestAgent?.tokensOut ?? completion.tokensOut;
     const costUsd = await this.resolveRunCostUsd(
@@ -1472,7 +1472,7 @@ export class AgentRouter {
     // session's lastEventAt (which was set by beginRun before the crash).
     // A newer agent.message OR agent.tool_result means Pi finished the
     // turn without us watching.
-    const latest = this.events.latestAgentOutcome(agent.agentId, sessionId);
+    const latest = await this.events.latestAgentOutcome(agent.agentId, sessionId);
     const startedAt = session.lastEventAt ?? session.createdAt;
     if (latest && latest.createdAt > startedAt) {
       log.info(
@@ -1495,8 +1495,8 @@ export class AgentRouter {
     if (!current || !isSessionInflight(current)) return;
 
     if (outcome.ok) {
-      const latest = this.events.latestAgentMessage(agent.agentId, sessionId);
-      this.mirrorVisibleEvents(agent.agentId, sessionId);
+      const latest = await this.events.latestAgentMessage(agent.agentId, sessionId);
+      await this.mirrorVisibleEvents(agent.agentId, sessionId);
       const tokensIn = latest?.tokensIn ?? 0;
       const tokensOut = latest?.tokensOut ?? 0;
       const costUsd = await this.resolveRunCostUsd(
@@ -1547,22 +1547,22 @@ export class AgentRouter {
     this.sessions.endRunFailure(sessionId, outcome.error);
   }
 
-  private snapshotTurnProgress(
+  private async snapshotTurnProgress(
     agentId: string,
     sessionId: string,
-  ): TurnProgressSnapshot {
+  ): Promise<TurnProgressSnapshot> {
     return {
-      userTurns: this.events.countUserTurns(agentId, sessionId),
+      userTurns: await this.events.countUserTurns(agentId, sessionId),
       latestAgentOutcomeId:
-        this.events.latestAgentOutcome(agentId, sessionId)?.eventId,
+        (await this.events.latestAgentOutcome(agentId, sessionId))?.eventId,
     };
   }
 
-  private mirrorVisibleEvents(agentId: string, sessionId: string): void {
+  private async mirrorVisibleEvents(agentId: string, sessionId: string): Promise<void> {
     if (!this.events.appendEvents) return;
-    const events = this.events.listBySession(agentId, sessionId);
+    const events = await this.events.listBySession(agentId, sessionId);
     if (events.length === 0) return;
-    this.events.appendEvents(agentId, sessionId, events);
+    await this.events.appendEvents(agentId, sessionId, events);
   }
 
   private async resolveRunCostUsd(
@@ -1592,26 +1592,26 @@ export class AgentRouter {
     }
   }
 
-  private assertTurnAdvanced(
+  private async assertTurnAdvanced(
     agentId: string,
     sessionId: string,
     before: TurnProgressSnapshot,
-  ): Event | undefined {
-    const afterUserTurns = this.events.countUserTurns(agentId, sessionId);
+  ): Promise<Event | undefined> {
+    const afterUserTurns = await this.events.countUserTurns(agentId, sessionId);
     if (!Number.isFinite(afterUserTurns) || afterUserTurns <= before.userTurns) {
       throw new RouterError(
         "chat_completions_failed",
         "turn returned but no new user.message was written to JSONL",
       );
     }
-    const latestAgentOutcome = this.events.latestAgentOutcome(agentId, sessionId);
+    const latestAgentOutcome = await this.events.latestAgentOutcome(agentId, sessionId);
     if (!latestAgentOutcome || latestAgentOutcome.eventId === before.latestAgentOutcomeId) {
       throw new RouterError(
         "chat_completions_failed",
         "turn returned but no new agent.message or agent.tool_result was written to JSONL",
       );
     }
-    return this.events.latestAgentMessage(agentId, sessionId);
+    return await this.events.latestAgentMessage(agentId, sessionId);
   }
 
   private async waitForTurnAdvanced(
@@ -1626,7 +1626,7 @@ export class AgentRouter {
 
     while (true) {
       try {
-        return this.assertTurnAdvanced(agentId, sessionId, before);
+        return await this.assertTurnAdvanced(agentId, sessionId, before);
       } catch (err) {
         lastErr = err;
         if (
@@ -1640,7 +1640,7 @@ export class AgentRouter {
       }
     }
 
-    const afterUserTurns = this.events.countUserTurns(agentId, sessionId);
+    const afterUserTurns = await this.events.countUserTurns(agentId, sessionId);
     const userTurnIsDurable =
       Number.isFinite(afterUserTurns) && afterUserTurns > before.userTurns;
     if (completion && userTurnIsDurable && !harness?.isFailureOutput(completion.output)) {

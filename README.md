@@ -44,6 +44,11 @@ Working today:
 - Generic `HarnessAdapter` interface.
 - Public `/v1/harnesses` capability catalog.
 - Managed JSONL event log abstraction.
+- Managed session runtime boundary over the Docker pool.
+- Managed workspace boundary separated from event-log storage.
+- Awaitable managed event-log contract used by the router and HTTP API.
+- Optional event-log `stateRoot` so cloud stores do not fake local paths.
+- D1-compatible managed event-log backend for cloud stores.
 - Experimental Hermes adapter runtime via direct `AIAgent` integration.
 - Experimental Codex adapter runtime via `codex app-server`.
 - Experimental Claude Agent SDK adapter runtime via `@anthropic-ai/claude-agent-sdk`.
@@ -52,6 +57,10 @@ Working today:
 
 Not done yet:
 
+- Flue harness driver.
+- Cloudflare-native managed session runtime.
+- Cloudflare runtime wiring that uses the cloud managed event store in
+  production.
 - Full Hermes parity: arbitrary pre-tool approvals, MCP, compaction, subagents.
 - Full Codex parity: MCP, managed subagents, and per-tool deny policy.
 - Full Claude Agent SDK parity: managed subagents, manual compaction, and complete MCP

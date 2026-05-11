@@ -81,7 +81,7 @@ describe("ManagedJsonlEventLog", () => {
 });
 
 describe("CompositeManagedEventLog", () => {
-  it("dedupes normalized events across native and managed logs", () => {
+  it("dedupes normalized events across native and managed logs", async () => {
     const first = fakeLog([
       event({ eventId: "evt_1", sessionId: "ses_native", createdAt: 10 }),
       event({ eventId: "evt_2", sessionId: "ses_native", createdAt: 20 }),
@@ -92,7 +92,7 @@ describe("CompositeManagedEventLog", () => {
     ]);
 
     const composite = new CompositeManagedEventLog("/tmp/unused", [first, second]);
-    const listed = composite.listBySession("agt_1", "ses_1");
+    const listed = await composite.listBySession("agt_1", "ses_1");
     expect(listed.map((e) => e.eventId)).toEqual(["evt_1", "evt_2", "evt_3"]);
     expect(listed.map((e) => e.sessionId)).toEqual(["ses_1", "ses_1", "ses_1"]);
   });

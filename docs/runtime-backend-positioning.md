@@ -6,7 +6,12 @@ Update 2026-05-11: Docker-on-VPS remains the production backend for the
 current OpenClaw-heavy implementation. The Flue + Cloudflare target architecture
 is tracked separately in `docs/designs/flue-cloudflare-managed-stack.md`; it
 requires generalizing the runtime boundary from Docker containers to managed
-session runtimes before Cloudflare can be a first-class backend.
+session runtimes before Cloudflare can be a first-class backend. The first cut
+of that boundary now exists as `ManagedSessionRuntime`; managed event-log
+operations are awaitable at the router boundary; and a D1-compatible managed
+event backend now exists without requiring a local `stateRoot`. The next
+blockers are wiring that backend into a Cloudflare runtime path and then an
+actual Flue harness driver.
 
 ## Decision
 
@@ -121,6 +126,8 @@ The next practical backend work is:
 
 - keep Docker as default;
 - keep the runtime factory strict;
+- keep moving Docker-specific assumptions behind `ManagedSessionRuntime`,
+  `ManagedWorkspace`, and the D1-compatible event-store implementation;
 - add backend-contract documentation/tests only when a second backend is truly
   scheduled;
 - evaluate agent sandboxes as an optional environment/tool execution substrate,
