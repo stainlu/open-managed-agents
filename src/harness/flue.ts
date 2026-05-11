@@ -17,6 +17,7 @@ export type FlueEnginePromptArgs = {
   content: string;
   sessionId: string;
   timeoutMs: number;
+  signal?: AbortSignal;
   agent: AgentConfig;
   session?: Session;
   model?: string;
@@ -89,8 +90,8 @@ export class FlueHarnessAdapter implements HarnessAdapter {
       detail: "Flue session data is resumed inside the SDK bridge process; durable cloud/session-store integration is not wired yet.",
     },
     cancellation: {
-      support: "unsupported",
-      detail: "OMA does not yet retain native Flue call handles for managed cancellation.",
+      support: "partial",
+      detail: "Active Flue prompt turns are cancelled with AbortSignal; streaming/task cancellation is not wired yet.",
     },
     interruption: {
       support: "unsupported",
@@ -131,6 +132,8 @@ export class FlueHarnessAdapter implements HarnessAdapter {
   } satisfies HarnessCapabilities;
 
   private enginePromise: Promise<FlueEngine> | undefined;
+  private readonly activeCalls = new Map<string, AbortController>();
+  private readonly pendingAborts = new Map<string, unknown>();
 
   constructor(private readonly cfg: FlueHarnessAdapterConfig = {}) {}
 
@@ -156,16 +159,34 @@ export class FlueHarnessAdapter implements HarnessAdapter {
       );
     }
 
+    const callController = new AbortController();
+    this.activeCalls.set(args.sessionId, callController);
+    if (this.pendingAborts.has(args.sessionId)) {
+      callController.abort(this.pendingAborts.get(args.sessionId));
+    }
+
     const engine = await this.resolveEngine();
-    const result = await engine.prompt({
-      content: args.content,
-      sessionId: args.sessionId,
-      timeoutMs: args.timeoutMs,
-      agent: args.agent,
-      session: args.session,
-      model: args.model,
-      thinkingLevel: args.thinkingLevel,
-    });
+    let result: FlueEnginePromptResult;
+    try {
+      result = await engine.prompt({
+        content: args.content,
+        sessionId: args.sessionId,
+        timeoutMs: args.timeoutMs,
+        signal: AbortSignal.any([
+          callController.signal,
+          AbortSignal.timeout(args.timeoutMs),
+        ]),
+        agent: args.agent,
+        session: args.session,
+        model: args.model,
+        thinkingLevel: args.thinkingLevel,
+      });
+    } finally {
+      if (this.activeCalls.get(args.sessionId) === callController) {
+        this.activeCalls.delete(args.sessionId);
+      }
+      this.pendingAborts.delete(args.sessionId);
+    }
 
     const model = modelId(result.model) ?? args.model ?? args.agent.model;
     const tokensIn = finiteTokenCount(result.usage?.input);
@@ -207,11 +228,14 @@ export class FlueHarnessAdapter implements HarnessAdapter {
     // endpoint-backed live session patch in this adapter.
   }
 
-  async abortSession(): Promise<void> {
-    throw new HarnessControlError(
-      "unsupported_capability",
-      "Flue managed cancellation is not wired yet",
-    );
+  async abortSession(_controlClient: unknown, sessionId: string): Promise<void> {
+    const reason = new Error(`OMA cancelled Flue session ${sessionId}`);
+    const active = this.activeCalls.get(sessionId);
+    if (!active) {
+      this.pendingAborts.set(sessionId, reason);
+      return;
+    }
+    active.abort(reason);
   }
 
   async compactSession(): Promise<void> {
@@ -304,11 +328,10 @@ class OptionalSdkFlueEngine implements FlueEngine {
       thinkingLevel: args.thinkingLevel ?? args.agent.thinkingLevel,
     });
     const session = await flueAgent.session(args.sessionId);
-    const signal = AbortSignal.timeout(args.timeoutMs);
     const response = await session.prompt(args.content, {
       model: args.model,
       thinkingLevel: args.thinkingLevel,
-      signal,
+      signal: args.signal ?? AbortSignal.timeout(args.timeoutMs),
     });
     return {
       text: typeof response.text === "string" ? response.text : "",

@@ -100,9 +100,11 @@ Unsupported behavior is capability-gated. For example, Hermes MCP, compaction,
 and managed subagents, Codex MCP, Codex per-tool deny policy, and Codex managed
 subagents, plus Claude Agent SDK managed subagents and manual compaction, are
 rejected explicitly instead of being silently faked. The same rule applies to
-Flue: streaming, managed cancellation, OMA tool-policy mapping, MCP, and
+Flue: streaming, task/shell cancellation, OMA tool-policy mapping, MCP, and
 first-class managed child sessions for Flue tasks are not claimed until the
-adapter actually owns those surfaces.
+adapter actually owns those surfaces. Active Flue prompt calls are cancelled
+through Flue's native `AbortSignal` path, without inventing a separate control
+protocol.
 
 ### Runtime Substrate
 

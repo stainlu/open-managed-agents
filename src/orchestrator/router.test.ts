@@ -1917,6 +1917,42 @@ describe("AgentRouter.cancel — pre-abort checks", () => {
     expect(result.status).toBe("idle");
   });
 
+  it("routes native cancellation through the harness without a control client", async () => {
+    const base = nativeTestHarness();
+    const abortSession = vi.fn(async () => {});
+    const native = nativeTestHarness({
+      capabilities: {
+        ...base.capabilities,
+        cancellation: supported("native cancellation"),
+      },
+      abortSession,
+    });
+    const pool = {
+      getWsClient: vi.fn((_id: string): GatewayWebSocketClient | undefined => undefined),
+    };
+    const { router, store } = makeRouter({
+      extraHarnesses: [native],
+      poolStub: pool,
+    });
+    const agent = store.agents.create({
+      model: "m",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+      harnessId: "native-test",
+    });
+    const session = router.createSession(agent.agentId);
+    store.sessions.beginRun(session.sessionId);
+
+    const result = await router.cancel(session.sessionId);
+
+    expect(result.status).toBe("idle");
+    expect(pool.getWsClient).not.toHaveBeenCalled();
+    expect(abortSession).toHaveBeenCalledWith(undefined, session.sessionId);
+  });
+
   it("drains the queue and pending approvals then marks the session idle", async () => {
     // Happy-path cancel: WS abort succeeds, router clears per-session
     // bookkeeping. We use a fake ws that records the abort call and

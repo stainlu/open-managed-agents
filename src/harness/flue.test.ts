@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { AgentConfig, Session } from "../orchestrator/types.js";
-import { HarnessControlError, HarnessInvocationError } from "./types.js";
+import { HarnessInvocationError } from "./types.js";
 import { FlueHarnessAdapter, type FlueEngine } from "./flue.js";
 
 function agent(patch: Partial<AgentConfig> = {}): AgentConfig {
@@ -97,6 +97,7 @@ describe("FlueHarnessAdapter", () => {
       content: "hello",
       sessionId: ses.sessionId,
       timeoutMs: 60_000,
+      signal: expect.any(AbortSignal),
       agent: cfg,
       session: ses,
       model: "anthropic/claude-opus-4-7",
@@ -148,7 +149,73 @@ describe("FlueHarnessAdapter", () => {
     ).rejects.toThrow(HarnessInvocationError);
   });
 
-  it("does not claim streaming or managed cancellation before they are wired", async () => {
+  it("aborts active prompt turns through AbortSignal", async () => {
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    let signal: AbortSignal | undefined;
+    const adapter = new FlueHarnessAdapter({
+      engine: {
+        prompt: vi.fn((args) => {
+          signal = args.signal;
+          resolveStarted();
+          return new Promise<never>((_resolve, reject) => {
+            if (!signal) {
+              reject(new Error("missing signal"));
+              return;
+            }
+            if (signal.aborted) {
+              reject(signal.reason);
+              return;
+            }
+            signal.addEventListener("abort", () => reject(signal?.reason), {
+              once: true,
+            });
+          });
+        }),
+      },
+    });
+
+    const turn = adapter.invokeTurn({
+      content: "hello",
+      sessionId: "ses_flue",
+      timeoutMs: 60_000,
+      agent: agent(),
+    });
+    await started;
+
+    await adapter.abortSession(undefined, "ses_flue");
+
+    expect(signal?.aborted).toBe(true);
+    await expect(turn).rejects.toThrow("OMA cancelled Flue session ses_flue");
+  });
+
+  it("remembers cancellation that arrives before the prompt handle starts", async () => {
+    const adapter = new FlueHarnessAdapter({
+      engine: {
+        prompt: vi.fn((args) => {
+          if (args.signal?.aborted) {
+            return Promise.reject(args.signal.reason);
+          }
+          return Promise.resolve({ text: "unused" });
+        }),
+      },
+    });
+
+    await adapter.abortSession(undefined, "ses_flue");
+
+    await expect(
+      adapter.invokeTurn({
+        content: "hello",
+        sessionId: "ses_flue",
+        timeoutMs: 60_000,
+        agent: agent(),
+      }),
+    ).rejects.toThrow("OMA cancelled Flue session ses_flue");
+  });
+
+  it("does not claim streaming before it is wired", async () => {
     const adapter = new FlueHarnessAdapter({
       engine: {
         prompt: vi.fn(async () => ({ text: "unused" })),
@@ -156,7 +223,7 @@ describe("FlueHarnessAdapter", () => {
     });
 
     expect(adapter.capabilities.streaming.support).toBe("unsupported");
-    expect(adapter.capabilities.cancellation.support).toBe("unsupported");
+    expect(adapter.capabilities.cancellation.support).toBe("partial");
     await expect(
       adapter.invokeStreamingTurn({
         content: "hello",
@@ -165,8 +232,5 @@ describe("FlueHarnessAdapter", () => {
         agent: agent(),
       }),
     ).rejects.toThrow(HarnessInvocationError);
-    await expect(adapter.abortSession({}, "ses_flue")).rejects.toThrow(
-      HarnessControlError,
-    );
   });
 });

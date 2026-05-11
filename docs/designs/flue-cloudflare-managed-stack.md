@@ -57,7 +57,8 @@ Done in OMA:
 - `FlueHarnessAdapter` now exists as an opt-in native prompt driver. It runs
   blocking Flue prompt turns through an SDK bridge, emits managed
   `user.message` / `agent.message` boundary events, maps selected Flue thinking
-  and tool runtime events, and fails loudly for unsupported OMA tool mapping.
+  and tool runtime events, cancels active prompt calls with Flue's native
+  `AbortSignal` path, and fails loudly for unsupported OMA tool mapping.
 
 Started upstream in Flue:
 
@@ -69,8 +70,8 @@ Still open:
 
 - `ManagedEventLog.stateRoot` still exists as an optional legacy local-Docker
   escape hatch.
-- The Flue harness driver is prompt-only: streaming, managed cancellation, MCP,
-  tool approvals/deny policy, durable Flue session-store bridge, and
+- The Flue harness driver is prompt-only: streaming, task/shell cancellation,
+  MCP, tool approvals/deny policy, durable Flue session-store bridge, and
   first-class OMA child sessions for Flue tasks are not wired yet.
 - The Cloudflare runtime prototype does not exist yet, so the D1-compatible
   event store is not wired into a production Cloudflare runtime path.
@@ -288,11 +289,12 @@ workspace ids into the public session identity.
    - Start with Node execution against Flue's API.
    - Emit normalized events at prompt boundaries first.
    - Add a capability-honest adapter surface that does not fake streaming,
-     cancellation, tool policy, MCP, or first-class task sessions.
+     task/shell cancellation, tool policy, MCP, or first-class task sessions.
+   - Route OMA prompt cancellation into Flue's native `AbortSignal` path.
 
 5. [ ] Deepen Flue driver parity.
    - Wire durable Flue session-store deltas to OMA-managed storage.
-   - Retain active prompt call handles for cancellation.
+   - Extend cancellation semantics beyond blocking prompt calls.
    - Map Flue event streams into OMA SSE without waiting for final result.
    - Decide how Flue task lineage maps to OMA child sessions.
 

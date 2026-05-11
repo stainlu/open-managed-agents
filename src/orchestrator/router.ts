@@ -1151,8 +1151,11 @@ export class AgentRouter {
     }
     const harness = this.harnessForSession(session);
     this.assertHarnessCapability(harness, "cancellation");
-    const controlClient = this.pool.getControlClient(sessionId);
-    if (!controlClient) {
+    const usesContainerRuntime = harnessUsesContainerRuntime(harness);
+    const controlClient = usesContainerRuntime
+      ? this.pool.getControlClient(sessionId)
+      : undefined;
+    if (usesContainerRuntime && !controlClient) {
       // Session is running but no container yet — still in the acquire
       // phase. Set a flag so executeInBackground aborts after acquire
       // returns, and transition the session to idle immediately so the
