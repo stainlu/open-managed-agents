@@ -775,6 +775,18 @@ export class AgentRouter {
         throw err;
       }
 
+      let liveEventError: unknown;
+      const liveEvents = stream.liveEvents;
+      const liveEventDrain = liveEvents
+        ? (async () => {
+          for await (const event of liveEvents) {
+            await this.events.appendEvents?.(agent.agentId, args.sessionId, [event]);
+          }
+        })().catch((err) => {
+          liveEventError = err;
+        })
+        : Promise.resolve();
+
       const chunks = (async function* (): AsyncGenerator<string, void, void> {
         try {
           for await (const chunk of stream.chunks) {
@@ -792,6 +804,8 @@ export class AgentRouter {
         const current = router.sessions.get(args.sessionId);
         if (!isSessionInflight(current)) return;
         if (outcome.ok) {
+          await liveEventDrain;
+          if (liveEventError) throw liveEventError;
           if (stream.events && stream.events.length > 0) {
             await router.events.appendEvents?.(agent.agentId, args.sessionId, stream.events);
           }

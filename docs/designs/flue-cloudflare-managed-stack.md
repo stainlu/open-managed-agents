@@ -55,11 +55,13 @@ Done in OMA:
   without acquiring a container. Native harnesses must still emit/append managed
   events so the normal OMA session accounting path can prove turn advancement.
 - `FlueHarnessAdapter` now exists as an opt-in native prompt driver. It runs
-  blocking Flue prompt turns through an SDK bridge, emits managed
+  blocking and streamed Flue prompt turns through an SDK bridge, emits managed
   `user.message` / `agent.message` boundary events, maps selected Flue thinking
-  and tool runtime events, cancels active prompt calls with Flue's native
-  `AbortSignal` path, persists Flue session data through OMA-managed local
-  harness state, and fails loudly for unsupported OMA tool mapping.
+  and tool runtime events, streams Flue text deltas as OpenAI-compatible chat
+  chunks, appends normalized managed events while streamed turns are still
+  running, cancels active prompt calls with Flue's native `AbortSignal` path,
+  persists Flue session data through OMA-managed local harness state, and fails
+  loudly for unsupported OMA tool mapping.
 
 Started upstream in Flue:
 
@@ -71,9 +73,9 @@ Still open:
 
 - `ManagedEventLog.stateRoot` still exists as an optional legacy local-Docker
   escape hatch.
-- The Flue harness driver is prompt-only: streaming, task/shell cancellation,
-  MCP, tool approvals/deny policy, Cloudflare-backed Flue session persistence,
-  and first-class OMA child sessions for Flue tasks are not wired yet.
+- The Flue harness driver is prompt-only: task/shell cancellation, MCP, tool
+  approvals/deny policy, Cloudflare-backed Flue session persistence, and
+  first-class OMA child sessions for Flue tasks are not wired yet.
 - The Cloudflare runtime prototype does not exist yet, so the D1-compatible
   event store is not wired into a production Cloudflare runtime path.
 
@@ -289,17 +291,18 @@ workspace ids into the public session identity.
 4. [x] Add Flue harness driver locally.
    - Start with Node execution against Flue's API.
    - Emit normalized events at prompt boundaries first.
-   - Add a capability-honest adapter surface that does not fake streaming,
-     task/shell cancellation, tool policy, MCP, or first-class task sessions.
+   - Add a capability-honest adapter surface that does not fake task/shell
+     cancellation, tool policy, MCP, or first-class task sessions.
    - Route OMA prompt cancellation into Flue's native `AbortSignal` path.
    - Persist Flue session data through OMA-managed local harness state instead
      of process memory.
+   - Stream Flue prompt text deltas as OpenAI-compatible chat chunks and append
+     live OMA events during streamed turns.
 
 5. [ ] Deepen Flue driver parity.
    - Move Flue session persistence from local harness state to Cloudflare
      session state.
-   - Extend cancellation semantics beyond blocking prompt calls.
-   - Map Flue event streams into OMA SSE without waiting for final result.
+   - Extend cancellation semantics beyond prompt calls.
    - Decide how Flue task lineage maps to OMA child sessions.
 
 6. [ ] Add Cloudflare runtime prototype.

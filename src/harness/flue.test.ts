@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { AgentConfig, Session } from "../orchestrator/types.js";
+import type { AgentConfig, Event, Session } from "../orchestrator/types.js";
 import { HarnessInvocationError } from "./types.js";
 import type { ManagedHarnessStateStore } from "./state-store.js";
 import {
@@ -220,15 +220,69 @@ describe("FlueHarnessAdapter", () => {
     ).rejects.toThrow("OMA cancelled Flue session ses_flue");
   });
 
-  it("does not claim streaming before it is wired", async () => {
+  it("streams prompt chunks through an injected native Flue engine", async () => {
+    async function* chunks(): AsyncGenerator<string, void, void> {
+      yield JSON.stringify({
+        choices: [{ index: 0, delta: { content: "hi" }, finish_reason: null }],
+      });
+      yield "[DONE]";
+    }
+    async function* liveEvents(): AsyncGenerator<Event, void, void> {
+      yield {
+        eventId: "evt_live_user",
+        sessionId: "ses_flue",
+        type: "user.message",
+        content: "hello",
+        createdAt: 1,
+      };
+    }
+    const abort = vi.fn(async () => {});
+    const result = {
+      output: "hi",
+      tokensIn: 3,
+      tokensOut: 2,
+      model: "anthropic/claude-sonnet-4-6",
+    };
+    const adapter = new FlueHarnessAdapter({
+      engine: {
+        prompt: vi.fn(async () => ({ text: "unused" })),
+        stream: vi.fn(async () => ({
+          chunks: chunks(),
+          liveEvents: liveEvents(),
+          result,
+          abort,
+        })),
+      },
+    });
+
+    expect(adapter.capabilities.streaming.support).toBe("partial");
+    expect(adapter.capabilities.cancellation.support).toBe("partial");
+    const stream = await adapter.invokeStreamingTurn({
+      content: "hello",
+      sessionId: "ses_flue",
+      timeoutMs: 60_000,
+      agent: agent(),
+    });
+
+    const streamed: string[] = [];
+    for await (const chunk of stream.chunks) streamed.push(chunk);
+    const events = [];
+    for await (const event of stream.liveEvents ?? (async function* () {})()) {
+      events.push(event);
+    }
+
+    expect(streamed.at(-1)).toBe("[DONE]");
+    expect(events).toHaveLength(1);
+    expect(stream.result).toBe(result);
+  });
+
+  it("fails loudly when an injected Flue engine does not expose streaming", async () => {
     const adapter = new FlueHarnessAdapter({
       engine: {
         prompt: vi.fn(async () => ({ text: "unused" })),
       },
     });
 
-    expect(adapter.capabilities.streaming.support).toBe("unsupported");
-    expect(adapter.capabilities.cancellation.support).toBe("partial");
     await expect(
       adapter.invokeStreamingTurn({
         content: "hello",
@@ -236,7 +290,7 @@ describe("FlueHarnessAdapter", () => {
         timeoutMs: 60_000,
         agent: agent(),
       }),
-    ).rejects.toThrow(HarnessInvocationError);
+    ).rejects.toThrow("Flue engine does not expose streaming prompt calls");
   });
 });
 

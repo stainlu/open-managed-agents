@@ -52,6 +52,17 @@ export type HarnessStreamingTurnInvocationArgs = HarnessTurnInvocationArgs;
 
 export type HarnessStreamingTurn = {
   chunks: AsyncGenerator<string, void, void>;
+  /**
+   * Managed events produced while the streamed turn is still running. Routers
+   * that support an appendable event log should consume this concurrently with
+   * chunks so `/events?stream=true` clients do not wait for finalization.
+   */
+  liveEvents?: AsyncGenerator<Event, void, void>;
+  /**
+   * Managed events that are only available after the stream has been drained.
+   * Container adapters keep using this shape because their source of truth is
+   * still the harness-local transcript.
+   */
   events?: Event[];
   result?: HarnessTurnResult;
   abort(reason?: string): Promise<void>;

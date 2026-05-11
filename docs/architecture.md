@@ -94,19 +94,22 @@ Current adapters:
 | `hermes` | experimental | in-container `oma.adapter.v1` HTTP/SSE server wrapping Hermes `AIAgent` directly |
 | `codex` | experimental | in-container `oma.adapter.v1` HTTP/SSE server driving `codex app-server` JSON-RPC |
 | `claude-agent-sdk` | experimental | in-container `oma.adapter.v1` HTTP/SSE server driving `@anthropic-ai/claude-agent-sdk` `query()` |
-| `flue` | experimental / opt-in | native SDK bridge for Flue prompt turns, enabled with `OMA_ENABLE_FLUE_HARNESS=1` |
+| `flue` | experimental / opt-in | native SDK bridge for Flue prompt turns and prompt streaming, enabled with `OMA_ENABLE_FLUE_HARNESS=1` |
 
 Unsupported behavior is capability-gated. For example, Hermes MCP, compaction,
 and managed subagents, Codex MCP, Codex per-tool deny policy, and Codex managed
 subagents, plus Claude Agent SDK managed subagents and manual compaction, are
 rejected explicitly instead of being silently faked. The same rule applies to
-Flue: streaming, task/shell cancellation, OMA tool-policy mapping, MCP, and
-first-class managed child sessions for Flue tasks are not claimed until the
-adapter actually owns those surfaces. Active Flue prompt calls are cancelled
-through Flue's native `AbortSignal` path, without inventing a separate control
-protocol. Flue session data is persisted through an OMA harness-state boundary
-instead of the SDK's process-local in-memory store when the opt-in adapter is
-registered from the normal composition root.
+Flue: task/shell cancellation, OMA tool-policy mapping, MCP, and first-class
+managed child sessions for Flue tasks are not claimed until the adapter
+actually owns those surfaces. The current Flue adapter owns prompt streaming:
+Flue `text_delta` callbacks become OpenAI-compatible streaming chunks, and
+normalized OMA events are appended while the streamed turn is still running.
+Active Flue prompt calls are cancelled through Flue's native
+`AbortSignal` path, without inventing a separate control protocol. Flue session
+data is persisted through an OMA harness-state boundary instead of the SDK's
+process-local in-memory store when the opt-in adapter is registered from the
+normal composition root.
 
 ### Runtime Substrate
 

@@ -43,6 +43,7 @@ export type FlueEnginePromptResult = {
 
 export type FlueEngine = {
   prompt(args: FlueEnginePromptArgs): Promise<FlueEnginePromptResult>;
+  stream?(args: FlueEnginePromptArgs): Promise<HarnessStreamingTurn>;
 };
 
 export type FlueHarnessAdapterConfig = {
@@ -57,6 +58,7 @@ type FlueRuntimeEvent = {
   text?: string;
   delta?: string;
   content?: string;
+  prompt?: string;
   toolName?: string;
   toolCallId?: string;
   args?: unknown;
@@ -65,6 +67,9 @@ type FlueRuntimeEvent = {
   workId?: string;
   workKind?: string;
   sessionId?: string;
+  durationMs?: number;
+  usage?: FlueEngineUsage;
+  model?: string | { id?: string };
 };
 
 type OptionalImport = (specifier: string) => Promise<unknown>;
@@ -84,8 +89,8 @@ export class FlueHarnessAdapter implements HarnessAdapter {
       detail: "Runs a Flue prompt through the native SDK bridge.",
     },
     streaming: {
-      support: "unsupported",
-      detail: "Native Flue streaming is not wired through OMA yet; prompt boundary events are available in blocking mode first.",
+      support: "partial",
+      detail: "Streams Flue prompt text deltas and live managed events; task/shell streaming is not wired yet.",
     },
     native_session_resume: {
       support: "partial",
@@ -93,7 +98,7 @@ export class FlueHarnessAdapter implements HarnessAdapter {
     },
     cancellation: {
       support: "partial",
-      detail: "Active Flue prompt turns are cancelled with AbortSignal; streaming/task cancellation is not wired yet.",
+      detail: "Active Flue prompt turns, including streamed prompts, are cancelled with AbortSignal; task cancellation is not wired yet.",
     },
     interruption: {
       support: "unsupported",
@@ -152,21 +157,8 @@ export class FlueHarnessAdapter implements HarnessAdapter {
   }
 
   async invokeTurn(args: HarnessTurnInvocationArgs): Promise<HarnessTurnResult> {
-    if (!args.agent) {
-      throw new HarnessInvocationError("Flue turn requires agent config");
-    }
-    if (args.agent.tools.length > 0) {
-      throw new HarnessInvocationError(
-        "Flue harness does not map OMA agent.tools yet; use an agent with an empty tools list or wire Flue-native tools in a Flue app",
-      );
-    }
-
-    const callController = new AbortController();
-    this.activeCalls.set(args.sessionId, callController);
-    if (this.pendingAborts.has(args.sessionId)) {
-      callController.abort(this.pendingAborts.get(args.sessionId));
-    }
-
+    this.assertPromptCallable(args);
+    const callController = this.startCall(args.sessionId);
     const engine = await this.resolveEngine();
     let result: FlueEnginePromptResult;
     try {
@@ -184,10 +176,7 @@ export class FlueHarnessAdapter implements HarnessAdapter {
         thinkingLevel: args.thinkingLevel,
       });
     } finally {
-      if (this.activeCalls.get(args.sessionId) === callController) {
-        this.activeCalls.delete(args.sessionId);
-      }
-      this.pendingAborts.delete(args.sessionId);
+      this.finishCall(args.sessionId, callController);
     }
 
     const model = modelId(result.model) ?? args.model ?? args.agent.model;
@@ -220,9 +209,61 @@ export class FlueHarnessAdapter implements HarnessAdapter {
   }
 
   async invokeStreamingTurn(
-    _args: HarnessStreamingTurnInvocationArgs,
+    args: HarnessStreamingTurnInvocationArgs,
   ): Promise<HarnessStreamingTurn> {
-    throw new HarnessInvocationError("Flue streaming is not wired through OMA yet");
+    this.assertPromptCallable(args);
+    const engine = await this.resolveEngine();
+    if (!engine.stream) {
+      throw new HarnessInvocationError("Flue engine does not expose streaming prompt calls");
+    }
+    const callController = this.startCall(args.sessionId);
+    let stream: HarnessStreamingTurn;
+    try {
+      stream = await engine.stream({
+        content: args.content,
+        sessionId: args.sessionId,
+        timeoutMs: args.timeoutMs,
+        signal: AbortSignal.any([
+          callController.signal,
+          AbortSignal.timeout(args.timeoutMs),
+        ]),
+        agent: args.agent,
+        session: args.session,
+        model: args.model,
+        thinkingLevel: args.thinkingLevel,
+      });
+    } catch (err) {
+      this.finishCall(args.sessionId, callController);
+      throw err;
+    }
+
+    let finished = false;
+    const cleanup = (): void => {
+      if (finished) return;
+      finished = true;
+      this.finishCall(args.sessionId, callController);
+    };
+    return {
+      chunks: (async function* (): AsyncGenerator<string, void, void> {
+        try {
+          for await (const chunk of stream.chunks) {
+            yield chunk;
+          }
+        } finally {
+          cleanup();
+        }
+      })(),
+      liveEvents: stream.liveEvents,
+      events: stream.events,
+      get result() {
+        return stream.result;
+      },
+      abort: async (reason?: string) => {
+        callController.abort(reason ?? new Error(`OMA cancelled Flue session ${args.sessionId}`));
+        await stream.abort(reason);
+        cleanup();
+      },
+    };
   }
 
   async patchSession(): Promise<void> {
@@ -293,6 +334,35 @@ export class FlueHarnessAdapter implements HarnessAdapter {
     }
     return this.enginePromise;
   }
+
+  private assertPromptCallable(
+    args: HarnessTurnInvocationArgs | HarnessStreamingTurnInvocationArgs,
+  ): asserts args is typeof args & { agent: AgentConfig } {
+    if (!args.agent) {
+      throw new HarnessInvocationError("Flue turn requires agent config");
+    }
+    if (args.agent.tools.length > 0) {
+      throw new HarnessInvocationError(
+        "Flue harness does not map OMA agent.tools yet; use an agent with an empty tools list or wire Flue-native tools in a Flue app",
+      );
+    }
+  }
+
+  private startCall(sessionId: string): AbortController {
+    const callController = new AbortController();
+    this.activeCalls.set(sessionId, callController);
+    if (this.pendingAborts.has(sessionId)) {
+      callController.abort(this.pendingAborts.get(sessionId));
+    }
+    return callController;
+  }
+
+  private finishCall(sessionId: string, callController: AbortController): void {
+    if (this.activeCalls.get(sessionId) === callController) {
+      this.activeCalls.delete(sessionId);
+    }
+    this.pendingAborts.delete(sessionId);
+  }
 }
 
 class OptionalSdkFlueEngine implements FlueEngine {
@@ -305,27 +375,8 @@ class OptionalSdkFlueEngine implements FlueEngine {
   ) {}
 
   async prompt(args: FlueEnginePromptArgs): Promise<FlueEnginePromptResult> {
-    const internal = await this.loadInternal();
-    const store = await this.loadStore(internal, args);
-    const env = new MemorySessionEnv(args.agent.instructions);
+    const ctx = await this.createContext(args);
     const events: FlueRuntimeEvent[] = [];
-    const ctx = internal.createFlueContext({
-      id: args.agent.agentId,
-      payload: { content: args.content, managedSessionId: args.sessionId },
-      env: this.passthroughEnv,
-      req: undefined,
-      agentConfig: {
-        systemPrompt: "",
-        skills: {},
-        roles: {},
-        model: undefined,
-        resolveModel: internal.resolveModel,
-        thinkingLevel: args.agent.thinkingLevel,
-      },
-      createDefaultEnv: async () => env,
-      createLocalEnv: async () => env,
-      defaultStore: store,
-    });
     ctx.setEventCallback((event: FlueRuntimeEvent) => {
       events.push(event);
     });
@@ -347,6 +398,137 @@ class OptionalSdkFlueEngine implements FlueEngine {
       model: response.model,
       events,
     };
+  }
+
+  async stream(args: FlueEnginePromptArgs): Promise<HarnessStreamingTurn> {
+    const ctx = await this.createContext(args);
+    const turnId = `${Date.now()}_${randomUUID()}`;
+    const createdAt = Date.now();
+    let eventIndex = 0;
+    let output = "";
+    let result: HarnessTurnResult | undefined;
+    let promptHandle: FlueCallHandle | undefined;
+    const chunks = new AsyncQueue<string>();
+    const liveEvents = new AsyncQueue<Event>();
+    const modelForChunks = args.model ?? args.agent.model;
+
+    liveEvents.push({
+      eventId: `evt_flue_${turnId}_user`,
+      sessionId: args.sessionId,
+      type: "user.message",
+      content: args.content,
+      createdAt,
+    });
+
+    ctx.setEventCallback((event: FlueRuntimeEvent) => {
+      if (event.type === "text_delta" && typeof event.text === "string") {
+        output += event.text;
+        chunks.push(openAiTextChunk({
+          id: turnId,
+          model: modelForChunks,
+          content: event.text,
+        }));
+      }
+      const mapped = mapFlueEvent(
+        event,
+        args.sessionId,
+        `evt_flue_${turnId}_runtime_${eventIndex}`,
+        createdAt + eventIndex + 1,
+      );
+      eventIndex++;
+      if (mapped) liveEvents.push(mapped);
+    });
+
+    (async () => {
+      try {
+        const flueAgent = await ctx.init({
+          id: args.agent.agentId,
+          model: args.model ?? args.agent.model,
+          thinkingLevel: args.thinkingLevel ?? args.agent.thinkingLevel,
+        });
+        const session = await flueAgent.session(args.sessionId);
+        promptHandle = session.prompt(args.content, {
+          model: args.model,
+          thinkingLevel: args.thinkingLevel,
+          signal: args.signal ?? AbortSignal.timeout(args.timeoutMs),
+        }) as FlueCallHandle;
+        const response = await promptHandle;
+        const text = typeof response.text === "string" ? response.text : "";
+        if (output.length === 0 && text.length > 0) {
+          chunks.push(openAiTextChunk({ id: turnId, model: modelForChunks, content: text }));
+        }
+        output = text;
+        const model = modelId(response.model) ?? args.model ?? args.agent.model;
+        const tokensIn = finiteTokenCount(response.usage?.input);
+        const tokensOut = finiteTokenCount(response.usage?.output);
+        const costUsd = finiteNumber(response.usage?.cost?.total);
+        result = {
+          output,
+          tokensIn,
+          tokensOut,
+          model,
+          native: {
+            nativeSessionId: args.sessionId,
+            nativeThreadId: null,
+            nativeMetadata: { harness: "flue" },
+          },
+        };
+        liveEvents.push({
+          eventId: `evt_flue_${turnId}_agent`,
+          sessionId: args.sessionId,
+          type: "agent.message",
+          content: output,
+          createdAt: createdAt + eventIndex + 1,
+          tokensIn,
+          tokensOut,
+          costUsd,
+          model,
+        });
+        chunks.push(openAiFinishChunk({ id: turnId, model }));
+        chunks.push("[DONE]");
+        chunks.close();
+        liveEvents.close();
+      } catch (err) {
+        chunks.fail(err);
+        liveEvents.fail(err);
+      } finally {
+        ctx.setEventCallback(undefined);
+      }
+    })();
+
+    return {
+      chunks: chunks.iterate(),
+      liveEvents: liveEvents.iterate(),
+      get result() {
+        return result;
+      },
+      abort: async (reason?: string) => {
+        promptHandle?.abort?.(reason);
+      },
+    };
+  }
+
+  private async createContext(args: FlueEnginePromptArgs): Promise<FlueContextLike> {
+    const internal = await this.loadInternal();
+    const store = await this.loadStore(internal, args);
+    const env = new MemorySessionEnv(args.agent.instructions);
+    return internal.createFlueContext({
+      id: args.agent.agentId,
+      payload: { content: args.content, managedSessionId: args.sessionId },
+      env: this.passthroughEnv,
+      req: undefined,
+      agentConfig: {
+        systemPrompt: "",
+        skills: {},
+        roles: {},
+        model: undefined,
+        resolveModel: internal.resolveModel,
+        thinkingLevel: args.agent.thinkingLevel,
+      },
+      createDefaultEnv: async () => env,
+      createLocalEnv: async () => env,
+      defaultStore: store,
+    });
   }
 
   private async loadInternal(): Promise<FlueInternalModule> {
@@ -436,7 +618,18 @@ type FlueSessionLike = {
   prompt(
     content: string,
     options?: Record<string, unknown>,
-  ): Promise<{ text?: string; usage?: FlueEngineUsage; model?: string | { id?: string } }>;
+  ): FlueCallHandle;
+};
+
+type FluePromptResponseLike = {
+  text?: string;
+  usage?: FlueEngineUsage;
+  model?: string | { id?: string };
+};
+
+type FlueCallHandle = PromiseLike<FluePromptResponseLike> & {
+  signal?: AbortSignal;
+  abort?: (reason?: unknown) => void;
 };
 
 function validateFlueInternalModule(mod: unknown): FlueInternalModule {
@@ -645,6 +838,94 @@ function buildManagedEvents(args: {
   return events;
 }
 
+class AsyncQueue<T> {
+  private readonly values: T[] = [];
+  private readonly waiters: Array<{
+    resolve: (value: IteratorResult<T>) => void;
+    reject: (err: unknown) => void;
+  }> = [];
+  private closed = false;
+  private error: unknown;
+
+  push(value: T): void {
+    if (this.closed || this.error) return;
+    const waiter = this.waiters.shift();
+    if (waiter) {
+      waiter.resolve({ value, done: false });
+      return;
+    }
+    this.values.push(value);
+  }
+
+  close(): void {
+    if (this.closed || this.error) return;
+    this.closed = true;
+    while (this.waiters.length > 0) {
+      this.waiters.shift()?.resolve({ value: undefined, done: true });
+    }
+  }
+
+  fail(err: unknown): void {
+    if (this.closed || this.error) return;
+    this.error = err;
+    while (this.waiters.length > 0) {
+      this.waiters.shift()?.reject(err);
+    }
+  }
+
+  async *iterate(): AsyncGenerator<T, void, void> {
+    while (true) {
+      if (this.values.length > 0) {
+        yield this.values.shift() as T;
+        continue;
+      }
+      if (this.error) throw this.error;
+      if (this.closed) return;
+      const next = await new Promise<IteratorResult<T>>((resolve, reject) => {
+        this.waiters.push({ resolve, reject });
+      });
+      if (next.done) return;
+      yield next.value;
+    }
+  }
+}
+
+function openAiTextChunk(args: {
+  id: string;
+  model: string;
+  content: string;
+}): string {
+  return JSON.stringify({
+    id: `chatcmpl-flue-${args.id}`,
+    object: "chat.completion.chunk",
+    created: Math.floor(Date.now() / 1000),
+    model: args.model,
+    choices: [
+      {
+        index: 0,
+        delta: { content: args.content },
+        finish_reason: null,
+      },
+    ],
+  });
+}
+
+function openAiFinishChunk(args: { id: string; model: string }): string {
+  return JSON.stringify({
+    id: `chatcmpl-flue-${args.id}`,
+    object: "chat.completion.chunk",
+    created: Math.floor(Date.now() / 1000),
+    model: args.model,
+    choices: [
+      {
+        index: 0,
+        delta: {},
+        finish_reason: "stop",
+      },
+    ],
+  });
+}
+
 function mapFlueEvents(
   flueEvents: FlueRuntimeEvent[],
   sessionId: string,
@@ -708,7 +989,9 @@ function mapFlueEvent(
         eventId,
         sessionId,
         type: "session.runtime_notice",
-        content: `Flue task started${event.workId ? `: ${event.workId}` : ""}`,
+        content: `Flue task started${event.workId ? `: ${event.workId}` : ""}${
+          event.prompt ? `\n${event.prompt}` : ""
+        }`,
         createdAt,
       };
     case "task_end":
@@ -719,6 +1002,22 @@ function mapFlueEvent(
         content: `Flue task ended${event.isError ? " with error" : ""}${
           event.workId ? `: ${event.workId}` : ""
         }`,
+        createdAt,
+      };
+    case "compaction_start":
+      return {
+        eventId,
+        sessionId,
+        type: "session.compaction",
+        content: `Flue compaction started${event.content ? `: ${event.content}` : ""}`,
+        createdAt,
+      };
+    case "compaction_end":
+      return {
+        eventId,
+        sessionId,
+        type: "session.compaction",
+        content: "Flue compaction ended",
         createdAt,
       };
     default:

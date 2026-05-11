@@ -110,6 +110,18 @@ async function waitForSessionToStopRunning(
   throw new Error(`session ${sessionId} stayed inflight`);
 }
 
+async function waitForCondition(
+  label: string,
+  pred: () => boolean,
+): Promise<void> {
+  const deadline = Date.now() + 500;
+  while (Date.now() < deadline) {
+    if (pred()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`timed out waiting for ${label}`);
+}
+
 function findLastEvent(
   events: Event[],
   pred: (event: Event) => boolean,
@@ -1014,6 +1026,95 @@ describe("AgentRouter native harness runtime", () => {
     expect(finished?.status).toBe("idle");
     expect(finished?.tokensIn).toBe(13);
     expect(finished?.tokensOut).toBe(5);
+  });
+
+  it("appends live managed events while a native streaming turn is still running", async () => {
+    const { eventReader, storedEvents } = managedEventStore();
+    let releaseAgentEvent!: () => void;
+    const agentEventReady = new Promise<void>((resolve) => {
+      releaseAgentEvent = resolve;
+    });
+    async function* liveEvents(): AsyncGenerator<Event, void, void> {
+      yield {
+        eventId: "evt_live_user",
+        sessionId: "native-session",
+        type: "user.message",
+        content: "stream",
+        createdAt: 1,
+      };
+      await agentEventReady;
+      yield {
+        eventId: "evt_live_agent",
+        sessionId: "native-session",
+        type: "agent.message",
+        content: "native streamed",
+        createdAt: 2,
+        tokensIn: 13,
+        tokensOut: 5,
+        model: "flue/native-test",
+      };
+    }
+    async function* chunks(): AsyncGenerator<string, void, void> {
+      yield JSON.stringify({ choices: [{ delta: { content: "native " } }] });
+      releaseAgentEvent();
+      yield "[DONE]";
+    }
+    const invokeStreamingTurn = vi.fn(async () => ({
+      chunks: chunks(),
+      liveEvents: liveEvents(),
+      result: {
+        output: "native streamed",
+        tokensIn: 13,
+        tokensOut: 5,
+        model: "flue/native-test",
+      },
+      abort: async () => {},
+    }));
+    const { router, store } = makeRouter({
+      extraHarnesses: [nativeTestHarness({ invokeStreamingTurn })],
+      poolStub: {
+        acquireForSession: async () => {
+          throw new Error("native harness should not acquire a container");
+        },
+        evictSession: async () => {},
+      },
+      eventReaderStub: eventReader,
+    });
+    const agent = store.agents.create({
+      model: "flue/native-test",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+      harnessId: "native-test",
+    });
+    const session = router.createSession(agent.agentId);
+
+    const handle = await router.streamEvent({ sessionId: session.sessionId, content: "stream" });
+    await waitForCondition(
+      "live user event append",
+      () => storedEvents.some((event) => event.eventId === "evt_live_user"),
+    );
+    expect(store.sessions.get(session.sessionId)?.status).toBe("running");
+
+    const seenChunks: string[] = [];
+    for await (const chunk of handle.chunks) seenChunks.push(chunk);
+    expect(seenChunks.at(-1)).toBe("[DONE]");
+    await waitForCondition(
+      "live agent event append",
+      () => storedEvents.some((event) => event.eventId === "evt_live_agent"),
+    );
+    await handle.finalize({ ok: true });
+
+    const finished = store.sessions.get(session.sessionId);
+    expect(finished?.status).toBe("idle");
+    expect(finished?.tokensIn).toBe(13);
+    expect(finished?.tokensOut).toBe(5);
+    expect(storedEvents.map((event) => event.eventId)).toEqual([
+      "evt_live_user",
+      "evt_live_agent",
+    ]);
   });
 });
 
