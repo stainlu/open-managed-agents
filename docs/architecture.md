@@ -245,6 +245,12 @@ with optional endpoint metadata and no container id/name/network fields. Router
 invocation code asks the lease for an endpoint capability instead of assuming
 every runtime is a Docker container.
 
+`NativeOnlySessionRuntime` is the companion implementation for native harness
+composition roots. It has no warm containers, active containers, logs, or
+control client. It deliberately throws if a container harness tries to acquire
+a runtime endpoint, which keeps Cloudflare/Flue-style stacks honest while the
+Docker pool remains the production backend for endpoint-backed harnesses.
+
 Two pools in one: an **active** pool (per-session, reused across turns) and a **warm** pool (per-agent, pre-booted when enabled). When warm capacity is configured and a compatible agent is created, a container can boot in the background and wait in the warm bucket. The first compatible session on that agent claims the pre-warmed container instead of cold-spawning. Subsequent events reuse the active container (~100 ms overhead).
 
 An unref'd `setInterval` sweeper reaps idle containers on both halves, and the

@@ -40,6 +40,9 @@ Done in OMA:
 - `RuntimeLease` now accepts platform leases with optional endpoint metadata;
   router invocation asks for an endpoint capability instead of directly
   dereferencing Docker container fields.
+- `NativeOnlySessionRuntime` now exists for native harness stacks. It no-ops
+  warm/evict/log/control surfaces and fails loudly if an endpoint-backed
+  harness tries to acquire a runtime lease.
 - `ManagedWorkspace` now exists in `src/workspace/types.ts`.
 - `LocalManagedWorkspace` preserves the current Docker/OpenClaw workspace
   layout while keeping router workspace CRUD off the event-log `stateRoot`.
@@ -82,8 +85,9 @@ Still open:
 - The Flue harness driver is prompt-only: task/shell cancellation, MCP, tool
   approvals/deny policy, Cloudflare-backed Flue session persistence, and
   first-class OMA child sessions for Flue tasks are not wired yet.
-- The Cloudflare runtime prototype does not exist yet, so the D1-compatible
-  event store is not wired into a production Cloudflare runtime path.
+- The Cloudflare runtime composition does not exist yet, so the D1-compatible
+  event and harness-state stores are not wired into a production Cloudflare
+  API/runtime path.
 
 ## Non-Decision
 
@@ -280,6 +284,8 @@ workspace ids into the public session identity.
    - Stop `AgentRouter` from reaching directly into `pool.runtime`.
    - Let runtime leases describe non-Docker platforms without requiring
      container id/name/network fields.
+   - Add a native-only runtime implementation for native harness composition
+     roots.
 
 2. [x] Make the event/workspace boundary async-friendly.
    - Add `ManagedWorkspace` so workspace file APIs stop reaching through
