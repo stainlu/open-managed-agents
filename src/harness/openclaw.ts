@@ -20,7 +20,11 @@ import type {
   HarnessTurnInvocationArgs,
   HarnessTurnResult,
 } from "./types.js";
-import { HarnessControlError, HarnessInvocationError } from "./types.js";
+import {
+  HarnessControlError,
+  HarnessInvocationError,
+  requireHarnessEndpoint,
+} from "./types.js";
 
 // UID of the non-root `openclaw` user inside the agent runtime image,
 // created by `useradd -r` in Dockerfile.runtime. Docker daemon on Linux
@@ -352,7 +356,8 @@ export class OpenClawHarnessAdapter implements HarnessAdapter {
     args: HarnessTurnInvocationArgs,
     stream: boolean,
   ): Promise<Response> {
-    const url = `${args.baseUrl}/v1/chat/completions`;
+    const endpoint = requireHarnessEndpoint(args, this.displayName);
+    const url = `${endpoint.baseUrl}/v1/chat/completions`;
     // OpenClaw's OpenAI-compatible endpoint validates the `model` field against
     // either the literal "openclaw" or the "openclaw/<agentId>" pattern — it is
     // a routing hint, not the inference model. The actual model is selected
@@ -373,7 +378,7 @@ export class OpenClawHarnessAdapter implements HarnessAdapter {
       headers: {
         "Content-Type": "application/json",
         ...(stream ? { Accept: "text/event-stream" } : {}),
-        Authorization: `Bearer ${args.token}`,
+        Authorization: `Bearer ${endpoint.token}`,
         "x-openclaw-agent-id": "main",
         "x-openclaw-session-key": canonicalSessionKey,
       },

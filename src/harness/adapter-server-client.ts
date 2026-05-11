@@ -1,7 +1,14 @@
 import type { Container } from "../runtime/container.js";
 import type { ContainerControlClient, ContainerControlPlane } from "../runtime/control.js";
 import type { Event } from "../orchestrator/types.js";
-import { HarnessControlError, HarnessInvocationError, type HarnessStreamingTurn, type HarnessTurnInvocationArgs, type HarnessTurnResult } from "./types.js";
+import {
+  HarnessControlError,
+  HarnessInvocationError,
+  requireHarnessEndpoint,
+  type HarnessStreamingTurn,
+  type HarnessTurnInvocationArgs,
+  type HarnessTurnResult,
+} from "./types.js";
 import {
   ADAPTER_SERVER_PROTOCOL_VERSION,
   AdapterServerControlResponseSchema,
@@ -95,12 +102,13 @@ export function adapterServerControlPlane(harnessId?: string): ContainerControlP
 export async function invokeAdapterServerTurn(
   args: HarnessTurnInvocationArgs,
 ): Promise<HarnessTurnResult> {
+  const endpoint = requireHarnessEndpoint(args, "adapter-server");
   const request = buildAdapterStartTurnRequest(args, false);
-  const res = await fetch(`${args.baseUrl}/sessions/${encodeURIComponent(args.sessionId)}/turns`, {
+  const res = await fetch(`${endpoint.baseUrl}/sessions/${encodeURIComponent(args.sessionId)}/turns`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${args.token}`,
+      Authorization: `Bearer ${endpoint.token}`,
     },
     body: JSON.stringify(request),
     signal: AbortSignal.timeout(args.timeoutMs),
@@ -113,15 +121,16 @@ export async function invokeAdapterServerTurn(
 export async function invokeStreamingAdapterServerTurn(
   args: HarnessTurnInvocationArgs,
 ): Promise<HarnessStreamingTurn> {
+  const endpoint = requireHarnessEndpoint(args, "adapter-server");
   const request = buildAdapterStartTurnRequest(args, true);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(args.timeoutMs), args.timeoutMs);
-  const res = await fetch(`${args.baseUrl}/sessions/${encodeURIComponent(args.sessionId)}/turns`, {
+  const res = await fetch(`${endpoint.baseUrl}/sessions/${encodeURIComponent(args.sessionId)}/turns`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Accept: "text/event-stream",
-      Authorization: `Bearer ${args.token}`,
+      Authorization: `Bearer ${endpoint.token}`,
     },
     body: JSON.stringify(request),
     signal: controller.signal,

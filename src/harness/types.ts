@@ -20,9 +20,11 @@ export type HarnessSpawnOptionsArgs = {
   thinkingLevel?: AgentConfig["thinkingLevel"];
 };
 
+export type HarnessRuntimeMode = "container" | "native";
+
 export type HarnessTurnInvocationArgs = {
-  baseUrl: string;
-  token: string;
+  baseUrl?: string;
+  token?: string;
   content: string;
   sessionId: string;
   timeoutMs: number;
@@ -117,9 +119,17 @@ export class HarnessControlError extends Error {
 export type HarnessAdapter = {
   readonly id: HarnessId;
   readonly displayName: string;
+  /**
+   * `container` adapters are invoked through a managed runtime endpoint
+   * (`baseUrl` + bearer token). `native` adapters run in the orchestrator /
+   * platform runtime and must not require Docker spawn options.
+   *
+   * Omitted means `container` for compatibility with the existing adapters.
+   */
+  readonly runtimeMode?: HarnessRuntimeMode;
   readonly capabilities: HarnessCapabilities;
   readonly controlPlane?: ContainerControlPlane;
-  buildSpawnOptions(args: HarnessSpawnOptionsArgs): SpawnOptions;
+  buildSpawnOptions?(args: HarnessSpawnOptionsArgs): SpawnOptions;
   shouldBypassWarmPool(session: Pick<Session, "environmentId" | "vaultId"> | undefined): boolean;
   modelForUsage(model: string): string;
   isFailureOutput(output: string): boolean;
@@ -157,3 +167,27 @@ export type HarnessAdapter = {
     handler: (event: HarnessTurnStateEvent) => void,
   ): () => void;
 };
+
+export function harnessRuntimeMode(
+  harness: Pick<HarnessAdapter, "runtimeMode">,
+): HarnessRuntimeMode {
+  return harness.runtimeMode ?? "container";
+}
+
+export function harnessUsesContainerRuntime(
+  harness: Pick<HarnessAdapter, "runtimeMode">,
+): boolean {
+  return harnessRuntimeMode(harness) === "container";
+}
+
+export function requireHarnessEndpoint(
+  args: Pick<HarnessTurnInvocationArgs, "baseUrl" | "token">,
+  harnessName: string,
+): { baseUrl: string; token: string } {
+  if (!args.baseUrl || !args.token) {
+    throw new HarnessInvocationError(
+      `${harnessName} turn requires a managed runtime endpoint`,
+    );
+  }
+  return { baseUrl: args.baseUrl, token: args.token };
+}

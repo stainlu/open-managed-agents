@@ -6,6 +6,7 @@ import {
   type HarnessCapabilities,
   type HarnessStreamingTurn,
   type HarnessTurnResult,
+  harnessUsesContainerRuntime,
 } from "../harness/types.js";
 import type { HarnessRegistry } from "../harness/registry.js";
 import type { ManagedEventLog } from "../events/types.js";
@@ -502,6 +503,9 @@ export class AgentRouter {
     if (!agent) return;
     const harness = this.harnessForAgent(agent);
     this.assertAgentTemplateCapabilities(harness, agent);
+    if (!harnessUsesContainerRuntime(harness)) {
+      return;
+    }
     if (agent.callableAgents.length > 0 || agent.maxSubagentDepth > 0) {
       return;
     }
@@ -697,28 +701,32 @@ export class AgentRouter {
       await this.refreshExpiringOAuthCredentials(agent, running.vaultId ?? null);
       const effectiveThinking = args.thinkingLevel ?? agent.thinkingLevel;
       const streamIsFirstTurn = bumped.turns <= 1;
-      const spawnOptions = this.buildSpawnOptions(args.sessionId, agent, bumped, {
-        modelOverride: streamIsFirstTurn ? args.model : undefined,
-        thinkingLevel: streamIsFirstTurn ? effectiveThinking : agent.thinkingLevel,
-      });
-      const networking = this.resolveNetworking(running);
-      const container = await this.pool.acquireForSession({
-        sessionId: args.sessionId,
-        spawnOptions,
-        controlPlane: harness.controlPlane,
-        agentId: agent.agentId,
-        networking,
-        bypassWarmPool: this.shouldBypassWarmPool(running, agent),
-      });
+      const usesContainerRuntime = harnessUsesContainerRuntime(harness);
+      let container: Container | undefined;
+      if (usesContainerRuntime) {
+        const spawnOptions = this.buildSpawnOptions(args.sessionId, agent, bumped, {
+          modelOverride: streamIsFirstTurn ? args.model : undefined,
+          thinkingLevel: streamIsFirstTurn ? effectiveThinking : agent.thinkingLevel,
+        });
+        const networking = this.resolveNetworking(running);
+        container = await this.pool.acquireForSession({
+          sessionId: args.sessionId,
+          spawnOptions,
+          controlPlane: harness.controlPlane,
+          agentId: agent.agentId,
+          networking,
+          bypassWarmPool: this.shouldBypassWarmPool(running, agent),
+        });
+      }
 
-      if (agent.permissionPolicy.type === "always_ask") {
+      if (usesContainerRuntime && agent.permissionPolicy.type === "always_ask") {
         const controlClient = this.pool.getControlClient(args.sessionId);
         if (controlClient) {
           await this.ensureApprovalSubscriptions(args.sessionId, controlClient);
         }
       }
 
-      if ((args.model || args.thinkingLevel) && !streamIsFirstTurn) {
+      if (usesContainerRuntime && (args.model || args.thinkingLevel) && !streamIsFirstTurn) {
         const controlClient = this.pool.getControlClient(args.sessionId);
         if (!controlClient) {
           throw new RouterError(
@@ -746,8 +754,8 @@ export class AgentRouter {
       let stream: HarnessStreamingTurn;
       try {
         stream = await harness.invokeStreamingTurn({
-          baseUrl: container.baseUrl,
-          token: container.token,
+          baseUrl: container?.baseUrl,
+          token: container?.token,
           content: args.content,
           sessionId: args.sessionId,
           timeoutMs: this.cfg.runTimeoutMs,
@@ -909,6 +917,13 @@ export class AgentRouter {
       throw new RouterError(
         "session_not_found",
         `session ${sessionId} does not exist`,
+      );
+    }
+    const harness = this.harnessForSession(session);
+    if (!harnessUsesContainerRuntime(harness)) {
+      throw new RouterError(
+        "no_active_container",
+        `session ${sessionId} uses native harness ${harness.id}, which does not expose container logs`,
       );
     }
     const logs = await this.pool.readLogs(sessionId, { tail });
@@ -1238,6 +1253,12 @@ export class AgentRouter {
     const harness = "harnessId" in session
       ? this.harnessForSession(session)
       : this.harnessForAgent(agent);
+    if (!harness.buildSpawnOptions) {
+      throw new RouterError(
+        "unsupported_capability",
+        `harness ${harness.id} does not expose Docker spawn options`,
+      );
+    }
     return harness.buildSpawnOptions({
       sessionId,
       agent,
@@ -1281,36 +1302,41 @@ export class AgentRouter {
       model: modelOverride,
       thinkingLevel: thinkingLevelOverride,
     });
-    const spawnOptions = this.buildSpawnOptions(
-      sessionId,
-      agent,
-      currentSession ?? { remainingSubagentDepth: 0, environmentId: null } as Session,
-      {
-        modelOverride: isFirstTurn ? modelOverride : undefined,
-        thinkingLevel: isFirstTurn ? effectiveThinking : agent.thinkingLevel,
-      },
-    );
-    Object.assign(timings, tick("build_spawn_options", cursor));
-    cursor = Date.now();
+    const usesContainerRuntime = harnessUsesContainerRuntime(harness);
+    let container: Container | undefined;
 
-    // Phase 1: Acquire container + WS patch. This phase is retryable
-    // because Pi has NOT received the user message yet — all failures
-    // here are infrastructure (spawn, /readyz, WS handshake). Pi writes
-    // user.message to JSONL immediately on HTTP receipt, so once the
-    // POST reaches the container, we must NOT retry (would duplicate
-    // the user message in the session log).
-    const container = await this.acquireWithRetry(
-      sessionId, agent, spawnOptions, currentSession,
-      modelOverride, effectiveThinking, timings,
-    );
-    Object.assign(timings, tick("acquire_total", cursor));
-    cursor = Date.now();
+    if (usesContainerRuntime) {
+      const spawnOptions = this.buildSpawnOptions(
+        sessionId,
+        agent,
+        currentSession ?? { remainingSubagentDepth: 0, environmentId: null } as Session,
+        {
+          modelOverride: isFirstTurn ? modelOverride : undefined,
+          thinkingLevel: isFirstTurn ? effectiveThinking : agent.thinkingLevel,
+        },
+      );
+      Object.assign(timings, tick("build_spawn_options", cursor));
+      cursor = Date.now();
 
-    // Check if cancel was requested while we were acquiring.
-    if (this.cancelledDuringAcquire.has(sessionId)) {
-      this.cancelledDuringAcquire.delete(sessionId);
-      log.info({ session_id: sessionId }, "acquire completed but session was cancelled during it — aborting");
-      return;
+      // Phase 1: Acquire container + WS patch. This phase is retryable
+      // because Pi has NOT received the user message yet — all failures
+      // here are infrastructure (spawn, /readyz, WS handshake). Pi writes
+      // user.message to JSONL immediately on HTTP receipt, so once the
+      // POST reaches the container, we must NOT retry (would duplicate
+      // the user message in the session log).
+      container = await this.acquireWithRetry(
+        sessionId, agent, spawnOptions, currentSession,
+        modelOverride, effectiveThinking, timings,
+      );
+      Object.assign(timings, tick("acquire_total", cursor));
+      cursor = Date.now();
+
+      // Check if cancel was requested while we were acquiring.
+      if (this.cancelledDuringAcquire.has(sessionId)) {
+        this.cancelledDuringAcquire.delete(sessionId);
+        log.info({ session_id: sessionId }, "acquire completed but session was cancelled during it — aborting");
+        return;
+      }
     }
 
     log.info(
@@ -1327,8 +1353,8 @@ export class AgentRouter {
     const runEnd = sessionRunDurationSeconds.startTimer();
     const completion = await this.invokeChatCompletions({
       harness,
-      baseUrl: container.baseUrl,
-      token: container.token,
+      baseUrl: container?.baseUrl,
+      token: container?.token,
       content,
       sessionKey: sessionId,
       agent,
@@ -1821,8 +1847,8 @@ export class AgentRouter {
 
   private async invokeChatCompletions(args: {
     harness: HarnessAdapter;
-    baseUrl: string;
-    token: string;
+    baseUrl?: string;
+    token?: string;
     content: string;
     sessionKey: string;
     agent: AgentConfig;

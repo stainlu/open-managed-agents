@@ -7,7 +7,7 @@ import {
 } from "../harness/openclaw.js";
 import { OpenClawJsonlEventLog } from "../harness/openclaw-events.js";
 import { HarnessRegistry } from "../harness/registry.js";
-import type { HarnessCapabilities } from "../harness/types.js";
+import type { HarnessAdapter, HarnessCapabilities } from "../harness/types.js";
 import type { GatewayWebSocketClient } from "../runtime/gateway-ws.js";
 import { ParentTokenMinter } from "../runtime/parent-token.js";
 import type { ManagedSessionRuntime } from "../runtime/session-runtime.js";
@@ -32,6 +32,7 @@ function makeRouter(opts: {
   eventReaderStub?: Partial<ManagedEventLog>;
   passthroughEnv?: Record<string, string>;
   capabilityOverrides?: Partial<HarnessCapabilities>;
+  extraHarnesses?: HarnessAdapter[];
 } = {}): {
   router: AgentRouter;
   store: InMemoryStore;
@@ -74,7 +75,7 @@ function makeRouter(opts: {
   const cfg: RouterConfig = {
     passthroughEnv: opts.passthroughEnv ?? {},
     runTimeoutMs: 60_000,
-    harnesses: new HarnessRegistry({ adapters: [harness] }),
+    harnesses: new HarnessRegistry({ adapters: [harness, ...(opts.extraHarnesses ?? [])] }),
   };
   const router = new AgentRouter(
     store.agents,
@@ -128,6 +129,58 @@ const unsupported = (detail: string) => ({
   support: "unsupported" as const,
   detail,
 });
+
+const supported = (detail: string) => ({
+  support: "supported" as const,
+  detail,
+});
+
+function nativeTestHarness(
+  overrides: Partial<HarnessAdapter> = {},
+): HarnessAdapter {
+  const adapter: HarnessAdapter = {
+    id: "native-test",
+    displayName: "Native Test",
+    runtimeMode: "native",
+    capabilities: {
+      start_turn: supported("native test turns"),
+      streaming: supported("native test streaming"),
+      native_session_resume: supported("native test metadata"),
+      cancellation: unsupported("native test cancellation is not wired"),
+      interruption: unsupported("native test interruption is not wired"),
+      dynamic_model_patch: supported("native turns receive model fields directly"),
+      compaction: unsupported("native test compaction is not wired"),
+      tool_approvals: unsupported("native test approvals are not wired"),
+      permission_deny: unsupported("native test deny policy is not wired"),
+      mcp: unsupported("native test MCP is not wired"),
+      managed_event_log: supported("native test emits managed events"),
+      usage: supported("native test usage"),
+      subagents: unsupported("native test subagents are not wired"),
+    },
+    shouldBypassWarmPool: () => true,
+    modelForUsage: (model) => model,
+    isFailureOutput: () => false,
+    invokeTurn: vi.fn(async () => ({
+      output: "native done",
+      tokensIn: 11,
+      tokensOut: 7,
+    })),
+    invokeStreamingTurn: vi.fn(async () => ({
+      chunks: doneStream(),
+      abort: async () => {},
+    })),
+    patchSession: vi.fn(async () => {}),
+    abortSession: vi.fn(async () => {}),
+    compactSession: vi.fn(async () => {}),
+    resolveApproval: vi.fn(async () => {}),
+    listApprovals: vi.fn(async () => []),
+    subscribeApprovalRequested: vi.fn(() => () => {}),
+    subscribeApprovalResolved: vi.fn(() => () => {}),
+    subscribeTurnState: vi.fn(() => () => {}),
+    ...overrides,
+  };
+  return adapter;
+}
 
 describe("AgentRouter.createSession", () => {
   it("normalizes runtime models through ZenMux when ZENMUX_API_KEY is configured", () => {
@@ -306,6 +359,29 @@ describe("AgentRouter.warmSession", () => {
     await router.warmSession(session.sessionId);
 
     expect(warmed).toEqual([agent.agentId]);
+  });
+
+  it("does not warm native harnesses through the container pool", async () => {
+    const warmForAgent = vi.fn(async () => {});
+    const { router, store } = makeRouter({
+      extraHarnesses: [nativeTestHarness()],
+      poolStub: { warmForAgent },
+    });
+    const agent = store.agents.create({
+      model: "m",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+      harnessId: "native-test",
+    });
+    const session = router.createSession(agent.agentId);
+
+    await router.warmSession(session.sessionId);
+    await router.warmForAgent(agent.agentId);
+
+    expect(warmForAgent).not.toHaveBeenCalled();
   });
 
   it("skips template warm for sessions with package preinstalls", async () => {
@@ -770,6 +846,174 @@ describe("AgentRouter.runEvent — decision tree", () => {
     ).rejects.toMatchObject({ name: "RouterError", code: "unsupported_capability" });
     expect(queue.size(session.sessionId)).toBe(0);
     expect(store.sessions.get(session.sessionId)?.status).toBe("starting");
+  });
+});
+
+describe("AgentRouter native harness runtime", () => {
+  function managedEventStore() {
+    const storedEvents: Event[] = [];
+    const appendEvents = vi.fn((_agentId: string, sessionId: string, events: Event[]) => {
+      for (const event of events) {
+        if (storedEvents.some((stored) => stored.eventId === event.eventId)) continue;
+        storedEvents.push({ ...event, sessionId });
+      }
+    });
+    const eventReader: Partial<ManagedEventLog> = {
+      appendEvents,
+      listBySession: () => storedEvents,
+      countUserTurns: () =>
+        storedEvents.filter((event) => event.type === "user.message").length,
+      latestAgentOutcome: () =>
+        findLastEvent(
+          storedEvents,
+          (event) => event.type === "agent.message" || event.type === "agent.tool_result",
+        ),
+      latestAgentMessage: () =>
+        findLastEvent(storedEvents, (event) => event.type === "agent.message"),
+    };
+    return { eventReader, appendEvents, storedEvents };
+  }
+
+  it("runs native harness turns without acquiring a container endpoint", async () => {
+    const { eventReader } = managedEventStore();
+    const acquireForSession = vi.fn(async () => {
+      throw new Error("native harness should not acquire a container");
+    });
+    const invokeTurn = vi.fn(async (args) => ({
+      output: "native done",
+      tokensIn: 11,
+      tokensOut: 7,
+      model: args.agent?.model,
+      events: [
+        {
+          eventId: "evt_native_user",
+          sessionId: args.sessionId,
+          type: "user.message" as const,
+          content: args.content,
+          createdAt: 1,
+        },
+        {
+          eventId: "evt_native_agent",
+          sessionId: args.sessionId,
+          type: "agent.message" as const,
+          content: "native done",
+          createdAt: 2,
+          tokensIn: 11,
+          tokensOut: 7,
+          model: args.agent?.model,
+        },
+      ],
+    }));
+    const { router, store } = makeRouter({
+      extraHarnesses: [nativeTestHarness({ invokeTurn })],
+      poolStub: {
+        acquireForSession,
+        evictSession: async () => {},
+      },
+      eventReaderStub: eventReader,
+    });
+    const agent = store.agents.create({
+      model: "flue/native-test",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+      harnessId: "native-test",
+    });
+    const session = router.createSession(agent.agentId);
+
+    await router.runEvent({ sessionId: session.sessionId, content: "hi native" });
+    await waitForSessionToStopRunning(store, session.sessionId);
+
+    expect(acquireForSession).not.toHaveBeenCalled();
+    expect(invokeTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: undefined,
+        token: undefined,
+        content: "hi native",
+        sessionId: session.sessionId,
+        agent: expect.objectContaining({ harnessId: "native-test" }),
+      }),
+    );
+    const finished = store.sessions.get(session.sessionId);
+    expect(finished?.status).toBe("idle");
+    expect(finished?.tokensIn).toBe(11);
+    expect(finished?.tokensOut).toBe(7);
+  });
+
+  it("streams native harness turns without acquiring a container endpoint", async () => {
+    const { eventReader } = managedEventStore();
+    const acquireForSession = vi.fn(async () => {
+      throw new Error("native harness should not acquire a container");
+    });
+    const invokeStreamingTurn = vi.fn(async (args) => ({
+      chunks: doneStream(),
+      events: [
+        {
+          eventId: "evt_native_stream_user",
+          sessionId: args.sessionId,
+          type: "user.message" as const,
+          content: args.content,
+          createdAt: 1,
+        },
+        {
+          eventId: "evt_native_stream_agent",
+          sessionId: args.sessionId,
+          type: "agent.message" as const,
+          content: "native streamed",
+          createdAt: 2,
+          tokensIn: 13,
+          tokensOut: 5,
+          model: args.agent?.model,
+        },
+      ],
+      result: {
+        output: "native streamed",
+        tokensIn: 13,
+        tokensOut: 5,
+        model: args.agent?.model,
+      },
+      abort: async () => {},
+    }));
+    const { router, store } = makeRouter({
+      extraHarnesses: [nativeTestHarness({ invokeStreamingTurn })],
+      poolStub: {
+        acquireForSession,
+        evictSession: async () => {},
+      },
+      eventReaderStub: eventReader,
+    });
+    const agent = store.agents.create({
+      model: "flue/native-test",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+      harnessId: "native-test",
+    });
+    const session = router.createSession(agent.agentId);
+
+    const handle = await router.streamEvent({ sessionId: session.sessionId, content: "stream" });
+    for await (const chunk of handle.chunks) {
+      expect(chunk).toBe("[DONE]");
+    }
+    await handle.finalize({ ok: true });
+
+    expect(acquireForSession).not.toHaveBeenCalled();
+    expect(invokeStreamingTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: undefined,
+        token: undefined,
+        content: "stream",
+        sessionId: session.sessionId,
+      }),
+    );
+    const finished = store.sessions.get(session.sessionId);
+    expect(finished?.status).toBe("idle");
+    expect(finished?.tokensIn).toBe(13);
+    expect(finished?.tokensOut).toBe(5);
   });
 });
 

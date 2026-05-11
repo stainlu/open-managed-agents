@@ -68,7 +68,8 @@ Native harness concepts stay behind adapter metadata:
 
 `src/harness/types.ts` defines `HarnessAdapter`. Each adapter owns:
 
-- spawn-time container config;
+- whether it runs through a managed container endpoint or native runtime mode;
+- spawn-time container config for container-backed adapters;
 - turn invocation;
 - streaming turn invocation;
 - model/thinking patching where supported;
@@ -80,6 +81,10 @@ Native harness concepts stay behind adapter metadata:
 The registry is runtime-authoritative. Public schemas accept any valid harness
 identifier, and `HarnessRegistry` decides whether the adapter is installed.
 `GET /v1/harnesses` exposes the concrete capability matrix to clients.
+Container adapters still expose Docker spawn options and receive `baseUrl` /
+bearer-token runtime endpoints at turn invocation. Native adapters do not need
+spawn options and receive the same managed `Agent`, `Session`, `Environment`,
+and turn fields directly.
 
 Current adapters:
 

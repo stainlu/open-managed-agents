@@ -48,6 +48,12 @@ Done in OMA:
   backend with append, list, latest, count, stat, delete, and polling follow.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
+- Harness adapters now declare a runtime mode. Existing adapters remain
+  `container` mode, while future native adapters can run turns without
+  `buildSpawnOptions`, Docker warm-up, or a `baseUrl`/token endpoint.
+- `AgentRouter` can start blocking and streaming turns for native harnesses
+  without acquiring a container. Native harnesses must still emit/append managed
+  events so the normal OMA session accounting path can prove turn advancement.
 
 Started upstream in Flue:
 
@@ -266,18 +272,24 @@ workspace ids into the public session identity.
      allowing local JSONL readers to stay synchronous internally.
    - Add a D1-compatible managed event backend.
 
-3. [ ] Add Flue harness driver locally.
+3. [x] Make harness invocation non-container-capable.
+   - Add a `container | native` harness runtime mode.
+   - Keep Docker spawn options optional at the interface boundary.
+   - Require `baseUrl`/token only inside endpoint-backed adapters.
+   - Skip container warm/acquire for native blocking and streaming turns.
+
+4. [ ] Add Flue harness driver locally.
    - Start with Node execution against Flue's API.
    - Emit normalized events at prompt boundaries first.
    - Add finer event fidelity as Flue upstream hooks land.
 
-4. [ ] Add Cloudflare runtime prototype.
+5. [ ] Add Cloudflare runtime prototype.
    - DO-backed session state.
    - Workflow-backed run execution.
    - R2 or Artifacts workspace.
    - No Docker compatibility shims.
 
-5. [ ] Promote Cloudflare runtime only after it proves:
+6. [ ] Promote Cloudflare runtime only after it proves:
    - durable event replay after restart/hibernation;
    - cancellation path;
    - queued turns;
