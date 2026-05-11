@@ -104,7 +104,9 @@ Flue: streaming, task/shell cancellation, OMA tool-policy mapping, MCP, and
 first-class managed child sessions for Flue tasks are not claimed until the
 adapter actually owns those surfaces. Active Flue prompt calls are cancelled
 through Flue's native `AbortSignal` path, without inventing a separate control
-protocol.
+protocol. Flue session data is persisted through an OMA harness-state boundary
+instead of the SDK's process-local in-memory store when the opt-in adapter is
+registered from the normal composition root.
 
 ### Runtime Substrate
 
@@ -198,6 +200,25 @@ workspace CRUD routes. It deliberately sits beside, not inside,
 - Future cloud runtimes can implement the same interface over Artifacts, R2,
   object storage, or a provider-native workspace without exposing local
   filesystem paths through the event-log contract.
+
+### Managed Harness State (`src/harness/state-store.ts`)
+
+`ManagedHarnessStateStore` is harness-private session state that OMA owns for
+lifecycle, durability, and backend placement, but does not interpret as public
+events or workspace files. It exists for harness SDKs that have their own opaque
+session storage model.
+
+- **`LocalHarnessStateStore`** maps opaque keys to
+  `<stateRoot>/<agentId>/sessions/<sessionId>/harness-state/<harnessId>/<key>.json`.
+  Managed identifiers stay path segments; the harness key is base64url-encoded
+  so SDK storage IDs can contain slashes, colons, or provider-specific forms.
+- The normal composition root wires this store into the opt-in Flue adapter so
+  Flue session data persists through OMA-managed local state instead of the
+  SDK's process-local memory.
+- `DELETE /v1/sessions/:id`, ephemeral idle reap, and ephemeral error cleanup
+  all remove harness state by managed session. Future cloud runtimes should
+  implement the same boundary over Durable Object state, D1, R2, or another
+  provider-native store.
 
 ### OpenClaw JSONL Event Source (`src/harness/openclaw-events.ts`)
 

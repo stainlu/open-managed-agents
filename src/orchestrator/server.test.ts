@@ -46,6 +46,7 @@ function makeApp(opts: {
     dropWarmForAgent: [] as string[],
     disposeSessionRuntime: [] as string[],
   };
+  const harnessStateDeletes: Array<{ agentId: string; sessionId: string }> = [];
   let eventCounter = 0;
 
   function appendEvent(event: Event): void {
@@ -220,6 +221,16 @@ function makeApp(opts: {
     environments: store.environments,
     sessions: store.sessions,
     events: events as ServerDeps["events"],
+    harnessState: {
+      async save() {},
+      async load() {
+        return null;
+      },
+      async delete() {},
+      async deleteBySession(agentId: string, sessionId: string) {
+        harnessStateDeletes.push({ agentId, sessionId });
+      },
+    },
     audit: store.audit,
     vaults: store.vaults,
     router: router as ServerDeps["router"],
@@ -253,6 +264,7 @@ function makeApp(opts: {
     store,
     routerCalls,
     eventsBySession,
+    harnessStateDeletes,
     appendEvent,
   };
 }
@@ -961,8 +973,8 @@ describe("session ownership in the HTTP API", () => {
     expect(store.agents.get(agent.agentId)?.model).toBe("openai/gpt-5.4");
   });
 
-  it("evicts live runtime state before deleting a session", async () => {
-    const { app, store, routerCalls } = makeApp();
+  it("evicts live runtime state and deletes managed harness state before deleting a session", async () => {
+    const { app, store, routerCalls, harnessStateDeletes } = makeApp();
     const agent = createAgent(store);
     const session = store.sessions.create({
       agentId: agent.agentId,
@@ -976,6 +988,9 @@ describe("session ownership in the HTTP API", () => {
 
     expect(res.status).toBe(200);
     expect(routerCalls.disposeSessionRuntime).toEqual([session.sessionId]);
+    expect(harnessStateDeletes).toEqual([
+      { agentId: agent.agentId, sessionId: session.sessionId },
+    ]);
     expect(store.sessions.get(session.sessionId)).toBeUndefined();
   });
 

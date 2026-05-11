@@ -7,6 +7,7 @@ import { writeAudit } from "../audit.js";
 import { addContext, getLogger, withContext } from "../log.js";
 import { createRateLimitMiddleware } from "../rate-limit.js";
 import type { ManagedEventLog } from "../events/types.js";
+import type { ManagedHarnessStateStore } from "../harness/state-store.js";
 import type { HarnessRegistry } from "../harness/registry.js";
 import type { HarnessAdapter } from "../harness/types.js";
 import {
@@ -108,6 +109,7 @@ export type ServerDeps = {
   environments: EnvironmentStore;
   sessions: SessionStore;
   events: ManagedEventLog;
+  harnessState?: ManagedHarnessStateStore;
   audit: AuditStore;
   vaults: VaultStore;
   router: AgentRouter;
@@ -1475,6 +1477,7 @@ export function buildApp(deps: ServerDeps): Hono {
       return handleRouterError(err, c);
     }
     await deps.events.deleteBySession(session.agentId, session.sessionId);
+    await deps.harnessState?.deleteBySession(session.agentId, session.sessionId);
     deps.sessions.delete(sessionId);
     writeAudit(deps.audit, c, {
       action: "session.delete",
@@ -2066,6 +2069,11 @@ export function buildApp(deps: ServerDeps): Hono {
       if (!isEphemeral) return;
       try {
         await deps.events.deleteBySession(agentId, session.sessionId);
+      } catch {
+        /* best-effort */
+      }
+      try {
+        await deps.harnessState?.deleteBySession(agentId, session.sessionId);
       } catch {
         /* best-effort */
       }

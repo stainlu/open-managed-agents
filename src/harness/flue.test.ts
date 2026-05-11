@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { AgentConfig, Session } from "../orchestrator/types.js";
 import { HarnessInvocationError } from "./types.js";
-import { FlueHarnessAdapter, type FlueEngine } from "./flue.js";
+import type { ManagedHarnessStateStore } from "./state-store.js";
+import {
+  FlueHarnessAdapter,
+  FlueManagedSessionStore,
+  type FlueEngine,
+} from "./flue.js";
 
 function agent(patch: Partial<AgentConfig> = {}): AgentConfig {
   return {
@@ -232,5 +237,37 @@ describe("FlueHarnessAdapter", () => {
         agent: agent(),
       }),
     ).rejects.toThrow(HarnessInvocationError);
+  });
+});
+
+describe("FlueManagedSessionStore", () => {
+  it("scopes Flue storage keys under the OMA managed session", async () => {
+    const saved = new Map<string, unknown>();
+    const stateStore: ManagedHarnessStateStore = {
+      async save(args) {
+        saved.set(JSON.stringify({
+          harnessId: args.harnessId,
+          agentId: args.agentId,
+          sessionId: args.sessionId,
+          key: args.key,
+        }), args.value);
+      },
+      async load(args) {
+        return saved.get(JSON.stringify(args)) ?? null;
+      },
+      async delete(args) {
+        saved.delete(JSON.stringify(args));
+      },
+      async deleteBySession() {},
+    };
+    const store = new FlueManagedSessionStore(stateStore, "agt_1", "ses_1");
+
+    await store.save("agent:agt_1:task:ses_1:t1", { version: 2 });
+
+    await expect(store.load("agent:agt_1:task:ses_1:t1")).resolves.toEqual({
+      version: 2,
+    });
+    await store.delete("agent:agt_1:task:ses_1:t1");
+    await expect(store.load("agent:agt_1:task:ses_1:t1")).resolves.toBeNull();
   });
 });

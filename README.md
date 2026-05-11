@@ -53,7 +53,7 @@ Working today:
   endpoints, while native adapters can run turns without Docker spawn options.
 - Experimental Flue native harness driver for prompt turns, opt-in via
   `OMA_ENABLE_FLUE_HARNESS=1`, including AbortSignal cancellation for active
-  prompt calls.
+  prompt calls and OMA-managed local Flue session persistence.
 - Experimental Hermes adapter runtime via direct `AIAgent` integration.
 - Experimental Codex adapter runtime via `codex app-server`.
 - Experimental Claude Agent SDK adapter runtime via `@anthropic-ai/claude-agent-sdk`.
@@ -63,8 +63,8 @@ Working today:
 Not done yet:
 
 - Full Flue parity: streaming, task/shell cancellation, tool policy, MCP,
-  durable Flue session-store bridge, and OMA first-class child sessions for
-  Flue tasks.
+  Cloudflare-backed Flue session persistence, and OMA first-class child
+  sessions for Flue tasks.
 - Cloudflare-native managed session runtime.
 - Cloudflare runtime wiring that uses the cloud managed event store in
   production.

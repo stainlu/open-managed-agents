@@ -12,9 +12,10 @@ operations are awaitable at the router boundary; and a D1-compatible managed
 event backend now exists without requiring a local `stateRoot`. Harnesses also
 declare whether they need a container runtime endpoint or can run natively, so
 the router can invoke Flue-native prompt turns without Docker warm/acquire. The
-next blockers are deepening the Flue driver beyond prompt-only blocking calls
-and prompt-only cancellation, then wiring the D1 backend into a Cloudflare
-runtime path.
+Flue driver now persists SDK session state through OMA-managed local harness
+state. The next blockers are deepening the Flue driver beyond prompt-only
+blocking calls and prompt-only cancellation, then wiring the D1/backend state
+pieces into a Cloudflare runtime path.
 
 ## Decision
 

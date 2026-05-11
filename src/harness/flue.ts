@@ -12,6 +12,7 @@ import type {
   HarnessTurnStateEvent,
 } from "./types.js";
 import { HarnessControlError, HarnessInvocationError } from "./types.js";
+import type { ManagedHarnessStateStore } from "./state-store.js";
 
 export type FlueEnginePromptArgs = {
   content: string;
@@ -46,6 +47,7 @@ export type FlueEngine = {
 
 export type FlueHarnessAdapterConfig = {
   passthroughEnv?: Record<string, string>;
+  sessionStateStore?: ManagedHarnessStateStore;
   engine?: FlueEngine;
   loadEngine?: () => Promise<FlueEngine>;
 };
@@ -87,7 +89,7 @@ export class FlueHarnessAdapter implements HarnessAdapter {
     },
     native_session_resume: {
       support: "partial",
-      detail: "Flue session data is resumed inside the SDK bridge process; durable cloud/session-store integration is not wired yet.",
+      detail: "Flue session data is persisted through OMA-managed harness state when configured; Cloudflare session-state wiring is not promoted yet.",
     },
     cancellation: {
       support: "partial",
@@ -284,7 +286,10 @@ export class FlueHarnessAdapter implements HarnessAdapter {
     if (!this.enginePromise) {
       this.enginePromise = this.cfg.loadEngine
         ? this.cfg.loadEngine()
-        : Promise.resolve(new OptionalSdkFlueEngine(this.cfg.passthroughEnv ?? {}));
+        : Promise.resolve(new OptionalSdkFlueEngine(
+          this.cfg.passthroughEnv ?? {},
+          this.cfg.sessionStateStore,
+        ));
     }
     return this.enginePromise;
   }
@@ -294,11 +299,14 @@ class OptionalSdkFlueEngine implements FlueEngine {
   private internalPromise: Promise<FlueInternalModule> | undefined;
   private storePromise: Promise<unknown> | undefined;
 
-  constructor(private readonly passthroughEnv: Record<string, string>) {}
+  constructor(
+    private readonly passthroughEnv: Record<string, string>,
+    private readonly sessionStateStore: ManagedHarnessStateStore | undefined,
+  ) {}
 
   async prompt(args: FlueEnginePromptArgs): Promise<FlueEnginePromptResult> {
     const internal = await this.loadInternal();
-    const store = await this.loadStore(internal);
+    const store = await this.loadStore(internal, args);
     const env = new MemorySessionEnv(args.agent.instructions);
     const events: FlueRuntimeEvent[] = [];
     const ctx = internal.createFlueContext({
@@ -355,11 +363,57 @@ class OptionalSdkFlueEngine implements FlueEngine {
     return this.internalPromise;
   }
 
-  private async loadStore(internal: FlueInternalModule): Promise<unknown> {
+  private async loadStore(
+    internal: FlueInternalModule,
+    args: FlueEnginePromptArgs,
+  ): Promise<unknown> {
+    if (this.sessionStateStore) {
+      return new FlueManagedSessionStore(
+        this.sessionStateStore,
+        args.agent.agentId,
+        args.sessionId,
+      );
+    }
     if (!this.storePromise) {
       this.storePromise = Promise.resolve(new internal.InMemorySessionStore());
     }
     return this.storePromise;
+  }
+}
+
+export class FlueManagedSessionStore {
+  constructor(
+    private readonly store: ManagedHarnessStateStore,
+    private readonly agentId: string,
+    private readonly managedSessionId: string,
+  ) {}
+
+  async save(id: string, data: unknown): Promise<void> {
+    await this.store.save({
+      harnessId: "flue",
+      agentId: this.agentId,
+      sessionId: this.managedSessionId,
+      key: id,
+      value: data,
+    });
+  }
+
+  async load(id: string): Promise<unknown | null> {
+    return await this.store.load({
+      harnessId: "flue",
+      agentId: this.agentId,
+      sessionId: this.managedSessionId,
+      key: id,
+    });
+  }
+
+  async delete(id: string): Promise<void> {
+    await this.store.delete({
+      harnessId: "flue",
+      agentId: this.agentId,
+      sessionId: this.managedSessionId,
+      key: id,
+    });
   }
 }
 

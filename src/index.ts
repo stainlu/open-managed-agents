@@ -11,6 +11,7 @@ import { CodexHarnessAdapter } from "./harness/codex.js";
 import { ClaudeAgentSdkHarnessAdapter } from "./harness/claude-agent-sdk.js";
 import { FlueHarnessAdapter } from "./harness/flue.js";
 import { HarnessRegistry } from "./harness/registry.js";
+import { LocalHarnessStateStore } from "./harness/state-store.js";
 import type { HarnessAdapter } from "./harness/types.js";
 import { getLogger, rootLogger } from "./log.js";
 import {
@@ -294,6 +295,7 @@ async function main(): Promise<void> {
     new OpenClawJsonlEventLog(stateRoot),
   ]);
   const workspace = new LocalManagedWorkspace(stateRoot);
+  const harnessStateStore = new LocalHarnessStateStore(stateRoot);
 
   // Per-session container pool. isBusy closes over the session store so the
   // sweeper can skip containers whose session currently has a run in flight
@@ -326,6 +328,14 @@ async function main(): Promise<void> {
         log.warn(
           { err, session_id: sessionId },
           "deleting JSONL for ephemeral session failed",
+        );
+      }
+      try {
+        await harnessStateStore.deleteBySession(session.agentId, sessionId);
+      } catch (err) {
+        log.warn(
+          { err, session_id: sessionId },
+          "deleting harness state for ephemeral session failed",
         );
       }
       store.sessions.delete(sessionId);
@@ -472,7 +482,10 @@ async function main(): Promise<void> {
     claudeAgentSdkHarness,
   ];
   if (process.env.OMA_ENABLE_FLUE_HARNESS === "1") {
-    harnessAdapters.push(new FlueHarnessAdapter({ passthroughEnv }));
+    harnessAdapters.push(new FlueHarnessAdapter({
+      passthroughEnv,
+      sessionStateStore: harnessStateStore,
+    }));
   }
 
   const harnesses = new HarnessRegistry({
@@ -864,6 +877,7 @@ async function main(): Promise<void> {
       environments: store.environments,
       sessions: store.sessions,
       events: eventReader,
+      harnessState: harnessStateStore,
       audit: store.audit,
       vaults: store.vaults,
       router,
