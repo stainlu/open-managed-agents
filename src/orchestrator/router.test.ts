@@ -10,7 +10,7 @@ import { HarnessRegistry } from "../harness/registry.js";
 import type { HarnessCapabilities } from "../harness/types.js";
 import type { GatewayWebSocketClient } from "../runtime/gateway-ws.js";
 import { ParentTokenMinter } from "../runtime/parent-token.js";
-import type { SessionContainerPool } from "../runtime/pool.js";
+import type { ManagedSessionRuntime } from "../runtime/session-runtime.js";
 import { InMemoryStore } from "../store/memory.js";
 import type { QueueStore } from "../store/types.js";
 import { clearZenMuxCatalogCache } from "./zenmux-pricing.js";
@@ -27,7 +27,7 @@ import type { Event } from "./types.js";
 // call are out of scope for unit tests and are covered by e2e.
 
 function makeRouter(opts: {
-  poolStub?: Partial<SessionContainerPool>;
+  poolStub?: Partial<ManagedSessionRuntime>;
   eventReaderStub?: Partial<ManagedEventLog>;
   passthroughEnv?: Record<string, string>;
   capabilityOverrides?: Partial<HarnessCapabilities>;
@@ -35,7 +35,7 @@ function makeRouter(opts: {
   router: AgentRouter;
   store: InMemoryStore;
   queue: QueueStore;
-  pool: Partial<SessionContainerPool>;
+  pool: Partial<ManagedSessionRuntime>;
 } {
   const store = new InMemoryStore();
   const queue = store.queue;
@@ -43,7 +43,11 @@ function makeRouter(opts: {
   // methods undefined so any accidental call throws TypeError and fails
   // loudly. Tests that DO want to exercise a pool interaction provide
   // their own shaped stub.
-  const pool = (opts.poolStub ?? {}) as SessionContainerPool;
+  const poolStub = opts.poolStub ?? {};
+  if (!poolStub.getControlClient && poolStub.getWsClient) {
+    poolStub.getControlClient = poolStub.getWsClient;
+  }
+  const pool = poolStub as ManagedSessionRuntime;
   const eventReader = (opts.eventReaderStub ??
     new OpenClawJsonlEventLog("/tmp/does-not-exist")) as ManagedEventLog;
   const harness = new OpenClawHarnessAdapter({
@@ -74,7 +78,7 @@ function makeRouter(opts: {
     store.environments,
     store.sessions,
     eventReader,
-    pool as SessionContainerPool,
+    pool,
     queue,
     store.vaults,
     cfg,

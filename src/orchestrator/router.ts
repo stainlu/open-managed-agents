@@ -21,7 +21,8 @@ import type {
   NetworkingSpec,
   SpawnOptions,
 } from "../runtime/container.js";
-import { PoolCapacityError, type SessionContainerPool } from "../runtime/pool.js";
+import { PoolCapacityError } from "../runtime/pool.js";
+import type { ManagedSessionRuntime } from "../runtime/session-runtime.js";
 import type {
   AgentStore,
   EnvironmentStore,
@@ -153,7 +154,7 @@ export class AgentRouter {
     private readonly environments: EnvironmentStore,
     private readonly sessions: SessionStore,
     private readonly events: ManagedEventLog,
-    private readonly pool: SessionContainerPool,
+    private readonly pool: ManagedSessionRuntime,
     private readonly queue: QueueStore,
     private readonly vaults: VaultStore,
     private readonly cfg: RouterConfig,
@@ -705,18 +706,18 @@ export class AgentRouter {
       });
 
       if (agent.permissionPolicy.type === "always_ask") {
-        const controlClient = this.pool.getWsClient(args.sessionId);
+        const controlClient = this.pool.getControlClient(args.sessionId);
         if (controlClient) {
           await this.ensureApprovalSubscriptions(args.sessionId, controlClient);
         }
       }
 
       if ((args.model || args.thinkingLevel) && !streamIsFirstTurn) {
-        const controlClient = this.pool.getWsClient(args.sessionId);
+        const controlClient = this.pool.getControlClient(args.sessionId);
         if (!controlClient) {
           throw new RouterError(
             "no_active_container",
-            `session ${args.sessionId} has no WS client for patch`,
+            `session ${args.sessionId} has no control client for patch`,
           );
         }
         const patch: { model?: string; thinkingLevel?: AgentConfig["thinkingLevel"] } = {};
@@ -871,7 +872,7 @@ export class AgentRouter {
     }
     const harness = this.harnessForSession(session);
     this.assertHarnessCapability(harness, "compaction");
-    const controlClient = this.pool.getWsClient(sessionId);
+    const controlClient = this.pool.getControlClient(sessionId);
     if (!controlClient) {
       throw new RouterError(
         "no_active_container",
@@ -904,14 +905,14 @@ export class AgentRouter {
         `session ${sessionId} does not exist`,
       );
     }
-    const containerId = this.pool.getContainerId(sessionId);
-    if (!containerId) {
+    const logs = await this.pool.readLogs(sessionId, { tail });
+    if (logs === undefined) {
       throw new RouterError(
         "no_active_container",
         `session ${sessionId} has no active container (post an event first)`,
       );
     }
-    return this.pool.runtime.logs(containerId, { tail });
+    return logs;
   }
 
   /**
@@ -1212,7 +1213,7 @@ export class AgentRouter {
     }
     const harness = this.harnessForSession(session);
     this.assertHarnessCapability(harness, "cancellation");
-    const controlClient = this.pool.getWsClient(sessionId);
+    const controlClient = this.pool.getControlClient(sessionId);
     if (!controlClient) {
       // Session is running but no container yet — still in the acquire
       // phase. Set a flag so executeInBackground aborts after acquire
@@ -1247,7 +1248,7 @@ export class AgentRouter {
   ): Promise<void> {
     const harness = this.harnessForSessionId(sessionId);
     this.assertHarnessCapability(harness, "tool_approvals");
-    const controlClient = this.pool.getWsClient(sessionId);
+    const controlClient = this.pool.getControlClient(sessionId);
     if (!controlClient) {
       throw new RouterError(
         "no_active_container",
@@ -1519,7 +1520,7 @@ export class AgentRouter {
 
     // Subscribe BEFORE the fast-path check so an event that fires during
     // the check still lands on us. `unsubscribe` guards against double-fire.
-    const controlClient = this.pool.getWsClient(sessionId);
+    const controlClient = this.pool.getControlClient(sessionId);
     if (controlClient) {
       if (agent.permissionPolicy.type === "always_ask") {
         await this.ensureApprovalSubscriptions(sessionId, controlClient);
@@ -1814,7 +1815,7 @@ export class AgentRouter {
         });
 
         if (agent.permissionPolicy.type === "always_ask") {
-          const controlClient = this.pool.getWsClient(sessionId);
+          const controlClient = this.pool.getControlClient(sessionId);
           if (controlClient) {
             await this.ensureApprovalSubscriptions(sessionId, controlClient);
           }
@@ -1828,11 +1829,11 @@ export class AgentRouter {
         // turns have a key and patch instantly.
         const isFirstTurn = currentSession ? currentSession.turns <= 1 : true;
         if (needsPatch && !isFirstTurn) {
-          const controlClient = this.pool.getWsClient(sessionId);
+          const controlClient = this.pool.getControlClient(sessionId);
           if (!controlClient) {
             throw new RouterError(
               "no_active_container",
-              `session ${sessionId} has no WS client for patch`,
+              `session ${sessionId} has no control client for patch`,
             );
           }
           const patch: { model?: string; thinkingLevel?: AgentConfig["thinkingLevel"] } = {};

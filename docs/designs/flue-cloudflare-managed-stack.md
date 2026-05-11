@@ -1,0 +1,269 @@
+# Flue + Cloudflare Managed Stack
+
+Status: target architecture, current as of 2026-05-11.
+
+## Decision
+
+Open Managed Agents should keep its product boundary and add a Cloudflare-native
+runtime path instead of replacing the existing architecture.
+
+The winning stack is:
+
+```text
+Client / SDK
+  -> Open Managed Agents API
+  -> Agent / Environment / Session / Event
+  -> Flue harness driver
+  -> Cloudflare session runtime
+       Durable Object session coordinator
+       Workflows for durable long-running runs
+       DO SQLite for session/event metadata
+       Artifacts/R2 for workspace and large files
+       Dynamic Workers for fast generated-code tools
+       Cloudflare Sandboxes for full Linux hands
+       AI Gateway for model routing and model traffic observability
+```
+
+Docker stays a supported runtime. Cloudflare becomes the SOTA runtime target for
+the Flue harness because it gives the same session / harness / sandbox split as
+Claude Managed Agents without closing the stack around one vendor harness.
+
+## Non-Decision
+
+Do not turn Flue into the managed-agent control plane.
+
+Flue should remain the portable harness framework. OMA should own the managed
+contract. Cloudflare should own the default high-scale substrate. Keeping those
+layers separate is the whole point of the open "Android" path:
+
+```text
+Flue writes the agent.
+Cloudflare runs it cheaply at scale.
+OMA makes it managed, durable, inspectable, and harness-portable.
+```
+
+## Why This Does Not Contradict OMA
+
+The existing OMA product model is already the right shape:
+
+```text
+Agent      reusable harness/model/policy template
+Environment runtime/workspace/network template
+Session    durable managed execution context
+Event      normalized public history
+Harness    native agent brain behind an adapter
+Runtime    execution substrate behind the managed contract
+```
+
+The current implementation is too Docker-shaped, not architecturally wrong.
+
+Docker-specific assumptions that must move behind a runtime boundary:
+
+- `SpawnOptions` describes container images, mounts, ports, DNS, labels, and
+  Docker networks.
+- `Container` assumes `baseUrl` + bearer token invocation.
+- `SessionContainerPool` assumes live containers can be warmed, adopted, and
+  listed by Docker label.
+- `ManagedEventLog.stateRoot` assumes the orchestrator can read a local
+  filesystem path.
+- Limited networking is implemented with Docker bridge networks and an
+  egress-proxy sidecar.
+- Workspace operations assume host bind mounts.
+
+Those assumptions are correct for the Docker backend. They are not the managed
+runtime contract.
+
+## Proper Refactor
+
+Introduce a managed session runtime boundary above Docker containers.
+
+```text
+AgentRouter
+  -> ManagedSessionRuntime
+       acquire(session, harness, environment) -> RuntimeLease
+       invoke / stream / cancel / compact through harness driver
+       read logs
+       release runtime resources
+```
+
+The boundary should split four concerns that are currently braided together:
+
+| Concern | Current Docker form | Cloudflare form |
+| --- | --- | --- |
+| Runtime lifecycle | `SessionContainerPool` + Docker containers | Durable Object + Workflow + optional Sandbox |
+| Harness invocation | HTTP/WS to in-container gateway | Flue handler/session/task API inside Worker/DO |
+| Workspace state | host bind mount under `stateRoot` | Artifacts/R2/DO SQLite-backed filesystem |
+| Event source | Pi/OpenClaw JSONL read-through | OMA normalized event store + Flue run hooks |
+
+The first code step is not to delete `SessionContainerPool`. It is to make it
+one implementation of a broader `ManagedSessionRuntime` contract. Docker keeps
+passing every existing test while the Cloudflare runtime is built beside it.
+
+## Target Runtime Shape
+
+```ts
+type RuntimeLease = {
+  backend: "docker" | "cloudflare";
+  sessionId: string;
+  harnessId: string;
+  endpoint?: { baseUrl: string; token: string };
+  metadata: Record<string, unknown>;
+};
+
+interface ManagedSessionRuntime {
+  acquireForSession(args: AcquireSessionRuntimeArgs): Promise<RuntimeLease>;
+  warmForAgent?(agentId: string, spec: unknown): Promise<void>;
+  dropWarmForAgent?(agentId: string): Promise<void>;
+  evictSession(sessionId: string): Promise<void>;
+  getControlClient(sessionId: string): unknown | undefined;
+  readLogs(sessionId: string, opts?: { tail?: number }): Promise<string | undefined>;
+}
+```
+
+`RuntimeLease.endpoint` exists for Docker and adapter-server harnesses. A
+Cloudflare-native Flue harness can use bindings or Durable Object stubs instead.
+
+## Flue Harness Driver
+
+Flue should be integrated as a harness, not as a fake Docker container.
+
+Correct shape:
+
+```text
+FlueHarnessDriver
+  -> accepts an OMA session id
+  -> creates / resumes a Flue agent session
+  -> calls prompt / skill / task / shell / fs
+  -> emits normalized OMA events
+  -> reports usage and selected model
+  -> supports cancellation through AbortSignal where Flue supports it
+```
+
+This implies a Flue contribution track. We should contribute upstream where the
+harness needs stronger primitives, not where OMA can paper over gaps.
+
+## Flue Discussion / Contribution Track
+
+Bring these to Flue, in this order:
+
+1. **Run lifecycle hooks / event stream**
+   - Need: `prompt`, `skill`, `task`, and `shell` should expose structured
+     lifecycle events.
+   - Why Flue should care: product developers need observability even without
+     OMA. This matches Fred's existing direction around task telemetry and
+     thinking streams without adding an enterprise control plane.
+   - OMA use: map Flue-native events into normalized `Event`.
+
+2. **Task lineage**
+   - Need: every `session.task()` should have stable `taskId`, parent session,
+     role, cwd, model, usage, start/end/error status.
+   - Why Flue should care: tasks are Flue's subagent primitive. They need
+     enough structure to debug and account for delegated work.
+   - OMA use: preserve parent/child run relationships without inventing a
+     separate subagent model.
+
+3. **Pluggable session persistence deltas**
+   - Need: persistence hooks that can save append/update/delete deltas without
+     forcing full-session replacement on every change.
+   - Why Flue should care: durable sessions need efficient stores on DO SQLite,
+     Postgres, D1, Redis, and object stores.
+   - OMA use: DO SQLite and managed event stores can stay append-oriented.
+
+4. **Abort semantics**
+   - Need: `AbortSignal` should be consistently honored across prompt, skill,
+     task, shell, and connector paths.
+   - Why Flue should care: this is a standards-based primitive, not a custom
+     control plane.
+   - OMA use: managed cancellation maps cleanly to Flue calls.
+
+5. **Sandbox connector truthfulness**
+   - Need: connector docs/tests should state which providers support cwd, env,
+     timeout, mid-flight abort, persistent filesystem, and cleanup.
+   - Why Flue should care: Fred has already rejected fake parity. This keeps
+     the connector ecosystem honest.
+   - OMA use: capability gates can be derived from real connector behavior.
+
+Do not ask Flue to add `Agent / Environment / Session / Event` as OMA public
+resources. That is OMA's layer.
+
+## Cloudflare Runtime Design
+
+Cloudflare runtime should not imitate Docker.
+
+Recommended shape:
+
+```text
+Cloudflare Worker API
+  -> OMA route handlers
+  -> Durable Object per managed session
+       session status, queue, normalized event log, Flue session metadata
+  -> Workflow per long-running run
+       retries, sleeps, durable background execution
+  -> Flue harness
+       programmable agent loop
+  -> execution hands
+       Dynamic Workers for fast JS/TS tool code
+       Cloudflare Sandboxes for Linux builds/tests/browser work
+  -> workspace
+       Artifacts for versioned repo state
+       R2 for large blobs
+  -> egress/secrets
+       Outbound Workers inject credentials outside the sandbox
+```
+
+Key rule: Cloudflare backend must preserve OMA's public contract. It must not
+leak Durable Object ids, Workflow ids, Sandbox ids, or Cloudflare-specific
+workspace ids into the public session identity.
+
+## Migration Plan
+
+1. Name the runtime boundary.
+   - Add `ManagedSessionRuntime` types.
+   - Make `SessionContainerPool` structurally satisfy the contract.
+   - Stop `AgentRouter` from reaching directly into `pool.runtime`.
+
+2. Split event storage from local `stateRoot`.
+   - Keep `OpenClawJsonlEventLog` for Docker/OpenClaw.
+   - Add async-friendly managed event log shape for Cloudflare.
+   - Preserve sync interface until the router migration is scheduled.
+
+3. Add Flue harness driver locally.
+   - Start with Node execution against Flue's API.
+   - Emit normalized events at prompt boundaries first.
+   - Add finer event fidelity as Flue upstream hooks land.
+
+4. Add Cloudflare runtime prototype.
+   - DO-backed session state.
+   - Workflow-backed run execution.
+   - R2 or Artifacts workspace.
+   - No Docker compatibility shims.
+
+5. Promote Cloudflare runtime only after it proves:
+   - durable event replay after restart/hibernation;
+   - cancellation path;
+   - queued turns;
+   - one Flue prompt run;
+   - one Flue task run;
+   - one sandbox-backed shell/build task;
+   - no public Cloudflare ids in API responses.
+
+## Success Criteria
+
+The flagship architecture becomes:
+
+```text
+OMA control plane
+  + Flue harness
+  + Cloudflare session runtime
+```
+
+The default self-hosted architecture remains:
+
+```text
+OMA control plane
+  + OpenClaw/Codex/Hermes/Claude SDK harnesses
+  + Docker session runtime
+```
+
+Both must satisfy the same public `Agent / Environment / Session / Event`
+contract. That is the product.

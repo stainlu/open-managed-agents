@@ -16,6 +16,7 @@ import type {
   ContainerControlClient,
   ContainerControlPlane,
 } from "./control.js";
+import type { ManagedSessionRuntime } from "./session-runtime.js";
 
 const log = getLogger("pool");
 
@@ -318,7 +319,7 @@ export class PoolCapacityError extends Error {
   }
 }
 
-export class SessionContainerPool {
+export class SessionContainerPool implements ManagedSessionRuntime {
   private readonly active = new Map<string, ActiveContainer>();
   private readonly pending = new Map<string, Promise<Container>>();
   /** Pre-warmed containers keyed by agentId, waiting to be claimed. */
@@ -1197,6 +1198,10 @@ export class SessionContainerPool {
     return this.active.get(sessionId)?.controlClient;
   }
 
+  getControlClient(sessionId: string): ContainerControlClient | undefined {
+    return this.getWsClient(sessionId);
+  }
+
   /** Returns the container id of this session's active container, if any. */
   getContainerId(sessionId: string): string | undefined {
     return this.active.get(sessionId)?.container.id;
@@ -1207,6 +1212,12 @@ export class SessionContainerPool {
     const entry = this.active.get(sessionId);
     if (!entry) return undefined;
     return { spawnedAt: entry.spawnedAt, lastUsedAt: entry.lastUsedAt };
+  }
+
+  async readLogs(sessionId: string, opts?: { tail?: number }): Promise<string | undefined> {
+    const containerId = this.getContainerId(sessionId);
+    if (!containerId) return undefined;
+    return this.runtime.logs(containerId, opts);
   }
 
   /** Touch the lastUsedAt timestamp for a session so the sweeper doesn't reap it. */

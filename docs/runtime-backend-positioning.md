@@ -2,6 +2,12 @@
 
 Status: current as of 2026-05-02.
 
+Update 2026-05-11: Docker-on-VPS remains the production backend for the
+current OpenClaw-heavy implementation. The Flue + Cloudflare target architecture
+is tracked separately in `docs/designs/flue-cloudflare-managed-stack.md`; it
+requires generalizing the runtime boundary from Docker containers to managed
+session runtimes before Cloudflare can be a first-class backend.
+
 ## Decision
 
 Docker-on-VPS stays the production runtime backend.

@@ -37,6 +37,11 @@ product.
 See `docs/runtime-backend-positioning.md` for the current source-backed read on
 Docker, ECS/Fargate, Cloud Run, Kubernetes, and agent sandboxes.
 
+See `docs/designs/flue-cloudflare-managed-stack.md` for the target
+Flue + Cloudflare stack and the runtime-boundary refactor that lets Cloudflare
+become a first-class substrate without turning Flue into the managed-agent
+control plane.
+
 ## Core Boundaries
 
 ### Managed API
@@ -184,7 +189,7 @@ active side is additionally bounded by an admission cap:
 
 - **`warmForAgent(agentId, spawnOptions)`** — pre-boots a container (spawn + `/readyz` + WS handshake) and stores it in the warm bucket keyed by agentId. Called by the server after `POST /v1/agents`. No-ops if a warm container already exists for this agent. Evicts the oldest warm entry first when the pool is at `OPENCLAW_MAX_WARM_CONTAINERS`. **The router skips this call entirely for delegating agents** (`callableAgents.length > 0 || maxSubagentDepth > 0`) — see the note under AgentRouter.warmForAgent for why.
 - **`acquireForSession({sessionId, spawnOptions, agentId?})`** — returns a live `Container` for the session. Checks three sources in order: (1) existing active container, (2) pre-warmed container matching the agentId, (3) fresh spawn. When claiming from the warm pool, auto-replenishes in the background. Bumps `lastUsedAt` on reuse and enforces the active-cap admission policy before any new cold spawn.
-- **`getWsClient(sessionId)`** — legacy method name; returns the harness control client for the active session. OpenClaw returns a gateway WS client, adapter-server harnesses return an HTTP control client. Used by the router for cancel, patch, compact, and approval resolution.
+- **`getControlClient(sessionId)`** — returns the harness control client for the active session. OpenClaw returns a gateway WS client, adapter-server harnesses return an HTTP control client. Used by the router for cancel, patch, compact, and approval resolution. `getWsClient(sessionId)` remains as the legacy pool method name while older call sites and tests are migrated.
 - **`evictSession(sessionId)`** — manual teardown (closes WS, stops container). Called by `DELETE /v1/sessions/:id` and the router's infra-failure path.
 - **`shutdown()`** — SIGTERM path. Clears the sweeper, closes every WS, stops every container. Best-effort (errors are swallowed so one stuck stop doesn't block the process).
 - **`cleanupOnReap?: (sessionId) => Promise<void>`** — **only** called from the idle-reap path (not manual evict, not shutdown). `index.ts` wires this to check `store.sessions.get(sessionId)?.ephemeral` and, if true, delete the Pi JSONL + store row. This is how Item 8's keyless `/v1/chat/completions` calls get cleaned up without accumulating forever.
@@ -566,7 +571,7 @@ runEvent sees session.status === "running"
 ```
 router.cancel(sessionId):
   (a) validate session.status === "running", else 409
-  (b) pool.getWsClient(sessionId) — legacy name for active harness control client
+  (b) pool.getControlClient(sessionId) — active harness control client
   (c) harness.abortSession(controlClient, sessionId)
   (d) queue.clear(sessionId) so the success path doesn't auto-restart
   (e) sessions.endRunCancelled — flips status to idle, clears error
