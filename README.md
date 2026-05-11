@@ -56,6 +56,8 @@ Working today:
   instead of requiring Docker container fields.
 - Native-only managed session runtime for stacks that run through native
   harnesses instead of endpoint-backed containers.
+- Cloudflare/Flue router factory that wires D1-compatible event/state stores,
+  the Flue harness, and native-only runtime behind OMA boundaries.
 - Experimental Flue native harness driver for prompt turns, opt-in via
   `OMA_ENABLE_FLUE_HARNESS=1`, including AbortSignal cancellation for active
   prompt calls, OpenAI-compatible prompt streaming, live managed-event append,
@@ -71,9 +73,8 @@ Not done yet:
 - Full Flue parity: task/shell cancellation, tool policy, MCP,
   Cloudflare-backed Flue session persistence, and OMA first-class child
   sessions for Flue tasks.
-- Cloudflare-native managed session runtime composition.
-- Cloudflare runtime wiring that uses the cloud managed event store in
-  production.
+- Production Cloudflare Worker / Durable Object entrypoint.
+- Durable Cloudflare metadata store and workspace backend.
 - Full Hermes parity: arbitrary pre-tool approvals, MCP, compaction, subagents.
 - Full Codex parity: MCP, managed subagents, and per-tool deny policy.
 - Full Claude Agent SDK parity: managed subagents, manual compaction, and complete MCP

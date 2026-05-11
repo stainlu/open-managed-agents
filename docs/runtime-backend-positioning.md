@@ -11,16 +11,18 @@ of that boundary now exists as `ManagedSessionRuntime`; runtime leases can
 represent non-Docker platforms with endpoint metadata instead of requiring
 container id/name/network fields; and `NativeOnlySessionRuntime` gives
 native-harness stacks a concrete runtime object without fake Docker behavior.
-Managed event-log operations are awaitable at the router boundary, and a
-D1-compatible managed event backend now exists without requiring a local
+`createCloudflareFlueStack` wires the current native Flue path to
+D1-compatible event and harness-state stores with explicit metadata/workspace
+inputs. Managed event-log operations are awaitable at the router boundary, and
+a D1-compatible managed event backend now exists without requiring a local
 `stateRoot`. Harnesses also declare whether they need a container runtime
 endpoint or can run natively, so the router can invoke Flue-native prompt turns
 without Docker warm/acquire. The Flue driver now streams prompt text deltas
 through the native streaming path, appends live managed events during streamed
 turns, and persists SDK session state through OMA-managed local harness state.
 A D1-compatible backend now exists for that harness-state contract as well. The
-next blockers are deepening the Flue driver beyond prompt calls, then wiring the
-D1/backend state pieces into a Cloudflare runtime path.
+next blockers are deepening the Flue driver beyond prompt calls, then promoting
+the Cloudflare/Flue factory into a real Worker/Durable Object runtime path.
 
 ## Decision
 

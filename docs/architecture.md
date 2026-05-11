@@ -227,6 +227,16 @@ session storage model.
   implement the same boundary over Durable Object state, D1, R2, or another
   provider-native store.
 
+### Cloudflare/Flue Stack Factory (`src/cloudflare/flue-stack.ts`)
+
+`createCloudflareFlueStack` is the first Cloudflare-oriented composition point.
+It wires `D1ManagedEventLog`, `D1ManagedHarnessStateStore`,
+`FlueHarnessAdapter`, `NativeOnlySessionRuntime`, and an `AgentRouter` together
+behind OMA's existing boundaries. It requires explicit metadata-store and
+workspace inputs so the code does not pretend that Durable Object metadata,
+R2/Artifacts workspace state, or a production Worker entrypoint are already
+solved.
+
 ### OpenClaw JSONL Event Source (`src/harness/openclaw-events.ts`)
 
 Parses OpenClaw's per-session JSONL at query time. Resolves our `session_id` -> the Pi session file via `<stateRoot>/<agentId>/sessions/<sessionId>/agents/main/sessions/sessions.json` keyed by the canonical `agent:main:<session_id>` form, then opens `<stateRoot>/<agentId>/sessions/<sessionId>/agents/main/sessions/<piSessionId>.jsonl`. A legacy fallback still checks the old per-agent path (`<stateRoot>/<agentId>/agents/main/sessions/...`) so existing local state can be read.

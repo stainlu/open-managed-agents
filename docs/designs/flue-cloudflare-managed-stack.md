@@ -43,6 +43,11 @@ Done in OMA:
 - `NativeOnlySessionRuntime` now exists for native harness stacks. It no-ops
   warm/evict/log/control surfaces and fails loudly if an endpoint-backed
   harness tries to acquire a runtime lease.
+- `createCloudflareFlueStack` now exists as a Cloudflare-oriented router
+  factory. It wires a D1-compatible managed event log, D1-compatible harness
+  state, `FlueHarnessAdapter`, `NativeOnlySessionRuntime`, and explicit
+  metadata/workspace inputs without importing Cloudflare Worker APIs or faking
+  Docker behavior.
 - `ManagedWorkspace` now exists in `src/workspace/types.ts`.
 - `LocalManagedWorkspace` preserves the current Docker/OpenClaw workspace
   layout while keeping router workspace CRUD off the event-log `stateRoot`.
@@ -85,9 +90,10 @@ Still open:
 - The Flue harness driver is prompt-only: task/shell cancellation, MCP, tool
   approvals/deny policy, Cloudflare-backed Flue session persistence, and
   first-class OMA child sessions for Flue tasks are not wired yet.
-- The Cloudflare runtime composition does not exist yet, so the D1-compatible
-  event and harness-state stores are not wired into a production Cloudflare
-  API/runtime path.
+- The production Cloudflare Worker / Durable Object entrypoint does not exist
+  yet. Metadata and workspace backends are still explicit inputs to the
+  Cloudflare/Flue router factory instead of being promoted as solved platform
+  bindings.
 
 ## Non-Decision
 
@@ -320,7 +326,9 @@ workspace ids into the public session identity.
    - Decide how Flue task lineage maps to OMA child sessions.
 
 6. [ ] Add Cloudflare runtime prototype.
-   - DO-backed session state.
+   - Add a router factory that wires D1 event/state stores, Flue, and a
+     native-only runtime without Docker compatibility shims.
+   - DO-backed metadata/session state.
    - Workflow-backed run execution.
    - R2 or Artifacts workspace.
    - No Docker compatibility shims.
