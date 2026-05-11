@@ -37,6 +37,9 @@ Done in OMA:
 - `SessionContainerPool` implements that boundary while keeping the Docker
   backend behavior intact.
 - `AgentRouter` depends on `ManagedSessionRuntime` instead of the concrete pool.
+- `RuntimeLease` now accepts platform leases with optional endpoint metadata;
+  router invocation asks for an endpoint capability instead of directly
+  dereferencing Docker container fields.
 - `ManagedWorkspace` now exists in `src/workspace/types.ts`.
 - `LocalManagedWorkspace` preserves the current Docker/OpenClaw workspace
   layout while keeping router workspace CRUD off the event-log `stateRoot`.
@@ -275,6 +278,8 @@ workspace ids into the public session identity.
    - Add `ManagedSessionRuntime` types.
    - Make `SessionContainerPool` structurally satisfy the contract.
    - Stop `AgentRouter` from reaching directly into `pool.runtime`.
+   - Let runtime leases describe non-Docker platforms without requiring
+     container id/name/network fields.
 
 2. [x] Make the event/workspace boundary async-friendly.
    - Add `ManagedWorkspace` so workspace file APIs stop reaching through

@@ -17,12 +17,15 @@ import {
   sessionRunFailuresTotal,
 } from "../metrics.js";
 import type {
-  Container,
   NetworkingSpec,
   SpawnOptions,
 } from "../runtime/container.js";
 import { PoolCapacityError } from "../runtime/pool.js";
-import type { ManagedSessionRuntime } from "../runtime/session-runtime.js";
+import {
+  runtimeEndpoint,
+  type ManagedSessionRuntime,
+  type RuntimeLease,
+} from "../runtime/session-runtime.js";
 import type {
   AgentStore,
   EnvironmentStore,
@@ -702,14 +705,14 @@ export class AgentRouter {
       const effectiveThinking = args.thinkingLevel ?? agent.thinkingLevel;
       const streamIsFirstTurn = bumped.turns <= 1;
       const usesContainerRuntime = harnessUsesContainerRuntime(harness);
-      let container: Container | undefined;
+      let runtimeLease: RuntimeLease | undefined;
       if (usesContainerRuntime) {
         const spawnOptions = this.buildSpawnOptions(args.sessionId, agent, bumped, {
           modelOverride: streamIsFirstTurn ? args.model : undefined,
           thinkingLevel: streamIsFirstTurn ? effectiveThinking : agent.thinkingLevel,
         });
         const networking = this.resolveNetworking(running);
-        container = await this.pool.acquireForSession({
+        runtimeLease = await this.pool.acquireForSession({
           sessionId: args.sessionId,
           spawnOptions,
           controlPlane: harness.controlPlane,
@@ -749,13 +752,14 @@ export class AgentRouter {
 
       this.sessions.markRunning(args.sessionId);
       const beforeTurn = await this.snapshotTurnProgress(agent.agentId, args.sessionId);
+      const endpoint = runtimeEndpoint(runtimeLease);
 
       const runEnd = sessionRunDurationSeconds.startTimer();
       let stream: HarnessStreamingTurn;
       try {
         stream = await harness.invokeStreamingTurn({
-          baseUrl: container?.baseUrl,
-          token: container?.token,
+          baseUrl: endpoint?.baseUrl,
+          token: endpoint?.token,
           content: args.content,
           sessionId: args.sessionId,
           timeoutMs: this.cfg.runTimeoutMs,
@@ -1320,7 +1324,7 @@ export class AgentRouter {
       thinkingLevel: thinkingLevelOverride,
     });
     const usesContainerRuntime = harnessUsesContainerRuntime(harness);
-    let container: Container | undefined;
+    let runtimeLease: RuntimeLease | undefined;
 
     if (usesContainerRuntime) {
       const spawnOptions = this.buildSpawnOptions(
@@ -1341,7 +1345,7 @@ export class AgentRouter {
       // user.message to JSONL immediately on HTTP receipt, so once the
       // POST reaches the container, we must NOT retry (would duplicate
       // the user message in the session log).
-      container = await this.acquireWithRetry(
+      runtimeLease = await this.acquireWithRetry(
         sessionId, agent, spawnOptions, currentSession,
         modelOverride, effectiveThinking, timings,
       );
@@ -1362,6 +1366,7 @@ export class AgentRouter {
     );
     this.sessions.markRunning(sessionId);
     const beforeTurn = await this.snapshotTurnProgress(agent.agentId, sessionId);
+    const endpoint = runtimeEndpoint(runtimeLease);
 
     // Phase 2: Invoke chat completions. NOT retryable — Pi writes
     // user.message to JSONL immediately on HTTP receipt. Even connect-
@@ -1370,8 +1375,8 @@ export class AgentRouter {
     const runEnd = sessionRunDurationSeconds.startTimer();
     const completion = await this.invokeChatCompletions({
       harness,
-      baseUrl: container?.baseUrl,
-      token: container?.token,
+      baseUrl: endpoint?.baseUrl,
+      token: endpoint?.token,
       content,
       sessionKey: sessionId,
       agent,
@@ -1762,7 +1767,7 @@ export class AgentRouter {
     modelOverride: string | undefined,
     thinkingLevelOverride: AgentConfig["thinkingLevel"] | undefined,
     timings: Record<string, number>,
-  ): Promise<Container> {
+  ): Promise<RuntimeLease> {
     const MAX_INFRA_RETRIES = 2;
     let lastError: unknown;
     const harness = currentSession

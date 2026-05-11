@@ -238,6 +238,13 @@ Parses OpenClaw's per-session JSONL at query time. Resolves our `session_id` -> 
 
 ### SessionContainerPool (`src/runtime/pool.ts`)
 
+`SessionContainerPool` is the Docker implementation of the broader
+`ManagedSessionRuntime` boundary. Docker acquisitions still return container
+leases, but the public runtime lease type can also describe platform runtimes
+with optional endpoint metadata and no container id/name/network fields. Router
+invocation code asks the lease for an endpoint capability instead of assuming
+every runtime is a Docker container.
+
 Two pools in one: an **active** pool (per-session, reused across turns) and a **warm** pool (per-agent, pre-booted when enabled). When warm capacity is configured and a compatible agent is created, a container can boot in the background and wait in the warm bucket. The first compatible session on that agent claims the pre-warmed container instead of cold-spawning. Subsequent events reuse the active container (~100 ms overhead).
 
 An unref'd `setInterval` sweeper reaps idle containers on both halves, and the

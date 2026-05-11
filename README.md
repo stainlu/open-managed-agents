@@ -52,6 +52,8 @@ Working today:
 - D1-compatible managed harness-state backend for cloud stores.
 - Harness runtime mode boundary: container adapters still use managed runtime
   endpoints, while native adapters can run turns without Docker spawn options.
+- Runtime leases can represent non-Docker platforms with endpoint metadata
+  instead of requiring Docker container fields.
 - Experimental Flue native harness driver for prompt turns, opt-in via
   `OMA_ENABLE_FLUE_HARNESS=1`, including AbortSignal cancellation for active
   prompt calls, OpenAI-compatible prompt streaming, live managed-event append,

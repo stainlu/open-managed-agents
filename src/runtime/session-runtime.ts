@@ -11,13 +11,41 @@ import type {
 /**
  * Runtime lease for a managed session.
  *
- * Today this is backed by a Docker container, so it is structurally identical
- * to `Container`. The name is intentionally broader: Cloudflare-native
- * execution will not necessarily have a process/container id, DNS name, or
- * bearer-token HTTP endpoint. Keep new router code depending on the lease
- * concept rather than Docker-specific fields whenever possible.
+ * Docker-backed leases are still plain `Container` objects for compatibility.
+ * Cloud runtimes do not need to pretend they have a container id, container
+ * name, Docker networks, or even an HTTP endpoint. New router code should
+ * depend on this lease concept and ask for the specific capability it needs.
  */
-export type RuntimeLease = Container;
+export type RuntimeEndpoint = {
+  baseUrl: string;
+  token: string;
+};
+
+export type PlatformRuntimeLease = {
+  backend: string;
+  sessionId: string;
+  harnessId?: string;
+  endpoint?: RuntimeEndpoint;
+  metadata?: Record<string, unknown>;
+};
+
+export type RuntimeLease = Container | PlatformRuntimeLease;
+
+export function runtimeEndpoint(
+  lease: RuntimeLease | undefined,
+): RuntimeEndpoint | undefined {
+  if (!lease) return undefined;
+  if ("endpoint" in lease && lease.endpoint) return lease.endpoint;
+  if (
+    "baseUrl" in lease &&
+    "token" in lease &&
+    typeof lease.baseUrl === "string" &&
+    typeof lease.token === "string"
+  ) {
+    return { baseUrl: lease.baseUrl, token: lease.token };
+  }
+  return undefined;
+}
 
 export type RuntimeSource = "cold" | "warm" | "limited" | "adopt";
 
