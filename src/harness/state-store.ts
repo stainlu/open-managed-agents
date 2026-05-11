@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
+import type { D1DatabaseLike } from "../events/d1.js";
+
 export type HarnessStateKey = {
   harnessId: string;
   agentId: string;
@@ -74,6 +76,120 @@ export class LocalHarnessStateStore implements ManagedHarnessStateStore {
   }
 }
 
+export type D1ManagedHarnessStateStoreOptions = {
+  tableName?: string;
+  autoEnsureSchema?: boolean;
+};
+
+type HarnessStateRow = {
+  state_json?: string;
+};
+
+export class D1ManagedHarnessStateStore implements ManagedHarnessStateStore {
+  private readonly tableName: string;
+  private readonly autoEnsureSchema: boolean;
+  private schemaPromise: Promise<void> | undefined;
+
+  constructor(
+    private readonly db: D1DatabaseLike,
+    opts: D1ManagedHarnessStateStoreOptions = {},
+  ) {
+    this.tableName = sqlIdentifier(opts.tableName ?? "managed_harness_state");
+    this.autoEnsureSchema = opts.autoEnsureSchema ?? true;
+  }
+
+  async ensureSchema(): Promise<void> {
+    if (!this.schemaPromise) {
+      this.schemaPromise = this.createSchema();
+    }
+    await this.schemaPromise;
+  }
+
+  async save(args: HarnessStateKey & { value: unknown }): Promise<void> {
+    await this.ensureReady();
+    const raw = JSON.stringify(args.value);
+    if (raw === undefined) {
+      throw new Error("harness state value must be JSON-serializable");
+    }
+    await this.db.prepare(`
+      INSERT INTO ${this.tableName}
+        (harness_id, agent_id, session_id, state_key, state_json, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(harness_id, agent_id, session_id, state_key)
+      DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at
+    `).bind(
+      args.harnessId,
+      args.agentId,
+      args.sessionId,
+      args.key,
+      raw,
+      Date.now(),
+    ).run();
+  }
+
+  async load(args: HarnessStateKey): Promise<unknown | null> {
+    await this.ensureReady();
+    const row = await this.db.prepare(`
+      SELECT state_json
+      FROM ${this.tableName}
+      WHERE harness_id = ? AND agent_id = ? AND session_id = ? AND state_key = ?
+      LIMIT 1
+    `).bind(
+      args.harnessId,
+      args.agentId,
+      args.sessionId,
+      args.key,
+    ).first<HarnessStateRow>();
+    if (!row?.state_json) return null;
+    return JSON.parse(row.state_json) as unknown;
+  }
+
+  async delete(args: HarnessStateKey): Promise<void> {
+    await this.ensureReady();
+    await this.db.prepare(`
+      DELETE FROM ${this.tableName}
+      WHERE harness_id = ? AND agent_id = ? AND session_id = ? AND state_key = ?
+    `).bind(
+      args.harnessId,
+      args.agentId,
+      args.sessionId,
+      args.key,
+    ).run();
+  }
+
+  async deleteBySession(agentId: string, sessionId: string): Promise<void> {
+    await this.ensureReady();
+    await this.db.prepare(`
+      DELETE FROM ${this.tableName}
+      WHERE agent_id = ? AND session_id = ?
+    `).bind(agentId, sessionId).run();
+  }
+
+  private async ensureReady(): Promise<void> {
+    if (this.autoEnsureSchema) {
+      await this.ensureSchema();
+    }
+  }
+
+  private async createSchema(): Promise<void> {
+    await this.db.prepare(`
+      CREATE TABLE IF NOT EXISTS ${this.tableName} (
+        harness_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        state_key TEXT NOT NULL,
+        state_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (harness_id, agent_id, session_id, state_key)
+      )
+    `).run();
+    await this.db.prepare(`
+      CREATE INDEX IF NOT EXISTS ${this.tableName}_session_idx
+      ON ${this.tableName} (agent_id, session_id)
+    `).run();
+  }
+}
+
 function safeSegment(value: string, label: string): string {
   if (
     value.length === 0 ||
@@ -90,4 +206,11 @@ function safeSegment(value: string, label: string): string {
 
 function opaqueKey(value: string): string {
   return Buffer.from(value, "utf8").toString("base64url");
+}
+
+function sqlIdentifier(value: string): string {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
+    throw new Error(`invalid SQL identifier: ${value}`);
+  }
+  return value;
 }

@@ -46,6 +46,8 @@ Done in OMA:
   async/cloud stores.
 - `D1ManagedEventLog` now exists as a concrete D1-compatible managed event
   backend with append, list, latest, count, stat, delete, and polling follow.
+- `D1ManagedHarnessStateStore` now exists as a concrete D1-compatible backend
+  for harness-private session state such as Flue's SDK session data.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
 - Harness adapters now declare a runtime mode. Existing adapters remain
@@ -61,7 +63,8 @@ Done in OMA:
   chunks, appends normalized managed events while streamed turns are still
   running, cancels active prompt calls with Flue's native `AbortSignal` path,
   persists Flue session data through OMA-managed local harness state, and fails
-  loudly for unsupported OMA tool mapping.
+  loudly for unsupported OMA tool mapping. A D1-compatible store exists for the
+  same harness-state contract, but it is not wired into a Cloudflare runtime yet.
 
 Started upstream in Flue:
 
@@ -298,10 +301,10 @@ workspace ids into the public session identity.
      of process memory.
    - Stream Flue prompt text deltas as OpenAI-compatible chat chunks and append
      live OMA events during streamed turns.
+   - Add a D1-compatible managed harness-state backend for cloud placement.
 
 5. [ ] Deepen Flue driver parity.
-   - Move Flue session persistence from local harness state to Cloudflare
-     session state.
+   - Wire Flue session persistence to Cloudflare runtime bindings.
    - Extend cancellation semantics beyond prompt calls.
    - Decide how Flue task lineage maps to OMA child sessions.
 

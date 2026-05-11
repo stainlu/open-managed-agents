@@ -215,6 +215,10 @@ session storage model.
   `<stateRoot>/<agentId>/sessions/<sessionId>/harness-state/<harnessId>/<key>.json`.
   Managed identifiers stay path segments; the harness key is base64url-encoded
   so SDK storage IDs can contain slashes, colons, or provider-specific forms.
+- **`D1ManagedHarnessStateStore`** stores the same opaque key/value contract in
+  a D1-compatible SQL table keyed by `(harness_id, agent_id, session_id,
+  state_key)`. It is the cloud placement target for Flue session data before a
+  provider runtime is promoted.
 - The normal composition root wires this store into the opt-in Flue adapter so
   Flue session data persists through OMA-managed local state instead of the
   SDK's process-local memory.

@@ -14,7 +14,8 @@ declare whether they need a container runtime endpoint or can run natively, so
 the router can invoke Flue-native prompt turns without Docker warm/acquire. The
 Flue driver now streams prompt text deltas through the native streaming path,
 appends live managed events during streamed turns, and persists SDK session
-state through OMA-managed local harness state. The next blockers are deepening
+state through OMA-managed local harness state. A D1-compatible backend now
+exists for that harness-state contract as well. The next blockers are deepening
 the Flue driver beyond prompt calls, then wiring the D1/backend state pieces
 into a Cloudflare runtime path.
 

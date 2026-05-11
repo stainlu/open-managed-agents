@@ -49,6 +49,7 @@ Working today:
 - Awaitable managed event-log contract used by the router and HTTP API.
 - Optional event-log `stateRoot` so cloud stores do not fake local paths.
 - D1-compatible managed event-log backend for cloud stores.
+- D1-compatible managed harness-state backend for cloud stores.
 - Harness runtime mode boundary: container adapters still use managed runtime
   endpoints, while native adapters can run turns without Docker spawn options.
 - Experimental Flue native harness driver for prompt turns, opt-in via
