@@ -1,5 +1,3 @@
-import { randomBytes } from "node:crypto";
-import { serve } from "@hono/node-server";
 import { type Context, Hono, type MiddlewareHandler } from "hono";
 import { streamSSE } from "hono/streaming";
 import { createAuthMiddleware } from "../auth.js";
@@ -55,7 +53,9 @@ import {
 const log = getLogger("server");
 
 function generateRequestId(): string {
-  return `req_${randomBytes(8).toString("hex")}`;
+  const bytes = new Uint8Array(8);
+  globalThis.crypto.getRandomValues(bytes);
+  return `req_${Buffer.from(bytes).toString("hex")}`;
 }
 
 /**
@@ -2405,6 +2405,7 @@ export type ListenOptions = {
 };
 
 export async function startServer(deps: ServerDeps, opts: ListenOptions): Promise<void> {
+  const { serve } = await import("@hono/node-server");
   const app = buildApp(deps);
   serve({ fetch: app.fetch, port: opts.port });
   log.info({ port: opts.port, url: `http://0.0.0.0:${opts.port}` }, "orchestrator listening");

@@ -238,8 +238,14 @@ It wires `D1ManagedEventLog`, `D1ManagedHarnessStateStore`,
 `AgentRouter` together behind OMA's existing boundaries. It requires an
 explicit metadata store and either a workspace implementation or an
 R2-compatible bucket so the code does not pretend that Durable Object metadata,
-Artifacts workspace state, or a production Worker entrypoint are already
+Artifacts workspace state, or a production Durable Object class are already
 solved.
+
+`createCloudflareFlueFetchHandler` layers the shared Hono HTTP API on top of
+that stack for Worker-style `fetch(request, env, ctx)` entrypoints. It still
+requires explicit platform bindings, including the metadata `Store`, so it is
+an entrypoint helper rather than a claim that Cloudflare metadata persistence
+is solved.
 
 ### OpenClaw JSONL Event Source (`src/harness/openclaw-events.ts`)
 

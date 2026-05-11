@@ -60,6 +60,8 @@ Working today:
 - Cloudflare/Flue router factory that wires D1-compatible event/state stores,
   optional R2-compatible workspace, the Flue harness, and native-only runtime
   behind OMA boundaries.
+- Cloudflare/Flue Worker-style fetch handler factory that reuses the same OMA
+  Hono API surface with explicit platform bindings.
 - Experimental Flue native harness driver for prompt turns, opt-in via
   `OMA_ENABLE_FLUE_HARNESS=1`, including AbortSignal cancellation for active
   prompt calls, OpenAI-compatible prompt streaming, live managed-event append,
@@ -75,9 +77,9 @@ Not done yet:
 - Full Flue parity: task/shell cancellation, tool policy, MCP,
   Cloudflare-backed Flue session persistence, and OMA first-class child
   sessions for Flue tasks.
-- Production Cloudflare Worker / Durable Object entrypoint.
-- Durable Cloudflare metadata store and production Worker / Durable Object
-  workspace binding.
+- Production Cloudflare Durable Object class and deployment wiring.
+- Durable Cloudflare metadata store and production Durable Object workspace
+  binding.
 - Full Hermes parity: arbitrary pre-tool approvals, MCP, compaction, subagents.
 - Full Codex parity: MCP, managed subagents, and per-tool deny policy.
 - Full Claude Agent SDK parity: managed subagents, manual compaction, and complete MCP
