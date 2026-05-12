@@ -671,6 +671,140 @@ describe("ConfigurableCloudflareFlueDurableObject", () => {
     }
   });
 
+  it("replays sessions, runs, and events after a Durable Object restart", async () => {
+    const doBacking = new Database(join(tmpDir, "metadata.db"));
+    const doStorage = new FakeDurableObjectStorage(doBacking);
+    const { db, close } = sqliteD1();
+    const workspace = new FakeR2Bucket();
+
+    try {
+      const firstObject = new TestConfigurableFlueObject(
+        { storage: doStorage },
+        {
+          db,
+          workspace,
+          internalToken: "secret",
+        },
+      );
+
+      const created = await firstObject.fetch(new Request("https://oma.example/v1/agents", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          harnessId: "flue",
+          model: "test/model",
+          instructions: "be useful",
+        }),
+      }));
+      expect(created.status).toBe(200);
+      const agent = await created.json() as { agent_id: string };
+
+      const firstRun = await firstObject.fetch(new Request(
+        `https://oma.example/v1/agents/${agent.agent_id}/run`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ task: "before restart" }),
+        },
+      ));
+      expect(firstRun.status).toBe(200);
+      const firstRunBody = await firstRun.json() as { session_id: string; run_id: string };
+      await waitForSessionHttpToStopRunning(firstObject, firstRunBody.session_id);
+
+      const restartedObject = new TestConfigurableFlueObject(
+        { storage: doStorage },
+        {
+          db,
+          workspace,
+          internalToken: "secret",
+        },
+      );
+
+      const replayedSession = await restartedObject.fetch(new Request(
+        `https://oma.example/v1/sessions/${firstRunBody.session_id}`,
+      ));
+      expect(replayedSession.status).toBe(200);
+      await expect(replayedSession.json()).resolves.toMatchObject({
+        session_id: firstRunBody.session_id,
+        status: "idle",
+        turns: 1,
+      });
+
+      const replayedRuns = await restartedObject.fetch(new Request(
+        `https://oma.example/v1/sessions/${firstRunBody.session_id}/runs`,
+      ));
+      expect(replayedRuns.status).toBe(200);
+      await expect(replayedRuns.json()).resolves.toMatchObject({
+        runs: [
+          { run_id: firstRunBody.run_id, status: "succeeded" },
+        ],
+      });
+
+      const replayedEvents = await restartedObject.fetch(new Request(
+        `https://oma.example/v1/sessions/${firstRunBody.session_id}/events?run_id=${firstRunBody.run_id}`,
+      ));
+      expect(replayedEvents.status).toBe(200);
+      await expect(replayedEvents.json()).resolves.toMatchObject({
+        session_id: firstRunBody.session_id,
+        count: 2,
+        events: [
+          { type: "user.message", content: "before restart", run_id: firstRunBody.run_id },
+          { type: "agent.message", content: "custom:before restart", run_id: firstRunBody.run_id },
+        ],
+      });
+
+      const replayedTree = await restartedObject.fetch(new Request(
+        `https://oma.example/v1/sessions/${firstRunBody.session_id}/run-tree`,
+      ));
+      expect(replayedTree.status).toBe(200);
+      await expect(replayedTree.json()).resolves.toMatchObject({
+        session_id: firstRunBody.session_id,
+        count: 1,
+        runs: [
+          {
+            run_id: firstRunBody.run_id,
+            source: { managed_run: true, event_log: true },
+          },
+        ],
+      });
+
+      const secondRun = await restartedObject.fetch(new Request(
+        `https://oma.example/v1/sessions/${firstRunBody.session_id}/events`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ type: "user.message", content: "after restart" }),
+        },
+      ));
+      expect(secondRun.status).toBe(200);
+      const secondRunBody = await secondRun.json() as { run_id: string; queued: boolean };
+      expect(secondRunBody.queued).toBe(false);
+      await waitForSessionHttpToStopRunning(restartedObject, firstRunBody.session_id);
+
+      const finalSession = await restartedObject.fetch(new Request(
+        `https://oma.example/v1/sessions/${firstRunBody.session_id}`,
+      ));
+      await expect(finalSession.json()).resolves.toMatchObject({
+        session_id: firstRunBody.session_id,
+        status: "idle",
+        turns: 2,
+      });
+
+      const finalRuns = await restartedObject.fetch(new Request(
+        `https://oma.example/v1/sessions/${firstRunBody.session_id}/runs`,
+      ));
+      await expect(finalRuns.json()).resolves.toMatchObject({
+        runs: [
+          { run_id: firstRunBody.run_id, status: "succeeded" },
+          { run_id: secondRunBody.run_id, status: "succeeded" },
+        ],
+      });
+    } finally {
+      close();
+      doBacking.close();
+    }
+  });
+
   it("keeps the custom internal re-entry route token-protected", async () => {
     const doBacking = new Database(join(tmpDir, "metadata.db"));
     const doStorage = new FakeDurableObjectStorage(doBacking);

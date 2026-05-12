@@ -139,6 +139,11 @@ Done in OMA:
   API against both active Flue prompt runs and queued Flue runs. Active abort
   reaches Flue's `AbortSignal`; queued abort removes only the queued run and
   leaves the active prompt running.
+- Local Cloudflare/Flue Durable Object coverage now proves restart replay over
+  the same platform bindings: session metadata and managed run records survive
+  in DO SQLite, run events survive in the D1-compatible event log, run-tree
+  projection still has both managed-run and event-log sources, and the
+  restarted object can continue the same session with another turn.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
 - Harness adapters now declare a runtime mode. Existing adapters remain
@@ -437,6 +442,9 @@ workspace ids into the public session identity.
      routes.
    - [x] Add local Durable Object coverage for active and queued Flue run abort
      through the public run API.
+   - [x] Add local Durable Object restart coverage for session, run, event, and
+     run-tree replay over the same DO SQLite, D1-compatible, and R2-compatible
+     bindings.
    - [x] Add R2-compatible workspace binding in the Cloudflare deployment
      example.
    - [x] Add experimental `wrangler.toml` deployment wiring.
