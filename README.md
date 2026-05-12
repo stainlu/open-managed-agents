@@ -97,9 +97,8 @@ Working today:
 
 Not done yet:
 
-- Full Flue parity: task cancellation/control, tool policy, MCP,
-  Cloudflare-backed Flue session persistence promotion, and OMA first-class
-  child sessions for Flue tasks.
+- Full Flue parity: tool policy, MCP, and OMA first-class child sessions for
+  Flue tasks.
 - Promoted production Cloudflare backend. The Durable Object, Worker router,
   Workflow runner, DO SQLite metadata store, D1 stores, R2 workspace backend,
   and example Wrangler wiring exist, but live deployment promotion is still

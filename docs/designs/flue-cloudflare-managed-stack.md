@@ -120,6 +120,11 @@ Done in OMA:
   `ManagedHarnessStateStore`, and a fresh adapter instance reloads the same
   managed session before appending another turn. This proves the bridge is not
   only wrapping the store API; the real Flue session path uses it.
+- Local Cloudflare/Flue Durable Object coverage now proves the same Flue
+  `SessionData` path through the D1-compatible harness-state binding across a
+  simulated Durable Object restart. The restarted handler's next real Flue SDK
+  call sees the previous user/assistant messages and then persists a longer
+  session history back to D1.
 - The Cloudflare Flue stack can now register the Workers AI binding with
   Flue's native `cloudflare/<model>` provider prefix. The example declares
   `[ai] binding = "AI"` and passes the binding through OMA instead of relying
@@ -233,12 +238,11 @@ Still open:
 
 - `ManagedEventLog.stateRoot` still exists as an optional legacy local-Docker
   escape hatch.
-- The Flue harness driver is still prompt-first: task cancellation/control,
-  MCP, tool approvals/deny policy, Cloudflare-backed Flue session persistence
-  promotion, and first-class OMA child sessions for Flue tasks are not wired
-  yet. Current Flue task and operation telemetry is preserved as structured
-  nested run events, direct Flue task and shell operations can be executed and
-  mapped, but Flue tasks are not promoted to managed child sessions yet.
+- The Flue harness driver still does not map MCP, tool approvals/deny policy,
+  or first-class OMA child sessions for Flue tasks. Current Flue task and
+  operation telemetry is preserved as structured nested run events, direct
+  Flue task and shell operations can be executed and mapped, but Flue tasks are
+  not promoted to managed child sessions yet.
 - Cloudflare deployment wiring exists as an experimental example in
   `examples/cloudflare-flue`, but it is not promoted: there is no live
   Workflow deployment test, deterministic live active/queued run abort smoke,
@@ -473,7 +477,7 @@ workspace ids into the public session identity.
    - Add a D1-compatible managed harness-state backend for cloud placement.
 
 5. [ ] Deepen Flue driver parity.
-   - Wire Flue session persistence to Cloudflare runtime bindings.
+   - [x] Wire Flue session persistence to Cloudflare runtime bindings.
    - Extend cancellation semantics beyond prompt calls.
    - [x] Preserve current Flue task/operation/tool/compaction telemetry as
      normalized OMA events.

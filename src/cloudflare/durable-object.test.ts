@@ -210,6 +210,100 @@ describe("createCloudflareFlueDurableObjectHandler", () => {
       doBacking.close();
     }
   });
+
+  it("persists real Flue SDK session state through D1 across Durable Object restart", async () => {
+    const doBacking = new Database(join(tmpDir, "metadata.db"));
+    const doStorage = new FakeDurableObjectStorage(doBacking);
+    const { db, close } = sqliteD1();
+    const r2Bucket = new FakeR2Bucket();
+    const payloads: string[] = [];
+    let responseIndex = 0;
+    const aiRun = async (_model: unknown, payload: unknown): Promise<Response> => {
+      payloads.push(JSON.stringify(payload));
+      const text = `state ${responseIndex}`;
+      responseIndex++;
+      return cloudflareTextResponse(text);
+    };
+
+    try {
+      const firstHandler = createCloudflareFlueDurableObjectHandler({
+        state: { storage: doStorage },
+        db,
+        r2Bucket,
+        cloudflareAiBinding: { run: aiRun },
+        cloudflareAiProviderPrefix: "cloudflare-do-state-test",
+      });
+
+      const created = await firstHandler.fetch(new Request("https://oma.example/v1/agents", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          harnessId: "flue",
+          model: "cloudflare-do-state-test/@cf/openai/gpt-oss-20b",
+          instructions: "persist Flue state through D1",
+        }),
+      }));
+      expect(created.status).toBe(200);
+      const agent = await created.json() as { agent_id: string };
+
+      const firstRun = await firstHandler.fetch(new Request(
+        `https://oma.example/v1/agents/${agent.agent_id}/run`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ task: "first durable Flue turn" }),
+        },
+      ));
+      expect(firstRun.status).toBe(200);
+      const firstRunBody = await firstRun.json() as { session_id: string; run_id: string };
+      await waitForSessionToStopRunning(firstHandler.stack.store, firstRunBody.session_id);
+
+      const firstStateRows = await flueHarnessStateRows(db, agent.agent_id, firstRunBody.session_id);
+      expect(firstStateRows).toHaveLength(1);
+      const firstEntryCount = sessionEntryCountFromJson(firstStateRows[0]?.state_json);
+      expect(firstEntryCount).toBeGreaterThanOrEqual(2);
+
+      const restartedHandler = createCloudflareFlueDurableObjectHandler({
+        state: { storage: doStorage },
+        db,
+        r2Bucket,
+        cloudflareAiBinding: { run: aiRun },
+        cloudflareAiProviderPrefix: "cloudflare-do-state-test",
+      });
+
+      const secondRun = await restartedHandler.fetch(new Request(
+        `https://oma.example/v1/sessions/${firstRunBody.session_id}/events`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ type: "user.message", content: "second durable Flue turn" }),
+        },
+      ));
+      expect(secondRun.status).toBe(200);
+      await waitForSessionToStopRunning(restartedHandler.stack.store, firstRunBody.session_id);
+
+      expect(payloads).toHaveLength(2);
+      expect(payloads[1]).toContain("first durable Flue turn");
+      expect(payloads[1]).toContain("state 0");
+      expect(payloads[1]).toContain("second durable Flue turn");
+
+      const secondStateRows = await flueHarnessStateRows(db, agent.agent_id, firstRunBody.session_id);
+      expect(secondStateRows).toHaveLength(1);
+      expect(sessionEntryCountFromJson(secondStateRows[0]?.state_json)).toBeGreaterThan(firstEntryCount);
+
+      const session = await restartedHandler.fetch(new Request(
+        `https://oma.example/v1/sessions/${firstRunBody.session_id}`,
+      ));
+      await expect(session.json()).resolves.toMatchObject({
+        session_id: firstRunBody.session_id,
+        status: "idle",
+        turns: 2,
+      });
+    } finally {
+      close();
+      doBacking.close();
+    }
+  });
 });
 
 describe("CloudflareFlueDurableObject", () => {
@@ -1324,6 +1418,26 @@ function cloudflareTextResponse(text: string): Response {
   ].join("\n"), {
     headers: { "content-type": "text/event-stream" },
   });
+}
+
+async function flueHarnessStateRows(
+  db: D1DatabaseLike,
+  agentId: string,
+  sessionId: string,
+): Promise<Array<{ state_json: string }>> {
+  const result = await db.prepare(`
+    SELECT state_json
+    FROM managed_harness_state
+    WHERE harness_id = ? AND agent_id = ? AND session_id = ?
+    ORDER BY state_key
+  `).bind("flue", agentId, sessionId).all<{ state_json: string }>();
+  return result.results ?? [];
+}
+
+function sessionEntryCountFromJson(raw: string | undefined): number {
+  if (!raw) return 0;
+  const parsed = JSON.parse(raw) as { entries?: unknown };
+  return Array.isArray(parsed.entries) ? parsed.entries.length : 0;
 }
 
 function sqliteD1(): { db: D1DatabaseLike; close: () => void } {

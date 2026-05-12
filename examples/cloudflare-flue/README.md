@@ -222,10 +222,13 @@ The `wrangler.toml` uses:
 
 - The example imports OMA from the repo source via `file:../..`; package imports
   can replace this after the Cloudflare backend is published.
-- The current Flue adapter is prompt-first, with a direct shell operation path
-  for deployment verification. Flue task/operation telemetry is preserved as
-  nested managed run events, but first-class child sessions, MCP, and tool
-  policy parity are intentionally not faked.
+- The current Flue adapter owns direct prompt, task, and shell paths for
+  deployment verification. Flue task/operation telemetry is preserved as nested
+  managed run events, but first-class child sessions, MCP, and tool policy
+  parity are intentionally not faked.
+- Local Durable Object tests cover real Flue SDK session persistence through
+  the D1-compatible harness-state binding across a simulated restart. This
+  still needs live deployment coverage before backend promotion.
 - Sandbox-backed shell execution is wired through OMA's managed workspace
   executor seam, and the example smoke client can now require a deterministic
   shell/build check against real Cloudflare Sandboxes. This still needs to be
