@@ -186,6 +186,9 @@ Done in OMA:
   through OMA's Flue adapter. This is deliberately a direct task invocation
   plus normalized task lineage, not a claim that Flue tasks are first-class OMA
   child sessions yet.
+- Flue adapter cancellation now has explicit coverage beyond prompt turns:
+  active direct task and shell operations both receive the same managed
+  `AbortSignal` path used by prompt runs.
 - `createCloudflareSandboxWorkspaceCommandExecutor` now exists as the first
   concrete backend for that seam. It resolves a Cloudflare Sandbox by stable
   managed session identity, mirrors OMA's managed workspace into the sandbox,
@@ -478,7 +481,7 @@ workspace ids into the public session identity.
 
 5. [ ] Deepen Flue driver parity.
    - [x] Wire Flue session persistence to Cloudflare runtime bindings.
-   - Extend cancellation semantics beyond prompt calls.
+   - [x] Extend cancellation semantics beyond prompt calls.
    - [x] Preserve current Flue task/operation/tool/compaction telemetry as
      normalized OMA events.
    - [x] Add a read-only run-tree projection over nested run events.

@@ -894,6 +894,92 @@ describe("FlueHarnessAdapter", () => {
     await expect(turn).rejects.toThrow("OMA cancelled Flue session ses_flue");
   });
 
+  it("aborts active task operations through AbortSignal", async () => {
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    let signal: AbortSignal | undefined;
+    const adapter = new FlueHarnessAdapter({
+      engine: {
+        prompt: vi.fn(async () => ({ text: "unused" })),
+        task: vi.fn((args) => {
+          signal = args.signal;
+          resolveStarted();
+          return new Promise<never>((_resolve, reject) => {
+            if (!signal) {
+              reject(new Error("missing signal"));
+              return;
+            }
+            if (signal.aborted) {
+              reject(signal.reason);
+              return;
+            }
+            signal.addEventListener("abort", () => reject(signal?.reason), {
+              once: true,
+            });
+          });
+        }),
+      },
+    });
+
+    const task = adapter.invokeTask({
+      agent: agent(),
+      sessionId: "ses_flue",
+      task: "inspect workspace",
+      timeoutMs: 60_000,
+    });
+    await started;
+
+    await adapter.abortSession(undefined, "ses_flue");
+
+    expect(signal?.aborted).toBe(true);
+    await expect(task).rejects.toThrow("OMA cancelled Flue session ses_flue");
+  });
+
+  it("aborts active shell operations through AbortSignal", async () => {
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    let signal: AbortSignal | undefined;
+    const adapter = new FlueHarnessAdapter({
+      engine: {
+        prompt: vi.fn(async () => ({ text: "unused" })),
+        shell: vi.fn((args) => {
+          signal = args.signal;
+          resolveStarted();
+          return new Promise<never>((_resolve, reject) => {
+            if (!signal) {
+              reject(new Error("missing signal"));
+              return;
+            }
+            if (signal.aborted) {
+              reject(signal.reason);
+              return;
+            }
+            signal.addEventListener("abort", () => reject(signal?.reason), {
+              once: true,
+            });
+          });
+        }),
+      },
+    });
+
+    const shell = adapter.invokeShell({
+      agent: agent(),
+      sessionId: "ses_flue",
+      command: "npm test",
+      timeoutMs: 60_000,
+    });
+    await started;
+
+    await adapter.abortSession(undefined, "ses_flue");
+
+    expect(signal?.aborted).toBe(true);
+    await expect(shell).rejects.toThrow("OMA cancelled Flue session ses_flue");
+  });
+
   it("remembers cancellation that arrives before the prompt handle starts", async () => {
     const adapter = new FlueHarnessAdapter({
       engine: {
