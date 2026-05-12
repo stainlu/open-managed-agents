@@ -4,8 +4,10 @@ import type { AgentConfig, Event, Session } from "../orchestrator/types.js";
 import { HarnessInvocationError } from "./types.js";
 import type { ManagedHarnessStateStore } from "./state-store.js";
 import {
+  deriveFlueProviderConfigFromEnv,
   FlueHarnessAdapter,
   FlueManagedSessionStore,
+  mergeFlueProviderConfig,
   type FlueEngine,
 } from "./flue.js";
 
@@ -58,6 +60,56 @@ function session(patch: Partial<Session> = {}): Session {
 }
 
 describe("FlueHarnessAdapter", () => {
+  it("derives Flue provider settings from OMA-managed provider env", () => {
+    expect(
+      deriveFlueProviderConfigFromEnv({
+        ANTHROPIC_API_KEY: "ant",
+        OPENAI_API_KEY: "oa",
+        MOONSHOT_API_KEY: "moon",
+        GEMINI_API_KEY: "gemini",
+      }),
+    ).toMatchObject({
+      anthropic: { apiKey: "ant" },
+      openai: { apiKey: "oa" },
+      "openai-codex": { apiKey: "oa" },
+      moonshotai: { apiKey: "moon" },
+      "moonshotai-cn": { apiKey: "moon" },
+      google: { apiKey: "gemini" },
+    });
+  });
+
+  it("lets explicit Flue provider config override derived credentials", () => {
+    expect(
+      mergeFlueProviderConfig(
+        {
+          openai: {
+            apiKey: "derived",
+            headers: { "x-derived": "1" },
+          },
+        },
+        {
+          openai: {
+            apiKey: "explicit",
+            baseUrl: "https://gateway.example.com/openai",
+            headers: { "x-explicit": "1" },
+          },
+          anthropic: {
+            apiKey: "ant",
+          },
+        },
+      ),
+    ).toEqual({
+      openai: {
+        apiKey: "explicit",
+        baseUrl: "https://gateway.example.com/openai",
+        headers: { "x-derived": "1", "x-explicit": "1" },
+      },
+      anthropic: {
+        apiKey: "ant",
+      },
+    });
+  });
+
   it("runs prompt turns through an injected native Flue engine", async () => {
     const prompt = vi.fn<FlueEngine["prompt"]>(async (args) => ({
       text: `echo: ${args.content}`,

@@ -1,4 +1,9 @@
 import type { D1DatabaseLike } from "../events/d1.js";
+import {
+  FLUE_PROVIDER_ENV_KEYS,
+  type FlueProviderConfig,
+  type FlueProviderSettings,
+} from "../harness/flue.js";
 import { isManagedRunRequest } from "../runtime/run-scheduler.js";
 import {
   DurableObjectSqlStore,
@@ -46,6 +51,25 @@ export type CloudflareFlueDurableObjectEnv = {
   OMA_VERSION?: string;
   OMA_COMMIT_SHA?: string;
   OMA_PASSTHROUGH_ENV_JSON?: string | Record<string, string>;
+  OMA_FLUE_PROVIDER_CONFIG_JSON?: string | FlueProviderConfig;
+  ANTHROPIC_API_KEY?: string;
+  ANTHROPIC_OAUTH_TOKEN?: string;
+  OPENAI_API_KEY?: string;
+  GEMINI_API_KEY?: string;
+  DEEPSEEK_API_KEY?: string;
+  GROQ_API_KEY?: string;
+  CEREBRAS_API_KEY?: string;
+  XAI_API_KEY?: string;
+  OPENROUTER_API_KEY?: string;
+  ZAI_API_KEY?: string;
+  MISTRAL_API_KEY?: string;
+  MINIMAX_API_KEY?: string;
+  MINIMAX_CN_API_KEY?: string;
+  MOONSHOT_API_KEY?: string;
+  HF_TOKEN?: string;
+  FIREWORKS_API_KEY?: string;
+  KIMI_API_KEY?: string;
+  CLOUDFLARE_API_KEY?: string;
 };
 
 export function createCloudflareFlueDurableObjectHandler(
@@ -130,9 +154,10 @@ export class CloudflareFlueDurableObject<
       rateLimitRpm: optionalNumber("OMA_RATE_LIMIT_RPM", this.env.OMA_RATE_LIMIT_RPM),
       version: this.env.OMA_VERSION,
       commitSha: this.env.OMA_COMMIT_SHA,
-      passthroughEnv: optionalStringRecord(
-        "OMA_PASSTHROUGH_ENV_JSON",
-        this.env.OMA_PASSTHROUGH_ENV_JSON,
+      passthroughEnv: resolveCloudflareFluePassthroughEnv(this.env),
+      flueProviderConfig: optionalFlueProviderConfig(
+        "OMA_FLUE_PROVIDER_CONFIG_JSON",
+        this.env.OMA_FLUE_PROVIDER_CONFIG_JSON,
       ),
     });
   }
@@ -251,6 +276,75 @@ function optionalStringRecord(
   return parsed as Record<string, string>;
 }
 
+function resolveCloudflareFluePassthroughEnv(
+  env: CloudflareFlueDurableObjectEnv,
+): Record<string, string> | undefined {
+  const directSecrets = cloudflareStringEnv(env as Record<string, unknown>, FLUE_PROVIDER_ENV_KEYS);
+  const jsonSecrets = optionalStringRecord(
+    "OMA_PASSTHROUGH_ENV_JSON",
+    env.OMA_PASSTHROUGH_ENV_JSON,
+  ) ?? {};
+  const merged = { ...directSecrets, ...jsonSecrets };
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function optionalFlueProviderConfig(
+  name: string,
+  value: string | FlueProviderConfig | undefined,
+): FlueProviderConfig | undefined {
+  if (value === undefined || value === "") return undefined;
+  const parsed = typeof value === "string"
+    ? parseJsonRecord(name, value)
+    : value;
+  const result: FlueProviderConfig = {};
+  for (const [provider, item] of Object.entries(parsed)) {
+    if (!isRecord(item)) {
+      throw new Error(`${name}.${provider} must be an object`);
+    }
+    result[provider] = parseFlueProviderSettings(`${name}.${provider}`, item);
+  }
+  return result;
+}
+
+function parseFlueProviderSettings(
+  name: string,
+  item: Record<string, unknown>,
+): FlueProviderSettings {
+  const result: FlueProviderSettings = {};
+  for (const [key, value] of Object.entries(item)) {
+    if (key === "apiKey" || key === "baseUrl") {
+      if (value !== undefined && typeof value !== "string") {
+        throw new Error(`${name}.${key} must be a string`);
+      }
+      if (value !== undefined) result[key] = value;
+      continue;
+    }
+    if (key === "storeResponses") {
+      if (value !== undefined && typeof value !== "boolean") {
+        throw new Error(`${name}.storeResponses must be a boolean`);
+      }
+      if (value !== undefined) result.storeResponses = value;
+      continue;
+    }
+    if (key === "headers") {
+      if (!isRecord(value)) {
+        throw new Error(`${name}.headers must be an object`);
+      }
+      const headers: Record<string, string> = {};
+      for (const [header, headerValue] of Object.entries(value)) {
+        if (typeof headerValue !== "string") {
+          throw new Error(`${name}.headers.${header} must be a string`);
+        }
+        headers[header] = headerValue;
+      }
+      result.headers = headers;
+      continue;
+    }
+    throw new Error(`${name}.${key} is not supported`);
+  }
+  return result;
+}
+
 function parseJsonRecord(name: string, value: string): Record<string, unknown> {
   let parsed: unknown;
   try {
@@ -263,4 +357,8 @@ function parseJsonRecord(name: string, value: string): Record<string, unknown> {
     throw new Error(`${name} must be a JSON object`);
   }
   return parsed as Record<string, unknown>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

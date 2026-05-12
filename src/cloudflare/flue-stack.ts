@@ -7,6 +7,7 @@ import type { ManagedEventLog } from "../events/types.js";
 import {
   FlueHarnessAdapter,
   type FlueEngine,
+  type FlueProviderConfig,
 } from "../harness/flue.js";
 import { HarnessRegistry } from "../harness/registry.js";
 import {
@@ -34,6 +35,7 @@ export type CloudflareFlueStackOptions = {
   r2Bucket?: R2BucketLike;
   workspaceOptions?: R2ManagedWorkspaceOptions;
   passthroughEnv?: Record<string, string>;
+  flueProviderConfig?: FlueProviderConfig;
   runTimeoutMs?: number;
   eventLog?: ManagedEventLog;
   eventLogOptions?: D1ManagedEventLogOptions;
@@ -82,6 +84,7 @@ export function createCloudflareFlueStack(
   }
   const flueHarness = new FlueHarnessAdapter({
     passthroughEnv,
+    providerConfig: opts.flueProviderConfig,
     sessionStateStore: harnessState,
     engine: opts.flueEngine,
     loadEngine: opts.loadFlueEngine,

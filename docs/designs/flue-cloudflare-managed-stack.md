@@ -1,7 +1,7 @@
 # Flue + Cloudflare Managed Stack
 
 Status: target architecture plus current implementation progress, current as of
-2026-05-11.
+2026-05-12.
 
 ## Decision
 
@@ -106,6 +106,12 @@ Done in OMA:
   reach Flue SDK model resolution. The remaining local failure with the smoke
   `test/model` input is an expected unknown-model error, not a missing SDK or
   Worker boot failure.
+- The Flue SDK bridge now maps OMA-managed provider credentials into Flue
+  `configureProvider()` calls. `OMA_PASSTHROUGH_ENV_JSON` and direct
+  Cloudflare secrets such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and
+  `MOONSHOT_API_KEY` are treated as managed harness configuration rather than
+  relying on ambient `process.env`. Deployments can also pass
+  `OMA_FLUE_PROVIDER_CONFIG_JSON` for gateway/base URL overrides.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
 - Harness adapters now declare a runtime mode. Existing adapters remain
@@ -137,8 +143,9 @@ Still open:
 - `ManagedEventLog.stateRoot` still exists as an optional legacy local-Docker
   escape hatch.
 - The Flue harness driver is prompt-only: task/shell cancellation, MCP, tool
-  approvals/deny policy, Cloudflare-backed Flue session persistence, and
-  first-class OMA child sessions for Flue tasks are not wired yet.
+  approvals/deny policy, Cloudflare Workers AI binding registration,
+  Cloudflare-backed Flue session persistence, and first-class OMA child
+  sessions for Flue tasks are not wired yet.
 - Cloudflare deployment wiring exists as an experimental example in
   `examples/cloudflare-flue`, but it is not promoted: there is no live
   Workflow deployment test, Flue task run, sandbox-backed shell/build task, or

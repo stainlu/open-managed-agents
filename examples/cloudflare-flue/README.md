@@ -57,6 +57,37 @@ pnpm wrangler secret put OMA_PARENT_TOKEN_SECRET_BASE64
 pnpm wrangler secret put OMA_PASSTHROUGH_ENV_JSON
 ```
 
+Provider keys can either live inside `OMA_PASSTHROUGH_ENV_JSON` or as direct
+Worker secrets. Direct secrets are easier to rotate:
+
+```bash
+pnpm wrangler secret put ANTHROPIC_API_KEY
+pnpm wrangler secret put OPENAI_API_KEY
+pnpm wrangler secret put MOONSHOT_API_KEY
+```
+
+OMA maps those managed secrets into Flue `configureProvider()` calls at the
+harness boundary. That avoids relying on ambient `process.env` and keeps the
+same agent JSON portable across Node, Worker, and future managed backends.
+
+Useful Flue model strings from the bundled Pi AI catalog:
+
+- `anthropic/claude-haiku-4-5`
+- `anthropic/claude-sonnet-4-6`
+- `openai/gpt-5.4-mini`
+- `moonshotai/kimi-k2.5`
+
+For non-standard gateways, set `OMA_FLUE_PROVIDER_CONFIG_JSON`:
+
+```json
+{
+  "openai": {
+    "apiKey": "gateway-token",
+    "baseUrl": "https://gateway.example.com/openai"
+  }
+}
+```
+
 `OMA_WORKFLOW_INTERNAL_TOKEN` is required when `OMA_RUN_WORKFLOW` is bound.
 The Durable Object refuses to boot without it because Workflow re-entry must be
 an internal path, not a public API.
@@ -69,6 +100,16 @@ pnpm dev
 
 The public API is the same OMA HTTP surface as the Node orchestrator. With
 `OMA_API_TOKEN` configured, pass `Authorization: Bearer <token>`.
+
+Minimal local prompt smoke:
+
+```bash
+curl -s http://localhost:8787/v1/agents \
+  -H 'content-type: application/json' \
+  -d '{"harnessId":"flue","model":"anthropic/claude-haiku-4-5","instructions":"One-sentence answers.","tools":[]}'
+```
+
+Use the returned `agent_id` with `POST /v1/agents/:agent_id/run`.
 
 ## Deploy
 

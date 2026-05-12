@@ -109,7 +109,11 @@ Active Flue prompt calls are cancelled through Flue's native
 `AbortSignal` path, without inventing a separate control protocol. Flue session
 data is persisted through an OMA harness-state boundary instead of the SDK's
 process-local in-memory store when the opt-in adapter is registered from the
-normal composition root.
+normal composition root. Provider credentials stay an OMA-managed concern:
+the Flue bridge derives Flue `configureProvider()` settings from passthrough
+provider env (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `MOONSHOT_API_KEY`, etc.)
+or explicit Flue provider config, rather than depending on ambient
+`process.env`.
 
 ### Runtime Substrate
 
@@ -250,9 +254,10 @@ an entrypoint helper rather than a full Cloudflare deployment runtime.
 `CloudflareFlueDurableObject` is the conventional Durable Object composition
 class. It creates `DurableObjectSqlStore` from `ctx.storage`, wires D1-compatible
 managed event and harness-state stores, requires an R2-compatible workspace
-binding, and serves the same Hono API. It is not a Workflow runtime yet; it is
-the coordinator/metadata object that removes the last fake in-memory store from
-the Cloudflare path.
+binding, maps direct provider secrets plus `OMA_PASSTHROUGH_ENV_JSON` into the
+Flue harness provider config, and serves the same Hono API. It is not a
+Workflow runtime yet; it is the coordinator/metadata object that removes the
+last fake in-memory store from the Cloudflare path.
 
 `ManagedRunScheduler` is the background-run kickoff boundary. The default
 `InlineRunScheduler` preserves the local behavior by running the turn

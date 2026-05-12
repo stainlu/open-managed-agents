@@ -46,12 +46,81 @@ export type FlueEngine = {
   stream?(args: FlueEnginePromptArgs): Promise<HarnessStreamingTurn>;
 };
 
+export type FlueProviderSettings = {
+  apiKey?: string;
+  baseUrl?: string;
+  headers?: Record<string, string>;
+  storeResponses?: boolean;
+};
+
+export type FlueProviderConfig = Record<string, FlueProviderSettings>;
+
 export type FlueHarnessAdapterConfig = {
   passthroughEnv?: Record<string, string>;
+  providerConfig?: FlueProviderConfig;
   sessionStateStore?: ManagedHarnessStateStore;
   engine?: FlueEngine;
   loadEngine?: () => Promise<FlueEngine>;
 };
+
+const PROVIDER_API_KEY_ENV: Record<string, string[]> = {
+  anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+  openai: ["OPENAI_API_KEY"],
+  "openai-codex": ["OPENAI_API_KEY"],
+  google: ["GEMINI_API_KEY"],
+  deepseek: ["DEEPSEEK_API_KEY"],
+  groq: ["GROQ_API_KEY"],
+  cerebras: ["CEREBRAS_API_KEY"],
+  xai: ["XAI_API_KEY"],
+  openrouter: ["OPENROUTER_API_KEY"],
+  zai: ["ZAI_API_KEY"],
+  mistral: ["MISTRAL_API_KEY"],
+  minimax: ["MINIMAX_API_KEY"],
+  "minimax-cn": ["MINIMAX_CN_API_KEY"],
+  moonshotai: ["MOONSHOT_API_KEY"],
+  "moonshotai-cn": ["MOONSHOT_API_KEY"],
+  huggingface: ["HF_TOKEN"],
+  fireworks: ["FIREWORKS_API_KEY"],
+  "kimi-coding": ["KIMI_API_KEY"],
+  "cloudflare-workers-ai": ["CLOUDFLARE_API_KEY"],
+  "cloudflare-ai-gateway": ["CLOUDFLARE_API_KEY"],
+};
+
+export const FLUE_PROVIDER_ENV_KEYS = Array.from(
+  new Set(Object.values(PROVIDER_API_KEY_ENV).flat()),
+);
+
+export function deriveFlueProviderConfigFromEnv(
+  env: Record<string, string>,
+): FlueProviderConfig {
+  const result: FlueProviderConfig = {};
+  for (const [provider, keys] of Object.entries(PROVIDER_API_KEY_ENV)) {
+    const key = keys.find((candidate) => nonEmptyString(env[candidate]));
+    if (key) result[provider] = { apiKey: env[key] };
+  }
+  return result;
+}
+
+export function mergeFlueProviderConfig(
+  derived: FlueProviderConfig,
+  explicit: FlueProviderConfig | undefined,
+): FlueProviderConfig {
+  if (!explicit) return derived;
+  const merged: FlueProviderConfig = { ...derived };
+  for (const [provider, settings] of Object.entries(explicit)) {
+    const headers = {
+      ...(merged[provider]?.headers ?? {}),
+      ...(settings.headers ?? {}),
+    };
+    const next: FlueProviderSettings = {
+      ...(merged[provider] ?? {}),
+      ...settings,
+    };
+    if (Object.keys(headers).length > 0) next.headers = headers;
+    merged[provider] = next;
+  }
+  return merged;
+}
 
 type FlueRuntimeEvent = {
   type?: string;
@@ -327,6 +396,7 @@ export class FlueHarnessAdapter implements HarnessAdapter {
         ? this.cfg.loadEngine()
         : Promise.resolve(new OptionalSdkFlueEngine(
           this.cfg.passthroughEnv ?? {},
+          this.cfg.providerConfig,
           this.cfg.sessionStateStore,
         ));
     }
@@ -365,10 +435,13 @@ export class FlueHarnessAdapter implements HarnessAdapter {
 
 class OptionalSdkFlueEngine implements FlueEngine {
   private internalPromise: Promise<FlueInternalModule> | undefined;
+  private appPromise: Promise<FlueAppModule> | undefined;
+  private providersConfigured = false;
   private storePromise: Promise<unknown> | undefined;
 
   constructor(
     private readonly passthroughEnv: Record<string, string>,
+    private readonly providerConfig: FlueProviderConfig | undefined,
     private readonly sessionStateStore: ManagedHarnessStateStore | undefined,
   ) {}
 
@@ -507,6 +580,7 @@ class OptionalSdkFlueEngine implements FlueEngine {
   }
 
   private async createContext(args: FlueEnginePromptArgs): Promise<FlueContextLike> {
+    await this.configureProviders();
     const internal = await this.loadInternal();
     const store = await this.loadStore(internal, args);
     const env = new MemorySessionEnv(args.agent.instructions);
@@ -541,6 +615,38 @@ class OptionalSdkFlueEngine implements FlueEngine {
         });
     }
     return this.internalPromise;
+  }
+
+  private async configureProviders(): Promise<void> {
+    if (this.providersConfigured) return;
+    const providerConfig = mergeFlueProviderConfig(
+      deriveFlueProviderConfigFromEnv(this.passthroughEnv),
+      this.providerConfig,
+    );
+    if (Object.keys(providerConfig).length === 0) {
+      this.providersConfigured = true;
+      return;
+    }
+
+    const app = await this.loadApp();
+    for (const [provider, settings] of Object.entries(providerConfig)) {
+      app.configureProvider(provider, settings);
+    }
+    this.providersConfigured = true;
+  }
+
+  private async loadApp(): Promise<FlueAppModule> {
+    if (!this.appPromise) {
+      this.appPromise = import("@flue/sdk/app")
+        .then((mod) => validateFlueAppModule(mod))
+        .catch((err) => {
+          const message = err instanceof Error ? err.message : String(err);
+          throw new HarnessInvocationError(
+            `Flue harness requires @flue/sdk/app to configure model providers at runtime: ${message}`,
+          );
+        });
+    }
+    return this.appPromise;
   }
 
   private async loadStore(
@@ -603,6 +709,10 @@ type FlueInternalModule = {
   resolveModel: (model: string | false | undefined) => unknown;
 };
 
+type FlueAppModule = {
+  configureProvider: (provider: string, settings: FlueProviderSettings) => void;
+};
+
 type FlueContextLike = {
   setEventCallback(callback: ((event: FlueRuntimeEvent) => void) | undefined): void;
   init(options: Record<string, unknown>): Promise<FlueAgentLike>;
@@ -640,6 +750,14 @@ function validateFlueInternalModule(mod: unknown): FlueInternalModule {
     throw new Error("@flue/sdk/internal did not expose the expected runtime helpers");
   }
   return candidate as FlueInternalModule;
+}
+
+function validateFlueAppModule(mod: unknown): FlueAppModule {
+  const candidate = mod as Partial<FlueAppModule>;
+  if (typeof candidate.configureProvider !== "function") {
+    throw new Error("@flue/sdk/app did not expose configureProvider()");
+  }
+  return candidate as FlueAppModule;
 }
 
 class MemorySessionEnv {
@@ -1080,6 +1198,10 @@ function stringifyContent(value: unknown): string {
 function objectRecord(value: unknown): Record<string, unknown> | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   return value as Record<string, unknown>;
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function modelId(model: string | { id?: string } | undefined): string | undefined {
