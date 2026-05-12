@@ -171,6 +171,8 @@ Done in OMA:
   seam. Without an executor, shell remains disabled; with one, Flue shell calls
   run against a validated cwd inside the same `ManagedWorkspace` contract and
   the executor must make command-side file mutations visible before it returns.
+  The Cloudflare stack factory accepts this executor so deployment code can
+  inject a real sandbox backend without bypassing OMA's stack composition.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
 - Harness adapters now declare a runtime mode. Existing adapters remain
@@ -458,6 +460,7 @@ workspace ids into the public session identity.
      future Cloudflare Sandbox/Dynamic Worker backend can supply real shell
      execution without replacing the Flue adapter or weakening the filesystem
      boundary.
+   - [x] Thread that executor seam through the Cloudflare stack factory.
    - Decide when Flue task lineage should graduate from an observable run tree
      to OMA child sessions with real lifecycle control.
 

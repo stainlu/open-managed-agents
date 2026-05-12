@@ -6,7 +6,10 @@ import type {
   D1PreparedStatementLike,
   D1Result,
 } from "../events/d1.js";
-import type { FlueEngine } from "../harness/flue.js";
+import type {
+  FlueEngine,
+  FlueManagedWorkspaceCommandExecutor,
+} from "../harness/flue.js";
 import { NativeOnlySessionRuntime } from "../runtime/native.js";
 import { InMemoryStore } from "../store/memory.js";
 import type {
@@ -119,6 +122,34 @@ describe("createCloudflareFlueStack", () => {
 
       expect(() => stack.router.createSession(agent.agentId))
         .toThrow(/uses unsupported harness openclaw/);
+    } finally {
+      close();
+      store.close();
+    }
+  });
+
+  it("passes a managed workspace command executor into the Flue harness", () => {
+    const { db, close } = sqliteD1();
+    const store = new InMemoryStore();
+    const workspace = new EmptyWorkspace();
+    const workspaceCommandExecutor: FlueManagedWorkspaceCommandExecutor = {
+      exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+    };
+
+    try {
+      const stack = createCloudflareFlueStack({
+        db,
+        store,
+        workspace,
+        workspaceCommandExecutor,
+        flueEngine: {
+          prompt: async () => ({ text: "unused" }),
+        },
+      });
+      const harness = stack.flueHarness as unknown as {
+        cfg?: { workspaceCommandExecutor?: FlueManagedWorkspaceCommandExecutor };
+      };
+      expect(harness.cfg?.workspaceCommandExecutor).toBe(workspaceCommandExecutor);
     } finally {
       close();
       store.close();

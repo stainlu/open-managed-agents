@@ -8,6 +8,7 @@ import {
   type CloudflareAIBindingLike,
   FlueHarnessAdapter,
   type FlueEngine,
+  type FlueManagedWorkspaceCommandExecutor,
   type FlueProviderConfig,
 } from "../harness/flue.js";
 import { HarnessRegistry } from "../harness/registry.js";
@@ -40,6 +41,7 @@ export type CloudflareFlueStackOptions = {
   cloudflareAiBinding?: CloudflareAIBindingLike;
   cloudflareAiGateway?: Record<string, unknown>;
   cloudflareAiProviderPrefix?: string;
+  workspaceCommandExecutor?: FlueManagedWorkspaceCommandExecutor;
   runTimeoutMs?: number;
   eventLog?: ManagedEventLog;
   eventLogOptions?: D1ManagedEventLogOptions;
@@ -93,6 +95,7 @@ export function createCloudflareFlueStack(
     cloudflareAiGateway: opts.cloudflareAiGateway,
     cloudflareAiProviderPrefix: opts.cloudflareAiProviderPrefix,
     workspace,
+    workspaceCommandExecutor: opts.workspaceCommandExecutor,
     sessionStateStore: harnessState,
     engine: opts.flueEngine,
     loadEngine: opts.loadFlueEngine,
