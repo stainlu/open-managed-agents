@@ -1,0 +1,19 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "types": "wrangler types"
+  },
+  "dependencies": {
+    "@flue/sdk": "^0.5.1",
+    "open-managed-agents": "file:../.."
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250410.0",
+    "typescript": "^5.9.2",
+    "wrangler": "^4.83.0"
+  }
+}

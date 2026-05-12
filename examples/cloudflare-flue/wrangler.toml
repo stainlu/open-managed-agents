@@ -1,0 +1,34 @@
+"$schema" = "./node_modules/wrangler/config-schema.json"
+name = "oma-cloudflare-flue"
+main = "src/index.ts"
+compatibility_date = "2026-05-12"
+compatibility_flags = [ "nodejs_compat" ]
+
+[vars]
+OMA_COORDINATOR_NAME = "default"
+OMA_RATE_LIMIT_RPM = "120"
+OMA_RUN_TIMEOUT_MS = "600000"
+OMA_VERSION = "0.1.0-cloudflare-example"
+
+[[durable_objects.bindings]]
+name = "OMA_COORDINATOR"
+class_name = "OMACoordinator"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = [ "OMACoordinator" ]
+
+[[workflows]]
+binding = "OMA_RUN_WORKFLOW"
+name = "oma-managed-runs"
+class_name = "OMARunWorkflow"
+
+[[d1_databases]]
+binding = "OMA_DB"
+database_name = "oma-cloudflare-flue"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+[[r2_buckets]]
+binding = "OMA_WORKSPACE"
+bucket_name = "oma-cloudflare-flue-workspace"
+preview_bucket_name = "oma-cloudflare-flue-workspace-preview"

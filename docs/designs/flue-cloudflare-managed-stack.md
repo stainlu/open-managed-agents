@@ -129,10 +129,10 @@ Still open:
 - The Flue harness driver is prompt-only: task/shell cancellation, MCP, tool
   approvals/deny policy, Cloudflare-backed Flue session persistence, and
   first-class OMA child sessions for Flue tasks are not wired yet.
-- Production Cloudflare deployment wiring still does not exist: no
-  `wrangler.toml`, binding migration story, or live Workflow deployment test.
-  The Worker router, DO class, Workflow scheduler, and Workflow runner helper
-  exist as composition points, not as an end-to-end deployment recipe.
+- Cloudflare deployment wiring exists as an experimental example in
+  `examples/cloudflare-flue`, but it is not promoted: there is no live
+  Workflow deployment test, Flue task run, sandbox-backed shell/build task, or
+  replay-after-hibernation proof yet.
 
 ## Non-Decision
 
@@ -380,8 +380,11 @@ workspace ids into the public session identity.
    - [x] Add a Workflow execution callback/runner that resumes the scheduled
      run through the coordinator Durable Object.
    - [x] Add token-gated internal coordinator re-entry for scheduled runs.
-   - [ ] Production R2 or Artifacts workspace binding.
-   - [ ] Production `wrangler.toml` deployment wiring.
+   - [x] Add R2-compatible workspace binding in the Cloudflare deployment
+     example.
+   - [x] Add experimental `wrangler.toml` deployment wiring.
+   - [ ] Promote production `wrangler.toml` only after live Cloudflare smoke
+     coverage.
    - [x] No Docker compatibility shims.
 
 7. [ ] Promote Cloudflare runtime only after it proves:

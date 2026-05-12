@@ -1,0 +1,4 @@
+OMA_WORKFLOW_INTERNAL_TOKEN=replace-with-a-random-shared-token
+OMA_API_TOKEN=replace-with-an-optional-public-api-token
+OMA_PARENT_TOKEN_SECRET_BASE64=replace-with-32-random-bytes-base64
+OMA_PASSTHROUGH_ENV_JSON={"ANTHROPIC_API_KEY":"sk-ant-..."}
