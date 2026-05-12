@@ -112,6 +112,10 @@ For each session whose environment has `networking.type === "limited"`:
    - `HTTPS_PROXY=http://openclaw-sess-<sid>-proxy:8118`
    - `NO_PROXY=open-managed-agents-orchestrator,localhost,127.0.0.1` (control plane + loopback bypass)
    - `--dns <sidecar-ip>` (resolves in-container via the sidecar)
+   If the runtime cannot report the sidecar's IP on the confined network, the
+   spawn fails and rolls back. Falling back to the sidecar hostname is not
+   acceptable because Docker DNS configuration requires resolver IPs; a hostname
+   there would silently weaken DNS-layer confinement.
 4. Connect the agent container to `openclaw-control-plane` for orchestrator control plane access. Limited agents are never attached to `openclaw-net`.
 5. Pool tracks both containers as one `ActiveContainer`. Evict tears down both.
 

@@ -854,6 +854,31 @@ describe("SessionContainerPool — networking: limited", () => {
     expect(agentSpawn.opts.dns).toEqual([sidecarIp]);
   });
 
+  it("fails closed when the runtime does not report the sidecar confined-network IP", async () => {
+    const { pool, runtime } = makeLimitedPool();
+    const originalSpawn = runtime.spawn.bind(runtime);
+    vi.spyOn(runtime, "spawn").mockImplementation(async (opts) => {
+      const container = await originalSpawn(opts);
+      if (opts.image.includes("egress-proxy")) {
+        return { ...container, networks: undefined };
+      }
+      return container;
+    });
+
+    await expect(
+      pool.acquireForSession({
+        sessionId: "ses_missing_dns",
+        spawnOptions: baseSpawnOptions(),
+        networking: { type: "limited", allowedHosts: ["api.example.com"] },
+      }),
+    ).rejects.toThrow(/sidecar IP/);
+
+    expect(runtime.calls.filter((c) => c.kind === "spawn")).toHaveLength(1);
+    expect(runtime.stopped.has("cnt_1")).toBe(true);
+    expect(runtime.calls.filter((c) => c.kind === "removeNetwork")).toHaveLength(2);
+    expect(pool.snapshot()).toEqual([]);
+  });
+
   it("doesn't truncate the session id — two long ids with a shared prefix get distinct networks", async () => {
     // Before the fix, slice(0, 12) truncated the id. Two sessions
     // starting with the same 12-char prefix would share a sidecar and

@@ -1101,15 +1101,12 @@ export class SessionContainerPool implements ManagedSessionRuntime {
       //
       //    NO_PROXY excludes localhost + the orchestrator (reached via
       //    control-plane, not the sidecar).
-      const sidecarConfinedIp =
-        sidecar.networks?.[confinedNet] ??
-        // Fallback: use the sidecar name. Docker's per-network alias
-        // resolution makes this work via /etc/hosts inside containers
-        // on the same network, but only for hostname lookups — Dns
-        // only accepts IPs. The name here is effectively a smoke-test
-        // fallback for the FakeRuntime in unit tests; production
-        // paths always have a real IP from the post-spawn inspect.
-        sidecarName;
+      const sidecarConfinedIp = sidecar.networks?.[confinedNet];
+      if (!sidecarConfinedIp) {
+        throw new Error(
+          `networking: limited requires the runtime to report the sidecar IP on ${confinedNet}`,
+        );
+      }
       const agentEnv: Record<string, string> = {
         ...args.spawnOptions.env,
         HTTP_PROXY: `http://${sidecarName}:${httpPort}`,
