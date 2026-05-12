@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { AgentConfig, Event, Session } from "../orchestrator/types.js";
-import { HarnessInvocationError } from "./types.js";
+import { HarnessInvocationError, type HarnessApprovalRequest } from "./types.js";
 import type { ManagedHarnessStateStore } from "./state-store.js";
 import type {
   ManagedWorkspace,
@@ -885,7 +885,18 @@ describe("FlueHarnessAdapter", () => {
         timeoutMs: 60_000,
         agent: agent({ permissionPolicy: { type: "always_ask" } }),
       }),
-    ).rejects.toThrow("Flue harness does not map OMA tool approvals");
+    ).rejects.toThrow("Flue approve-all policy is not supported");
+
+    await expect(
+      adapter.invokeTurn({
+        content: "hello",
+        sessionId: "ses_flue",
+        timeoutMs: 60_000,
+        agent: agent({
+          permissionPolicy: { type: "always_ask", tools: ["docs_search"] },
+        }),
+      }),
+    ).rejects.toThrow("Flue approval policy currently supports only exact URL MCP tool names");
   });
 
   it("rejects stdio MCP servers instead of pretending Flue can run them", async () => {
@@ -1055,6 +1066,83 @@ describe("FlueHarnessAdapter", () => {
       }),
     ).rejects.toThrow("Flue deny policy targets MCP tools that were not exposed");
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("pauses Flue URL MCP tools for exact always_ask approval", async () => {
+    const close = vi.fn(async () => {});
+    const execute = vi.fn(async () => "approved write");
+    const mcpConnector = vi.fn<FlueMcpConnector>(async (name) => ({
+      name,
+      tools: [
+        {
+          name: "mcp__docs__write",
+          description: "Write docs",
+          parameters: {
+            type: "object",
+            properties: { path: { type: "string" } },
+            required: ["path"],
+          },
+          execute,
+        },
+      ],
+      close,
+    }));
+    const run = vi.fn(async () =>
+      run.mock.calls.length === 1
+        ? cloudflareToolCallResponse("mcp__docs__write", { path: "README.md" })
+        : cloudflareTextResponse("done")
+    );
+    const adapter = new FlueHarnessAdapter({
+      cloudflareAiBinding: { run },
+      cloudflareAiProviderPrefix: "cloudflare-mcp-approval-test",
+      mcpConnector,
+    });
+    const approvals: HarnessApprovalRequest[] = [];
+    const unsubscribe = adapter.subscribeApprovalRequested(
+      undefined,
+      "ses_flue_mcp_approval",
+      (approval) => approvals.push(approval),
+    );
+
+    const turn = adapter.invokeTurn({
+      content: "write docs",
+      sessionId: "ses_flue_mcp_approval",
+      timeoutMs: 60_000,
+      agent: agent({
+        model: "cloudflare-mcp-approval-test/@cf/openai/gpt-oss-20b",
+        mcpServers: {
+          docs: { url: "https://mcp.example.com/v2" },
+        },
+        permissionPolicy: {
+          type: "always_ask",
+          tools: ["mcp__docs__write"],
+        },
+      }),
+    });
+
+    await waitForCondition("Flue MCP approval request", () => approvals.length === 1);
+    expect(execute).not.toHaveBeenCalled();
+    expect(approvals[0]).toMatchObject({
+      sessionId: "ses_flue_mcp_approval",
+      toolName: "mcp__docs__write",
+      description: expect.stringContaining("README.md"),
+    });
+    await expect(adapter.listApprovals(undefined, "ses_flue_mcp_approval"))
+      .resolves.toHaveLength(1);
+
+    await adapter.resolveApproval(
+      undefined,
+      "ses_flue_mcp_approval",
+      approvals[0]!.approvalId,
+      "allow",
+    );
+
+    await expect(turn).resolves.toMatchObject({ output: "done" });
+    expect(execute).toHaveBeenCalledWith({ path: "README.md" }, expect.any(AbortSignal));
+    await expect(adapter.listApprovals(undefined, "ses_flue_mcp_approval"))
+      .resolves.toEqual([]);
+    expect(close).toHaveBeenCalledTimes(1);
+    unsubscribe();
   });
 
   it("injects OMA vault bearer credentials into Flue URL MCP headers", async () => {
@@ -1410,6 +1498,18 @@ function sessionEntryCount(value: unknown): number {
   return Array.isArray(entries) ? entries.length : 0;
 }
 
+async function waitForCondition(
+  label: string,
+  pred: () => boolean,
+): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  while (Date.now() < deadline) {
+    if (pred()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`timed out waiting for ${label}`);
+}
+
 function cloudflareTextResponse(text: string): Response {
   return new Response([
     `data: ${JSON.stringify({
@@ -1423,6 +1523,43 @@ function cloudflareTextResponse(text: string): Response {
       model: "@cf/openai/gpt-oss-20b",
       choices: [{ delta: {}, finish_reason: "stop" }],
       usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+    })}`,
+    "",
+    "data: [DONE]",
+    "",
+  ].join("\n"), {
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+function cloudflareToolCallResponse(
+  toolName: string,
+  args: Record<string, unknown>,
+): Response {
+  return new Response([
+    `data: ${JSON.stringify({
+      id: "chatcmpl_fake_tool",
+      model: "@cf/openai/gpt-oss-20b",
+      choices: [{
+        delta: {
+          tool_calls: [{
+            index: 0,
+            id: "call_flue_tool",
+            type: "function",
+            function: {
+              name: toolName,
+              arguments: JSON.stringify(args),
+            },
+          }],
+        },
+        finish_reason: null,
+      }],
+    })}`,
+    "",
+    `data: ${JSON.stringify({
+      id: "chatcmpl_fake_tool",
+      model: "@cf/openai/gpt-oss-20b",
+      choices: [{ delta: {}, finish_reason: "tool_calls" }],
     })}`,
     "",
     "data: [DONE]",

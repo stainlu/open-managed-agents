@@ -225,9 +225,10 @@ The `wrangler.toml` uses:
 - The current Flue adapter owns direct prompt, task, and shell paths for
   deployment verification. Flue task/operation telemetry is preserved as nested
   managed run events. URL MCP servers are wired through Flue's MCP client, but
-  stdio MCP servers, first-class child sessions, tool approvals, and built-in
-  Flue tool policy parity are intentionally not faked. Exact deny filtering is
-  limited to URL-MCP tools that OMA connects into Flue.
+  stdio MCP servers, first-class child sessions, approve-all policy, and
+  built-in Flue tool policy parity are intentionally not faked. Exact deny and
+  `always_ask` approval filtering are limited to URL-MCP tools that OMA
+  connects into Flue.
 - Local Durable Object tests cover real Flue SDK session persistence through
   the D1-compatible harness-state binding across a simulated restart. This
   still needs live deployment coverage before backend promotion.

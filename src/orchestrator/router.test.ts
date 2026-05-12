@@ -2687,4 +2687,103 @@ describe("AgentRouter approval flow", () => {
 
     expect(router.getPendingApprovals(session.sessionId)).toEqual([]);
   });
+
+  it("syncs native harness approvals without a container control client", async () => {
+    const listApprovals = vi.fn(async (_controlClient, sessionId: string) => [{
+      approvalId: "ap_native_1",
+      sessionId,
+      toolName: "mcp__docs__write",
+      toolCallId: "call_native_1",
+      description: "write docs?",
+      arrivedAt: 10,
+    }]);
+    const subscribeApprovalRequested = vi.fn((_controlClient, sessionId: string, handler) => {
+      handler({
+        approvalId: "ap_native_2",
+        sessionId,
+        toolName: "mcp__docs__search",
+        toolCallId: "call_native_2",
+        description: "search docs?",
+        arrivedAt: 11,
+      });
+      return () => {};
+    });
+    const native = nativeTestHarness({
+      capabilities: {
+        ...nativeTestHarness().capabilities,
+        tool_approvals: supported("native test approvals"),
+      },
+      listApprovals,
+      subscribeApprovalRequested,
+      subscribeApprovalResolved: vi.fn(() => () => {}),
+    });
+    const { router, store } = makeRouter({
+      extraHarnesses: [native],
+      poolStub: { getControlClient: () => undefined },
+    });
+    const agent = store.agents.create({
+      model: "m",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_ask", tools: ["mcp__docs__write"] },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+      harnessId: "native-test",
+    });
+    const session = router.createSession(agent.agentId);
+
+    await (router as any).ensureApprovalSubscriptions(session.sessionId, undefined);
+
+    expect(listApprovals).toHaveBeenCalledWith(undefined, session.sessionId);
+    expect(subscribeApprovalRequested).toHaveBeenCalledWith(
+      undefined,
+      session.sessionId,
+      expect.any(Function),
+    );
+    expect(router.getPendingApprovals(session.sessionId).map((approval) => approval.approvalId))
+      .toEqual(["ap_native_1"]);
+  });
+
+  it("resolves native harness approvals without a live container", async () => {
+    const resolveApproval = vi.fn(async () => {});
+    const native = nativeTestHarness({
+      capabilities: {
+        ...nativeTestHarness().capabilities,
+        tool_approvals: supported("native test approvals"),
+      },
+      resolveApproval,
+    });
+    const { router, store } = makeRouter({
+      extraHarnesses: [native],
+      poolStub: { getControlClient: () => undefined },
+    });
+    const agent = store.agents.create({
+      model: "m",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_ask", tools: ["mcp__docs__write"] },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+      harnessId: "native-test",
+    });
+    const session = router.createSession(agent.agentId);
+    (router as any).pendingApprovals.set(session.sessionId, [{
+      approvalId: "ap_native",
+      sessionId: session.sessionId,
+      toolName: "mcp__docs__write",
+      toolCallId: "call_native",
+      description: "write docs?",
+      arrivedAt: 1,
+    }]);
+
+    await router.confirmTool(session.sessionId, "ap_native", "allow");
+
+    expect(resolveApproval).toHaveBeenCalledWith(
+      undefined,
+      session.sessionId,
+      "ap_native",
+      "allow",
+    );
+    expect(router.getPendingApprovals(session.sessionId)).toEqual([]);
+  });
 });

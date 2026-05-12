@@ -100,10 +100,11 @@ Unsupported behavior is capability-gated. For example, Hermes MCP, compaction,
 and managed subagents, Codex MCP, Codex per-tool deny policy, and Codex managed
 subagents, plus Claude Agent SDK managed subagents and manual compaction, are
 rejected explicitly instead of being silently faked. The same rule applies to
-Flue: stdio MCP, tool approvals, built-in Flue tool policy, and first-class
+Flue: stdio MCP, approve-all policy, built-in Flue tool policy, and first-class
 managed child sessions for Flue tasks are not claimed until the adapter
-actually owns those surfaces. The Flue adapter currently owns URL MCP wiring
-and exact deny filtering for those connected MCP tools. The
+actually owns those surfaces. The Flue adapter currently owns URL MCP wiring,
+exact deny filtering, and exact `always_ask` approval gates for those connected
+MCP tools. The
 current Flue adapter owns prompt streaming: Flue `text_delta` callbacks become
 OpenAI-compatible streaming chunks, and normalized OMA events are appended
 while the streamed turn is still running. It also owns direct Flue
@@ -370,7 +371,7 @@ session keeps its original native runtime.
 - **`runEvent({sessionId, content, model?, thinkingLevel?, rejectIfBusy?})`** — idle path starts a background run (`beginRun` -> session status `starting` -> fire-and-forget `executeInBackground`); `starting` or `running` path enqueues unless `rejectIfBusy` is set, in which case it returns `session_busy` for callers that cannot correlate queued replies. Returns `{session, queued}`. Model and thinking overrides are baked into the first-turn container config and patched through the harness control plane on later turns when supported.
 - **`cancel(sessionId)`** — looks up the pool's control client, calls the active harness adapter's abort method, drains the queue, calls `endRunCancelled`. Cancellation is a deliberate stop, not an agent failure.
 - **`confirmTool(sessionId, approvalId, decision)`** — resolves a pending tool-confirmation approval through the active harness adapter. OpenClaw uses gateway plugin approval resolution; Hermes uses the adapter-server approval endpoint for the subset it supports.
-- **`executeInBackground`** (private) — acquires a container via the pool (with agentId for warm-pool matching), optionally applies a harness patch for model/thinking overrides, installs one approval subscription set per session, rehydrates pending approvals, invokes the harness turn API, reads the managed event log for cost/output rollup, then either drains the queue or calls `endRunSuccess`.
+- **`executeInBackground`** (private) — for container harnesses, acquires a container via the pool (with agentId for warm-pool matching) and optionally applies a harness patch for model/thinking overrides; for native harnesses, skips runtime acquisition. It installs one approval subscription set per session when the harness supports approvals, rehydrates pending approvals, invokes the harness turn API, reads the managed event log for cost/output rollup, then either drains the queue or calls `endRunSuccess`.
 - **`handleBackgroundFailure`** (private) — guard against overwriting a cancel's idle state with an in-flight HTTP error. If `session.status !== "running"` at catch time, the failure is a side-effect of an external cancel and we leave the session alone. Otherwise drain the queue + evict the container + `endRunFailure`.
 
 ### Server (`src/orchestrator/server.ts`)
@@ -405,7 +406,7 @@ Agent templates support three permission policies:
 - **`deny`** — specified tools are blocked entirely via OpenClaw's `tools.deny` config
 - **`always_ask`** — specified tools pause for client confirmation before execution
 
-The OpenClaw `always_ask` flow uses a plugin installed in the runtime container image at `/opt/openclaw-plugins/confirm-tools/`. The entrypoint copies it to `/workspace/extensions/confirm-tools/` (the plugin discovery path, derived from `OPENCLAW_STATE_DIR`) when `OPENCLAW_CONFIRM_TOOLS` is set. The plugin registers a `before_tool_call` hook via `definePluginEntry` (from `openclaw/plugin-sdk/plugin-entry`) that returns `requireApproval` for matching tools. The gateway then broadcasts `plugin.approval.requested` / `plugin.approval.resolved` to WS clients; the orchestrator keeps one approval subscription set per session, rehydrates pending approvals via `plugin.approval.list` after warm reuse or adoption, and surfaces them as `agent.tool_confirmation_request` SSE events. Those SSE events carry both `approval_id` (resolver key) and `tool_call_id` (used to correlate the approval with the matching `agent.tool_use` row). The client resolves the approval via `POST /v1/sessions/:id/events { type: "user.tool_confirmation", toolUseId: <approval_id>, result }`, which the server routes to `router.confirmTool()` and then to the active harness adapter's approval resolver.
+The OpenClaw `always_ask` flow uses a plugin installed in the runtime container image at `/opt/openclaw-plugins/confirm-tools/`. The entrypoint copies it to `/workspace/extensions/confirm-tools/` (the plugin discovery path, derived from `OPENCLAW_STATE_DIR`) when `OPENCLAW_CONFIRM_TOOLS` is set. The plugin registers a `before_tool_call` hook via `definePluginEntry` (from `openclaw/plugin-sdk/plugin-entry`) that returns `requireApproval` for matching tools. The gateway then broadcasts `plugin.approval.requested` / `plugin.approval.resolved` to WS clients; the orchestrator keeps one approval subscription set per session, rehydrates pending approvals via `plugin.approval.list` after warm reuse or adoption, and surfaces them as `agent.tool_confirmation_request` SSE events. Native harnesses use the same router approval contract without a container control client. The Flue adapter implements that path for exact URL-MCP tool names by wrapping the `ToolDef.execute()` functions that OMA injects into Flue. Those SSE events carry both `approval_id` (resolver key) and `tool_call_id` (used to correlate the approval with the matching `agent.tool_use` row when the harness provides one). The client resolves the approval via `POST /v1/sessions/:id/events { type: "user.tool_confirmation", toolUseId: <approval_id>, result }`, which the server routes to `router.confirmTool()` and then to the active harness adapter's approval resolver.
 
 ### SDKs (`sdk/python/`, `sdk/typescript/`)
 

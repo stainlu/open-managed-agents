@@ -359,8 +359,9 @@ export class FlueHarnessAdapter implements HarnessAdapter {
       detail: "Flue compaction is not exposed through OMA control methods yet.",
     },
     tool_approvals: {
-      support: "unsupported",
-      detail: "Flue tool approvals are not mapped into OMA confirmations yet.",
+      support: "partial",
+      detail:
+        "Exact always_ask approvals are enforced for URL MCP tools connected by OMA; built-in Flue tools and approve-all policy are rejected.",
     },
     permission_deny: {
       support: "partial",
@@ -370,7 +371,7 @@ export class FlueHarnessAdapter implements HarnessAdapter {
     mcp: {
       support: "partial",
       detail:
-        "URL-based MCP servers are connected through Flue's MCP client with OMA vault injection and exact MCP-tool deny filtering; stdio MCP servers and tool approvals are rejected.",
+        "URL-based MCP servers are connected through Flue's MCP client with OMA vault injection, exact MCP-tool deny filtering, and exact MCP-tool approvals; stdio MCP servers are rejected.",
     },
     managed_event_log: {
       support: "partial",
@@ -389,6 +390,7 @@ export class FlueHarnessAdapter implements HarnessAdapter {
   private enginePromise: Promise<FlueEngine> | undefined;
   private readonly activeCalls = new Map<string, AbortController>();
   private readonly pendingAborts = new Map<string, unknown>();
+  private readonly approvals = new FlueApprovalBroker();
 
   constructor(private readonly cfg: FlueHarnessAdapterConfig = {}) {}
 
@@ -645,30 +647,35 @@ export class FlueHarnessAdapter implements HarnessAdapter {
     );
   }
 
-  async resolveApproval(): Promise<void> {
-    throw new HarnessControlError(
-      "unsupported_capability",
-      "Flue tool approvals are not wired yet",
-    );
+  async resolveApproval(
+    _controlClient: unknown,
+    sessionId: string,
+    approvalId: string,
+    decision: "allow" | "deny",
+  ): Promise<void> {
+    this.approvals.resolve(sessionId, approvalId, decision);
   }
 
-  async listApprovals(): Promise<HarnessApprovalRequest[]> {
-    return [];
+  async listApprovals(
+    _controlClient: unknown,
+    sessionId: string,
+  ): Promise<HarnessApprovalRequest[]> {
+    return this.approvals.list(sessionId);
   }
 
   subscribeApprovalRequested(
     _controlClient: unknown,
-    _sessionId: string,
-    _handler: (approval: HarnessApprovalRequest) => void,
+    sessionId: string,
+    handler: (approval: HarnessApprovalRequest) => void,
   ): () => void {
-    return () => {};
+    return this.approvals.subscribeRequested(sessionId, handler);
   }
 
   subscribeApprovalResolved(
     _controlClient: unknown,
-    _handler: (resolution: HarnessApprovalResolution) => void,
+    handler: (resolution: HarnessApprovalResolution) => void,
   ): () => void {
-    return () => {};
+    return this.approvals.subscribeResolved(handler);
   }
 
   subscribeTurnState(
@@ -700,6 +707,7 @@ export class FlueHarnessAdapter implements HarnessAdapter {
           this.cfg.sessionStateStore,
           this.cfg.vaults,
           this.cfg.mcpConnector,
+          this.approvals,
         ));
     }
     return this.enginePromise;
@@ -752,6 +760,7 @@ class OptionalSdkFlueEngine implements FlueEngine {
     private readonly sessionStateStore: ManagedHarnessStateStore | undefined,
     private readonly vaults: Pick<VaultStore, "listCredentials"> | undefined,
     private readonly mcpConnector: FlueMcpConnector | undefined,
+    private readonly approvals: FlueApprovalBroker | undefined,
   ) {}
 
   async prompt(args: FlueEnginePromptArgs): Promise<FlueEnginePromptResult> {
@@ -784,6 +793,7 @@ class OptionalSdkFlueEngine implements FlueEngine {
       };
     } finally {
       ctx.setEventCallback(undefined);
+      this.approvals?.clearSession(args.sessionId);
       await mcp?.close();
     }
   }
@@ -888,6 +898,7 @@ class OptionalSdkFlueEngine implements FlueEngine {
         liveEvents.fail(err);
       } finally {
         ctx.setEventCallback(undefined);
+        this.approvals?.clearSession(args.sessionId);
         await mcp?.close();
       }
     })();
@@ -983,6 +994,7 @@ class OptionalSdkFlueEngine implements FlueEngine {
       };
     } finally {
       ctx.setEventCallback(undefined);
+      this.approvals?.clearSession(args.sessionId);
       await mcp?.close();
     }
   }
@@ -1107,6 +1119,7 @@ class OptionalSdkFlueEngine implements FlueEngine {
   private async connectMcpTools(args: {
     agent: AgentConfig;
     session?: Session;
+    sessionId: string;
     signal?: AbortSignal;
   }): Promise<FlueMcpScope> {
     let servers: AgentConfig["mcpServers"];
@@ -1123,7 +1136,11 @@ class OptionalSdkFlueEngine implements FlueEngine {
     const entries = Object.entries(servers ?? {});
     if (entries.length === 0) {
       return {
-        tools: applyFlueToolPolicy([], args.agent.permissionPolicy),
+        tools: applyFlueToolPolicy([], args.agent.permissionPolicy, {
+          approvals: this.approvals,
+          sessionId: args.sessionId,
+          signal: args.signal,
+        }),
         close: async () => {},
       };
     }
@@ -1147,6 +1164,11 @@ class OptionalSdkFlueEngine implements FlueEngine {
         tools: applyFlueToolPolicy(
           connections.flatMap((connection) => connection.tools),
           args.agent.permissionPolicy,
+          {
+            approvals: this.approvals,
+            sessionId: args.sessionId,
+            signal: args.signal,
+          },
         ),
         close: () => closeFlueMcpConnections(connections),
       };
@@ -1207,6 +1229,118 @@ export class FlueManagedSessionStore {
       sessionId: this.managedSessionId,
       key: id,
     });
+  }
+}
+
+type FluePendingApproval = {
+  approval: HarnessApprovalRequest;
+  resolve: (decision: "allow" | "deny") => void;
+  reject: (err: unknown) => void;
+  cleanup: () => void;
+};
+
+class FlueApprovalBroker {
+  private readonly pending = new Map<string, FluePendingApproval>();
+  private readonly requestedHandlers = new Map<
+    string,
+    Set<(approval: HarnessApprovalRequest) => void>
+  >();
+  private readonly resolvedHandlers = new Set<
+    (resolution: HarnessApprovalResolution) => void
+  >();
+
+  request(args: {
+    sessionId: string;
+    toolName: string;
+    args: Record<string, unknown>;
+    signal?: AbortSignal;
+  }): Promise<"allow" | "deny"> {
+    if (args.signal?.aborted) return Promise.reject(abortErrorFor(args.signal));
+    const approvalId = `ap_flue_${randomUUID()}`;
+    const approval: HarnessApprovalRequest = {
+      approvalId,
+      sessionId: args.sessionId,
+      toolName: args.toolName,
+      toolCallId: approvalId,
+      description: flueApprovalDescription(args.toolName, args.args),
+      arrivedAt: Date.now(),
+    };
+    return new Promise<"allow" | "deny">((resolve, reject) => {
+      const abort = () => {
+        this.pending.delete(approvalId);
+        reject(args.signal ? abortErrorFor(args.signal) : new Error("approval aborted"));
+      };
+      const cleanup = () => {
+        args.signal?.removeEventListener("abort", abort);
+      };
+      args.signal?.addEventListener("abort", abort, { once: true });
+      this.pending.set(approvalId, {
+        approval,
+        resolve,
+        reject,
+        cleanup,
+      });
+      for (const handler of this.requestedHandlers.get(args.sessionId) ?? []) {
+        handler(approval);
+      }
+    });
+  }
+
+  resolve(
+    sessionId: string,
+    approvalId: string,
+    decision: "allow" | "deny",
+  ): void {
+    const pending = this.pending.get(approvalId);
+    if (!pending || pending.approval.sessionId !== sessionId) {
+      throw new HarnessControlError(
+        "tool_approval_not_found",
+        `Flue approval ${approvalId} is not pending for session ${sessionId}`,
+      );
+    }
+    this.pending.delete(approvalId);
+    pending.cleanup();
+    pending.resolve(decision);
+    for (const handler of this.resolvedHandlers) {
+      handler({ approvalId, decision });
+    }
+  }
+
+  list(sessionId: string): HarnessApprovalRequest[] {
+    return [...this.pending.values()]
+      .map((entry) => entry.approval)
+      .filter((approval) => approval.sessionId === sessionId);
+  }
+
+  subscribeRequested(
+    sessionId: string,
+    handler: (approval: HarnessApprovalRequest) => void,
+  ): () => void {
+    const handlers = this.requestedHandlers.get(sessionId) ?? new Set();
+    handlers.add(handler);
+    this.requestedHandlers.set(sessionId, handlers);
+    return () => {
+      handlers.delete(handler);
+      if (handlers.size === 0) this.requestedHandlers.delete(sessionId);
+    };
+  }
+
+  subscribeResolved(
+    handler: (resolution: HarnessApprovalResolution) => void,
+  ): () => void {
+    this.resolvedHandlers.add(handler);
+    return () => {
+      this.resolvedHandlers.delete(handler);
+    };
+  }
+
+  clearSession(sessionId: string): void {
+    for (const [approvalId, pending] of [...this.pending.entries()]) {
+      if (pending.approval.sessionId !== sessionId) continue;
+      this.pending.delete(approvalId);
+      pending.cleanup();
+      pending.reject(new Error(`Flue session ${sessionId} ended before tool approval resolved`));
+    }
   }
 }
 
@@ -1351,12 +1485,6 @@ function validateFlueAgentConfig(
     agent.mcpServers,
   );
   if (permissionIssue) return permissionIssue;
-  if (agent.permissionPolicy.type === "always_ask") {
-    return {
-      capability: "tool_approvals",
-      detail: "Flue harness does not map OMA tool approvals to Flue tools yet",
-    };
-  }
   for (const [name, server] of Object.entries(agent.mcpServers ?? {})) {
     const detail = validateFlueMcpServerConfig(name, server);
     if (detail) return { capability: "mcp", detail };
@@ -1368,22 +1496,32 @@ function validateFluePermissionPolicy(
   policy: HarnessAgentConfigValidationInput["permissionPolicy"],
   mcpServers: HarnessAgentConfigValidationInput["mcpServers"],
 ): HarnessAgentConfigValidationIssue | undefined {
-  if (policy.type !== "deny") return undefined;
-  const unsupportedTools = policy.tools.filter((tool) => !isFlueMcpToolName(tool));
+  if (policy.type !== "deny" && policy.type !== "always_ask") return undefined;
+  if (policy.type === "always_ask" && !policy.tools) {
+    return {
+      capability: "tool_approvals",
+      detail:
+        "Flue approve-all policy is not supported; provide exact URL MCP tool names such as mcp__server__tool",
+    };
+  }
+  const tools = policy.type === "always_ask" ? (policy.tools ?? []) : policy.tools;
+  const capability = policy.type === "always_ask" ? "tool_approvals" : "permission_deny";
+  const action = policy.type === "always_ask" ? "approval" : "deny";
+  const unsupportedTools = tools.filter((tool) => !isFlueMcpToolName(tool));
   if (unsupportedTools.length > 0) {
     return {
-      capability: "permission_deny",
+      capability,
       detail: [
-        "Flue deny policy currently supports only exact URL MCP tool names such as",
+        `Flue ${action} policy currently supports only exact URL MCP tool names such as`,
         `mcp__server__tool; unsupported entries: ${unsupportedTools.join(", ")}`,
       ].join(" "),
     };
   }
   if (Object.keys(mcpServers ?? {}).length === 0) {
     return {
-      capability: "permission_deny",
+      capability,
       detail:
-        "Flue deny policy for MCP tools requires URL MCP servers on the agent; no MCP servers are configured",
+        `Flue ${action} policy for MCP tools requires URL MCP servers on the agent; no MCP servers are configured`,
     };
   }
   return undefined;
@@ -1392,14 +1530,46 @@ function validateFluePermissionPolicy(
 function applyFlueToolPolicy(
   tools: FlueToolDef[],
   policy: AgentConfig["permissionPolicy"],
+  args: {
+    approvals?: FlueApprovalBroker;
+    sessionId: string;
+    signal?: AbortSignal;
+  },
 ): FlueToolDef[] {
-  if (policy.type !== "deny") return tools;
+  if (policy.type !== "deny" && policy.type !== "always_ask") return tools;
   const exposed = new Set(tools.map((tool) => tool.name));
-  const missing = policy.tools.filter((tool) => !exposed.has(tool));
+  const requested = policy.type === "always_ask" ? (policy.tools ?? []) : policy.tools;
+  const missing = requested.filter((tool) => !exposed.has(tool));
   if (missing.length > 0) {
     throw new HarnessInvocationError(
-      `Flue deny policy targets MCP tools that were not exposed by connected URL MCP servers: ${missing.join(", ")}`,
+      `Flue ${policy.type === "always_ask" ? "approval" : "deny"} policy targets MCP tools that were not exposed by connected URL MCP servers: ${missing.join(", ")}`,
     );
+  }
+  if (policy.type === "always_ask") {
+    if (!args.approvals) {
+      throw new HarnessInvocationError("Flue approval policy requires an OMA approval broker");
+    }
+    const approvals = args.approvals;
+    const approvalRequired = new Set(requested);
+    return tools.map((tool) => {
+      if (!approvalRequired.has(tool.name)) return tool;
+      return {
+        ...tool,
+        execute: async (params, signal) => {
+          const approvalSignal = signal ?? args.signal;
+          const decision = await approvals.request({
+            sessionId: args.sessionId,
+            toolName: tool.name,
+            args: params,
+            signal: approvalSignal,
+          });
+          if (decision !== "allow") {
+            throw new Error(`OMA denied Flue MCP tool ${tool.name}`);
+          }
+          return await tool.execute(params, signal);
+        },
+      };
+    });
   }
   const denied = new Set(policy.tools);
   return tools.filter((tool) => !denied.has(tool.name));
@@ -1407,6 +1577,15 @@ function applyFlueToolPolicy(
 
 function isFlueMcpToolName(name: string): boolean {
   return name.startsWith("mcp__");
+}
+
+function flueApprovalDescription(
+  toolName: string,
+  args: Record<string, unknown>,
+): string {
+  const serialized = JSON.stringify(args);
+  const suffix = serialized && serialized !== "{}" ? ` with ${serialized}` : "";
+  return `Flue MCP tool ${toolName}${suffix}`;
 }
 
 function validateFlueMcpServerConfig(

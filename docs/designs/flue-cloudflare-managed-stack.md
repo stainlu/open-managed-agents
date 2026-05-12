@@ -229,8 +229,9 @@ Done in OMA:
   native `AbortSignal` path, persists Flue session data through OMA-managed
   harness state, connects URL-based MCP servers through Flue's MCP client with
   OMA vault bearer injection, enforces exact deny policy for those Flue MCP
+  tool names, enforces exact `always_ask` approval gates for those Flue MCP
   tool names, and fails loudly for unsupported OMA tool mapping, stdio MCP,
-  built-in Flue tool policy, and approval semantics.
+  approve-all policy, and built-in Flue tool policy.
   Local and D1-compatible stores both exist for the same harness-state contract;
   the Cloudflare stack uses the D1-compatible placement.
 
@@ -244,8 +245,8 @@ Still open:
 
 - `ManagedEventLog.stateRoot` still exists as an optional legacy local-Docker
   escape hatch.
-- The Flue harness driver still does not map stdio MCP, tool approvals, built-in
-  Flue tool deny policy, or first-class OMA child sessions for Flue tasks.
+- The Flue harness driver still does not map stdio MCP, approve-all policy,
+  built-in Flue tool deny/approval policy, or first-class OMA child sessions for Flue tasks.
   Current Flue task and operation telemetry is preserved as structured nested
   run events, direct Flue task and shell operations can be executed and mapped,
   but Flue tasks are not promoted to managed child sessions yet.
@@ -515,6 +516,9 @@ workspace ids into the public session identity.
      configs instead of silently ignoring them.
    - [x] Enforce exact deny policy for URL-MCP tools that OMA wires into Flue
      without claiming built-in Flue tool policy or approval parity.
+   - [x] Enforce exact `always_ask` approval gates for URL-MCP tools that OMA
+     wires into Flue, including native router approval resolution without a
+     container control client.
    - Decide when Flue task lineage should graduate from an observable run tree
      to OMA child sessions with real lifecycle control.
 

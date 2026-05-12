@@ -436,7 +436,7 @@ export class AgentRouter {
     controlClient: unknown,
   ): Promise<void> {
     const existing = this.approvalSubscriptions.get(sessionId);
-    if (existing?.controlClient === controlClient) {
+    if (existing && existing.controlClient === controlClient) {
       await this.syncPendingApprovals(sessionId, controlClient);
       return;
     }
@@ -967,9 +967,11 @@ export class AgentRouter {
         });
       }
 
-      if (usesContainerRuntime && agent.permissionPolicy.type === "always_ask") {
-        const controlClient = this.pool.getControlClient(args.sessionId);
-        if (controlClient) {
+      if (agent.permissionPolicy.type === "always_ask") {
+        const controlClient = usesContainerRuntime
+          ? this.pool.getControlClient(args.sessionId)
+          : undefined;
+        if (!usesContainerRuntime || controlClient) {
           await this.ensureApprovalSubscriptions(args.sessionId, controlClient);
         }
       }
@@ -1462,8 +1464,9 @@ export class AgentRouter {
   ): Promise<void> {
     const harness = this.harnessForSessionId(sessionId);
     this.assertHarnessCapability(harness, "tool_approvals");
+    const usesContainerRuntime = harnessUsesContainerRuntime(harness);
     const controlClient = this.pool.getControlClient(sessionId);
-    if (!controlClient) {
+    if (usesContainerRuntime && !controlClient) {
       throw new RouterError(
         "no_active_container",
         `session ${sessionId} has no live container for tool confirmation`,
@@ -1658,6 +1661,10 @@ export class AgentRouter {
         log.info({ session_id: sessionId }, "acquire completed but session was cancelled during it — aborting");
         return;
       }
+    }
+
+    if (!usesContainerRuntime && agent.permissionPolicy.type === "always_ask") {
+      await this.ensureApprovalSubscriptions(sessionId, undefined);
     }
 
     log.info(
