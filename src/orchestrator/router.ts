@@ -1802,12 +1802,22 @@ export class AgentRouter {
 
     let finalized = false;
     let unsubscribe: (() => void) | undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     const handleFinal = async (outcome: StreamOutcome): Promise<void> => {
       if (finalized) return;
       finalized = true;
+      if (timeout) clearTimeout(timeout);
       unsubscribe?.();
       await this.finalizeFromJsonl(sessionId, agent, outcome);
     };
+
+    timeout = setTimeout(() => {
+      void handleFinal({
+        ok: false,
+        error: `adopted session timed out after ${this.cfg.runTimeoutMs}ms`,
+      });
+    }, this.cfg.runTimeoutMs);
+    timeout.unref?.();
 
     // Subscribe BEFORE the fast-path check so an event that fires during
     // the check still lands on us. `unsubscribe` guards against double-fire.

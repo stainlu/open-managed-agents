@@ -39,6 +39,7 @@ function makeRouter(opts: {
   capabilityOverrides?: Partial<HarnessCapabilities>;
   extraHarnesses?: HarnessAdapter[];
   runScheduler?: ManagedRunScheduler;
+  runTimeoutMs?: number;
 } = {}): {
   router: AgentRouter;
   store: InMemoryStore;
@@ -80,7 +81,7 @@ function makeRouter(opts: {
   }
   const cfg: RouterConfig = {
     passthroughEnv: opts.passthroughEnv ?? {},
-    runTimeoutMs: 60_000,
+    runTimeoutMs: opts.runTimeoutMs ?? 60_000,
     harnesses: new HarnessRegistry({ adapters: [harness, ...(opts.extraHarnesses ?? [])] }),
     runScheduler: opts.runScheduler,
   };
@@ -1521,6 +1522,52 @@ describe("AgentRouter native harness runtime", () => {
       "evt_live_user",
       "evt_live_agent",
     ]);
+  });
+});
+
+describe("AgentRouter.observeAdoptedSession", () => {
+  it("times out an adopted inflight session that never emits a terminal event", async () => {
+    vi.useFakeTimers();
+    try {
+      const evicted: string[] = [];
+      const latestAgentOutcome = vi.fn(async () => undefined);
+      const { router, store } = makeRouter({
+        runTimeoutMs: 10,
+        poolStub: {
+          getControlClient: () => undefined,
+          evictSession: async (sessionId) => {
+            evicted.push(sessionId);
+          },
+        },
+        eventReaderStub: {
+          stateRoot: "/tmp/test-state",
+          latestAgentOutcome,
+        },
+      });
+      const agent = store.agents.create({
+        model: "m",
+        tools: [],
+        instructions: "",
+        permissionPolicy: { type: "always_allow" },
+        callableAgents: [],
+        maxSubagentDepth: 0,
+      });
+      const session = router.createSession(agent.agentId);
+      store.sessions.markRunning(session.sessionId);
+
+      await router.observeAdoptedSession(session.sessionId);
+      expect(store.sessions.get(session.sessionId)?.status).toBe("running");
+
+      await vi.advanceTimersByTimeAsync(10);
+
+      const finished = store.sessions.get(session.sessionId);
+      expect(finished?.status).toBe("failed");
+      expect(finished?.error).toMatch(/adopted session timed out/);
+      expect(evicted).toEqual([session.sessionId]);
+      expect(latestAgentOutcome).toHaveBeenCalledWith(agent.agentId, session.sessionId);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
