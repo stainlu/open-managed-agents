@@ -157,6 +157,12 @@ Done in OMA:
   operation events appear as run-tree children and remain queryable by
   `parent_run_id`. This proves the managed projection, not yet a live
   sandbox-backed Flue task promotion proof.
+- The native Flue SDK bridge can now mount OMA's `ManagedWorkspace` as the
+  Flue `SessionEnv`. In the Cloudflare stack, Flue context discovery reads the
+  same R2-compatible workspace that OMA exposes over the public workspace API:
+  existing `AGENTS.md`, `.agents/skills/`, and project files are visible to
+  Flue, and OMA instructions seed `AGENTS.md` only when the workspace does not
+  already provide one.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
 - Harness adapters now declare a runtime mode. Existing adapters remain
@@ -434,6 +440,9 @@ workspace ids into the public session identity.
    - [x] Add a read-only run-tree projection over nested run events.
    - [x] Add local Cloudflare Durable Object coverage for Flue task/operation
      lineage through run-tree and `parent_run_id` event filters.
+   - [x] Mount OMA's managed workspace into the real Flue SDK context so
+     Cloudflare/R2 workspace files, `AGENTS.md`, and skills are the harness
+     filesystem seen by Flue.
    - Decide when Flue task lineage should graduate from an observable run tree
      to OMA child sessions with real lifecycle control.
 

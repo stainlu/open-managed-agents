@@ -3,6 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { AgentConfig, Event, Session } from "../orchestrator/types.js";
 import { HarnessInvocationError } from "./types.js";
 import type { ManagedHarnessStateStore } from "./state-store.js";
+import type {
+  ManagedWorkspace,
+  WorkspaceEntry,
+  WorkspaceWriteResult,
+} from "../workspace/types.js";
+import { WorkspaceError } from "../workspace/types.js";
 import {
   deriveFlueProviderConfigFromEnv,
   FlueHarnessAdapter,
@@ -252,6 +258,77 @@ describe("FlueHarnessAdapter", () => {
     expect(sessionEntryCount(saves.at(-1)?.value)).toBeGreaterThan(
       sessionEntryCount(firstPersisted),
     );
+  });
+
+  it("mounts the OMA managed workspace into the real Flue SDK context", async () => {
+    const workspace = new InMemoryManagedWorkspace({
+      "AGENTS.md": "Workspace-specific instructions.",
+      "README.md": "# Workspace Project",
+      ".agents/skills/review/SKILL.md": [
+        "---",
+        "name: review",
+        "description: Review code carefully",
+        "---",
+        "Review the workspace.",
+      ].join("\n"),
+    });
+    let requestPayload = "";
+    const run = vi.fn(async (_model, payload) => {
+      requestPayload = JSON.stringify(payload);
+      return cloudflareTextResponse("ok");
+    });
+    const adapter = new FlueHarnessAdapter({
+      cloudflareAiBinding: { run },
+      cloudflareAiProviderPrefix: "cloudflare-workspace-test",
+      workspace,
+    });
+
+    await adapter.invokeTurn({
+      content: "hello",
+      sessionId: "ses_workspace",
+      timeoutMs: 60_000,
+      agent: agent({
+        model: "cloudflare-workspace-test/@cf/openai/gpt-oss-20b",
+        instructions: "Fallback OMA instructions.",
+      }),
+    });
+
+    expect(requestPayload).toContain("Workspace-specific instructions.");
+    expect(requestPayload).toContain("README.md");
+    expect(requestPayload).toContain("review");
+    expect(requestPayload).not.toContain("Fallback OMA instructions.");
+    await expect(workspace.readFile("agt_flue", "ses_workspace", "AGENTS.md"))
+      .resolves.toEqual(Buffer.from("Workspace-specific instructions."));
+  });
+
+  it("seeds OMA instructions into the managed Flue workspace when AGENTS.md is absent", async () => {
+    const workspace = new InMemoryManagedWorkspace({
+      "README.md": "# Empty Project",
+    });
+    let requestPayload = "";
+    const run = vi.fn(async (_model, payload) => {
+      requestPayload = JSON.stringify(payload);
+      return cloudflareTextResponse("ok");
+    });
+    const adapter = new FlueHarnessAdapter({
+      cloudflareAiBinding: { run },
+      cloudflareAiProviderPrefix: "cloudflare-seeded-workspace-test",
+      workspace,
+    });
+
+    await adapter.invokeTurn({
+      content: "hello",
+      sessionId: "ses_seeded_workspace",
+      timeoutMs: 60_000,
+      agent: agent({
+        model: "cloudflare-seeded-workspace-test/@cf/openai/gpt-oss-20b",
+        instructions: "OMA managed instructions.",
+      }),
+    });
+
+    expect(requestPayload).toContain("OMA managed instructions.");
+    await expect(workspace.readFile("agt_flue", "ses_seeded_workspace", "AGENTS.md"))
+      .resolves.toEqual(Buffer.from("OMA managed instructions."));
   });
 
   it("runs prompt turns through an injected native Flue engine", async () => {
@@ -675,4 +752,135 @@ function sessionEntryCount(value: unknown): number {
   if (!value || typeof value !== "object") return 0;
   const entries = (value as { entries?: unknown }).entries;
   return Array.isArray(entries) ? entries.length : 0;
+}
+
+function cloudflareTextResponse(text: string): Response {
+  return new Response([
+    `data: ${JSON.stringify({
+      id: "chatcmpl_fake_workspace",
+      model: "@cf/openai/gpt-oss-20b",
+      choices: [{ delta: { content: text }, finish_reason: null }],
+    })}`,
+    "",
+    `data: ${JSON.stringify({
+      id: "chatcmpl_fake_workspace",
+      model: "@cf/openai/gpt-oss-20b",
+      choices: [{ delta: {}, finish_reason: "stop" }],
+      usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+    })}`,
+    "",
+    "data: [DONE]",
+    "",
+  ].join("\n"), {
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+class InMemoryManagedWorkspace implements ManagedWorkspace {
+  private readonly files = new Map<string, Buffer>();
+
+  constructor(files: Record<string, string | Buffer> = {}) {
+    for (const [path, content] of Object.entries(files)) {
+      this.files.set(normalizeWorkspacePath(path, { allowRoot: false }), Buffer.from(content));
+    }
+  }
+
+  async listFiles(
+    _agentId: string,
+    _sessionId: string,
+    relPath = "",
+  ): Promise<WorkspaceEntry[]> {
+    const root = normalizeWorkspacePath(relPath, { allowRoot: true });
+    const prefix = root ? `${root}/` : "";
+    const exact = this.files.get(root);
+    if (exact && root) {
+      throw new WorkspaceError("invalid_path", `not a directory: ${root}`);
+    }
+
+    const entries = new Map<string, WorkspaceEntry>();
+    for (const [filePath, content] of this.files.entries()) {
+      if (!filePath.startsWith(prefix)) continue;
+      const rest = filePath.slice(prefix.length);
+      if (!rest) continue;
+      const [name, ...nested] = rest.split("/");
+      if (!name) continue;
+      const path = root ? `${root}/${name}` : name;
+      if (nested.length > 0) {
+        entries.set(name, {
+          name,
+          path,
+          type: "dir",
+          size: 0,
+          mtime: 1,
+        });
+        continue;
+      }
+      if (!entries.has(name)) {
+        entries.set(name, {
+          name,
+          path,
+          type: "file",
+          size: content.byteLength,
+          mtime: 1,
+        });
+      }
+    }
+    if (entries.size === 0 && root) {
+      throw new WorkspaceError("file_not_found", `workspace path not found: ${root}`);
+    }
+    return [...entries.values()].sort((a, b) => (
+      a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1
+    ));
+  }
+
+  async readFile(
+    _agentId: string,
+    _sessionId: string,
+    relPath: string,
+    opts: { maxBytes?: number } = {},
+  ): Promise<Buffer> {
+    const normalized = normalizeWorkspacePath(relPath, { allowRoot: false });
+    const content = this.files.get(normalized);
+    if (!content) throw new WorkspaceError("file_not_found", `file not found: ${normalized}`);
+    const maxBytes = opts.maxBytes ?? content.byteLength;
+    return content.subarray(0, maxBytes);
+  }
+
+  async writeFile(
+    _agentId: string,
+    _sessionId: string,
+    relPath: string,
+    content: Buffer,
+  ): Promise<WorkspaceWriteResult> {
+    const normalized = normalizeWorkspacePath(relPath, { allowRoot: false });
+    this.files.set(normalized, Buffer.from(content));
+    return { path: normalized, size: content.byteLength };
+  }
+
+  async deleteFile(_agentId: string, _sessionId: string, relPath: string): Promise<void> {
+    const normalized = normalizeWorkspacePath(relPath, { allowRoot: false });
+    if (!this.files.delete(normalized)) {
+      throw new WorkspaceError("file_not_found", `file not found: ${normalized}`);
+    }
+  }
+}
+
+function normalizeWorkspacePath(
+  path: string,
+  opts: { allowRoot: boolean },
+): string {
+  const parts = path
+    .replace(/^\/+/, "")
+    .split(/[\\/]+/)
+    .filter((part) => part && part !== ".");
+  for (const part of parts) {
+    if (part === ".." || part.includes("\0")) {
+      throw new WorkspaceError("invalid_path", "invalid workspace path");
+    }
+  }
+  const normalized = parts.join("/");
+  if (!opts.allowRoot && !normalized) {
+    throw new WorkspaceError("invalid_path", "refusing workspace root");
+  }
+  return normalized;
 }

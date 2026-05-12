@@ -92,6 +92,7 @@ export function createCloudflareFlueStack(
     cloudflareAiBinding: opts.cloudflareAiBinding,
     cloudflareAiGateway: opts.cloudflareAiGateway,
     cloudflareAiProviderPrefix: opts.cloudflareAiProviderPrefix,
+    workspace,
     sessionStateStore: harnessState,
     engine: opts.flueEngine,
     loadEngine: opts.loadFlueEngine,

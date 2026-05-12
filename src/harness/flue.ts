@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { AgentConfig, Event, Session } from "../orchestrator/types.js";
+import {
+  WorkspaceError,
+  type ManagedWorkspace,
+  type WorkspaceEntry,
+} from "../workspace/types.js";
 import type {
   HarnessAdapter,
   HarnessApprovalRequest,
@@ -72,6 +77,8 @@ export type FlueHarnessAdapterConfig = {
   cloudflareAiBinding?: CloudflareAIBindingLike;
   cloudflareAiGateway?: Record<string, unknown>;
   cloudflareAiProviderPrefix?: string;
+  workspace?: ManagedWorkspace;
+  workspaceCwd?: string;
   sessionStateStore?: ManagedHarnessStateStore;
   engine?: FlueEngine;
   loadEngine?: () => Promise<FlueEngine>;
@@ -437,6 +444,8 @@ export class FlueHarnessAdapter implements HarnessAdapter {
               providerPrefix: this.cfg.cloudflareAiProviderPrefix,
             }
             : undefined,
+          this.cfg.workspace,
+          this.cfg.workspaceCwd,
           this.cfg.sessionStateStore,
         ));
     }
@@ -484,6 +493,8 @@ class OptionalSdkFlueEngine implements FlueEngine {
     private readonly passthroughEnv: Record<string, string>,
     private readonly providerConfig: FlueProviderConfig | undefined,
     private readonly cloudflareAi: FlueCloudflareAIBindingConfig | undefined,
+    private readonly workspace: ManagedWorkspace | undefined,
+    private readonly workspaceCwd: string | undefined,
     private readonly sessionStateStore: ManagedHarnessStateStore | undefined,
   ) {}
 
@@ -630,7 +641,15 @@ class OptionalSdkFlueEngine implements FlueEngine {
     await this.configureProviders();
     const internal = await this.loadInternal();
     const store = await this.loadStore(internal, args);
-    const env = new MemorySessionEnv(args.agent.instructions);
+    const env = this.workspace
+      ? await ManagedWorkspaceSessionEnv.create({
+        workspace: this.workspace,
+        agentId: args.agent.agentId,
+        sessionId: args.sessionId,
+        cwd: this.workspaceCwd,
+        instructions: args.agent.instructions,
+      })
+      : new MemorySessionEnv(args.agent.instructions);
     return internal.createFlueContext({
       id: args.agent.agentId,
       runId: args.runId ?? createFallbackRunId(),
@@ -866,6 +885,200 @@ function validateFlueCloudflareModule(mod: unknown): FlueCloudflareModule {
     throw new Error("@flue/sdk/cloudflare did not expose getCloudflareAIBindingApiProvider()");
   }
   return candidate as FlueCloudflareModule;
+}
+
+class ManagedWorkspaceSessionEnv {
+  readonly cwd: string;
+
+  private constructor(
+    private readonly workspace: ManagedWorkspace,
+    private readonly agentId: string,
+    private readonly sessionId: string,
+    cwd: string | undefined,
+  ) {
+    this.cwd = normalizeWorkspaceCwd(cwd);
+  }
+
+  static async create(args: {
+    workspace: ManagedWorkspace;
+    agentId: string;
+    sessionId: string;
+    cwd?: string;
+    instructions: string;
+  }): Promise<ManagedWorkspaceSessionEnv> {
+    const env = new ManagedWorkspaceSessionEnv(
+      args.workspace,
+      args.agentId,
+      args.sessionId,
+      args.cwd,
+    );
+    await env.seedInstructions(args.instructions);
+    return env;
+  }
+
+  async exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    return {
+      stdout: "",
+      stderr: `Shell execution is disabled in OMA's managed Flue workspace. Command was: ${command}`,
+      exitCode: 126,
+    };
+  }
+
+  async readFile(path: string): Promise<string> {
+    const data = await this.readFileBuffer(path);
+    return new TextDecoder().decode(data);
+  }
+
+  async readFileBuffer(path: string): Promise<Uint8Array> {
+    const relPath = this.toWorkspaceRelPath(path, { allowRoot: false });
+    return await this.workspace.readFile(this.agentId, this.sessionId, relPath);
+  }
+
+  async writeFile(path: string, content: string | Uint8Array): Promise<void> {
+    const relPath = this.toWorkspaceRelPath(path, { allowRoot: false });
+    const data = typeof content === "string" ? Buffer.from(content) : Buffer.from(content);
+    await this.workspace.writeFile(this.agentId, this.sessionId, relPath, data);
+  }
+
+  async stat(path: string): Promise<{
+    isFile: boolean;
+    isDirectory: boolean;
+    isSymbolicLink: boolean;
+    size: number;
+    mtime: Date;
+  }> {
+    const relPath = this.toWorkspaceRelPath(path, { allowRoot: true });
+    if (relPath) {
+      const entry = await this.findEntry(relPath);
+      if (entry?.type === "file") {
+        return {
+          isFile: true,
+          isDirectory: false,
+          isSymbolicLink: false,
+          size: entry.size,
+          mtime: new Date(entry.mtime),
+        };
+      }
+      if (!entry) {
+        throw new WorkspaceError("file_not_found", `workspace path not found: ${relPath}`);
+      }
+    }
+
+    const entries = await this.workspace.listFiles(this.agentId, this.sessionId, relPath);
+    return {
+      isFile: false,
+      isDirectory: true,
+      isSymbolicLink: false,
+      size: 0,
+      mtime: new Date(latestWorkspaceMtime(entries)),
+    };
+  }
+
+  async readdir(path: string): Promise<string[]> {
+    const relPath = this.toWorkspaceRelPath(path, { allowRoot: true });
+    const entries = await this.workspace.listFiles(this.agentId, this.sessionId, relPath);
+    return entries.map((entry) => entry.name).sort();
+  }
+
+  async exists(path: string): Promise<boolean> {
+    try {
+      await this.stat(path);
+      return true;
+    } catch (err) {
+      if (isWorkspaceNotFound(err) || isInvalidWorkspacePath(err)) return false;
+      throw err;
+    }
+  }
+
+  async mkdir(path: string, options?: { recursive?: boolean }): Promise<void> {
+    this.toWorkspaceRelPath(path, { allowRoot: true });
+    if (options?.recursive) return;
+    const parent = dirname(this.resolvePath(path));
+    if (!await this.exists(parent)) {
+      throw new Error(`parent directory missing: ${parent}`);
+    }
+  }
+
+  async rm(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<void> {
+    const relPath = this.toWorkspaceRelPath(path, { allowRoot: false });
+    try {
+      await this.workspace.deleteFile(this.agentId, this.sessionId, relPath);
+      return;
+    } catch (err) {
+      if (isWorkspaceNotFound(err)) {
+        if (options?.force) return;
+        throw err;
+      }
+      if (!isInvalidWorkspacePath(err)) throw err;
+    }
+
+    if (!options?.recursive) {
+      throw new WorkspaceError("invalid_path", `not a file: ${relPath}`);
+    }
+    await this.deleteTree(relPath);
+  }
+
+  resolvePath(path: string): string {
+    if (path.startsWith("/")) return normalizePath(path);
+    return normalizePath(`${this.cwd}/${path}`);
+  }
+
+  private async seedInstructions(instructions: string): Promise<void> {
+    if (!instructions.trim()) return;
+    const agentsPath = "AGENTS.md";
+    try {
+      await this.workspace.readFile(this.agentId, this.sessionId, agentsPath, { maxBytes: 1 });
+      return;
+    } catch (err) {
+      if (!isWorkspaceNotFound(err)) throw err;
+    }
+    await this.workspace.writeFile(
+      this.agentId,
+      this.sessionId,
+      agentsPath,
+      Buffer.from(instructions),
+    );
+  }
+
+  private async deleteTree(relPath: string): Promise<void> {
+    const entries = await this.workspace.listFiles(this.agentId, this.sessionId, relPath);
+    for (const entry of entries) {
+      if (entry.type === "dir") {
+        await this.deleteTree(entry.path);
+      } else {
+        await this.workspace.deleteFile(this.agentId, this.sessionId, entry.path);
+      }
+    }
+  }
+
+  private async findEntry(relPath: string): Promise<WorkspaceEntry | undefined> {
+    const idx = relPath.lastIndexOf("/");
+    const parent = idx === -1 ? "" : relPath.slice(0, idx);
+    const name = idx === -1 ? relPath : relPath.slice(idx + 1);
+    try {
+      const entries = await this.workspace.listFiles(this.agentId, this.sessionId, parent);
+      return entries.find((entry) => entry.name === name);
+    } catch (err) {
+      if (isWorkspaceNotFound(err)) return undefined;
+      throw err;
+    }
+  }
+
+  private toWorkspaceRelPath(
+    path: string,
+    opts: { allowRoot: boolean },
+  ): string {
+    const absolute = this.resolvePath(path);
+    if (absolute === this.cwd) {
+      if (opts.allowRoot) return "";
+      throw new WorkspaceError("invalid_path", "refusing to target workspace root");
+    }
+    const prefix = `${this.cwd}/`;
+    if (!absolute.startsWith(prefix)) {
+      throw new WorkspaceError("invalid_path", `path outside managed workspace: ${absolute}`);
+    }
+    return absolute.slice(prefix.length);
+  }
 }
 
 class MemorySessionEnv {
@@ -1488,6 +1701,23 @@ function finiteTokenCount(value: unknown): number {
 function finiteNumber(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
   return value;
+}
+
+function isWorkspaceNotFound(err: unknown): boolean {
+  return err instanceof WorkspaceError && err.code === "file_not_found";
+}
+
+function isInvalidWorkspacePath(err: unknown): boolean {
+  return err instanceof WorkspaceError && err.code === "invalid_path";
+}
+
+function latestWorkspaceMtime(entries: WorkspaceEntry[]): number {
+  return entries.reduce((latest, entry) => Math.max(latest, entry.mtime), 0);
+}
+
+function normalizeWorkspaceCwd(cwd: string | undefined): string {
+  const normalized = normalizePath(cwd?.trim() || "/workspace");
+  return normalized === "/" ? "/workspace" : normalized;
 }
 
 function normalizePath(path: string): string {
