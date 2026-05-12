@@ -1611,6 +1611,56 @@ describe("AgentRouter.runEvent — JSONL advancement guarantees", () => {
     });
   }
 
+  it("bypasses warm-pool claim for delegating agents at acquire time", async () => {
+    vi.stubEnv("OPENCLAW_TURN_ADVANCE_WAIT_MS", "0");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { content: "done" } }],
+            usage: { prompt_tokens: 1, completion_tokens: 1 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    const acquireArgs: Array<{ bypassWarmPool?: boolean }> = [];
+    const fakeEvents = {
+      stateRoot: "/tmp/test-state",
+      countUserTurns: vi.fn(() => 0),
+      latestAgentOutcome: vi.fn(() => undefined),
+      latestAgentMessage: vi.fn(() => undefined),
+    };
+    const { router, store } = makeRouter({
+      poolStub: {
+        acquireForSession: async (
+          args: Parameters<ManagedSessionRuntime["acquireForSession"]>[0],
+        ) => {
+          acquireArgs.push({ bypassWarmPool: args.bypassWarmPool });
+          return { baseUrl: "http://container.test", token: "tok" } as any;
+        },
+        evictSession: async () => {},
+      },
+      eventReaderStub: fakeEvents as unknown as ManagedEventLog,
+    });
+    const agent = store.agents.create({
+      model: "m",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: ["agt_child"],
+      maxSubagentDepth: 1,
+    });
+    const session = router.createSession(agent.agentId);
+
+    await router.runEvent({ sessionId: session.sessionId, content: "delegate" });
+    await waitForCondition("pool acquire", () => acquireArgs.length === 1);
+
+    expect(acquireArgs[0]?.bypassWarmPool).toBe(true);
+    await waitForSessionToStopRunning(store, session.sessionId);
+  });
+
   it("fails the turn when chat.completions returns 200 but no new JSONL events were written", async () => {
     vi.stubEnv("OPENCLAW_TURN_ADVANCE_WAIT_MS", "0");
     vi.stubGlobal(

@@ -1506,12 +1506,18 @@ export class AgentRouter {
   /**
    * Warm-pool entries are keyed only by agent template. Any session whose
    * container boot depends on session-specific inputs must bypass warm
-   * reuse and cold-spawn its own container.
+   * reuse and cold-spawn its own container. Delegating agents are also
+   * forced cold because the parent token baked into a warm container would
+   * otherwise carry the placeholder warm session id into child-session
+   * lineage if the template changed between warm creation and claim.
    */
   private shouldBypassWarmPool(
     session: Session | undefined,
     agent?: AgentConfig,
   ): boolean {
+    if (agent && (agent.callableAgents.length > 0 || agent.maxSubagentDepth > 0)) {
+      return true;
+    }
     const harness = session
       ? this.harnessForSession(session)
       : agent
