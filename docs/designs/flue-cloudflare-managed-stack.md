@@ -144,6 +144,9 @@ Done in OMA:
   API against both active Flue prompt runs and queued Flue runs. Active abort
   reaches Flue's `AbortSignal`; queued abort removes only the queued run and
   leaves the active prompt running.
+- Local Cloudflare/Flue Durable Object coverage now proves queued Flue turns
+  drain correctly after the active prompt completes: the queued turn becomes a
+  second succeeded managed run and its events remain inspectable by `run_id`.
 - Local Cloudflare/Flue Durable Object coverage now proves restart replay over
   the same platform bindings: session metadata and managed run records survive
   in DO SQLite, run events survive in the D1-compatible event log, run-tree
@@ -449,6 +452,8 @@ workspace ids into the public session identity.
      routes.
    - [x] Add local Durable Object coverage for active and queued Flue run abort
      through the public run API.
+   - [x] Add local Durable Object coverage for queued Flue turn execution after
+     the active prompt completes.
    - [x] Add local Durable Object restart coverage for session, run, event, and
      run-tree replay over the same DO SQLite, D1-compatible, and R2-compatible
      bindings.

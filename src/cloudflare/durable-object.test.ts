@@ -580,6 +580,106 @@ describe("ConfigurableCloudflareFlueDurableObject", () => {
     }
   });
 
+  it("drains queued Flue runs after the active prompt completes", async () => {
+    const doBacking = new Database(join(tmpDir, "metadata.db"));
+    const doStorage = new FakeDurableObjectStorage(doBacking);
+    const { db, close } = sqliteD1();
+    const promptStarted = deferred<void>();
+    const finishActivePrompt = deferred<Awaited<ReturnType<FlueEngine["prompt"]>>>();
+    let promptCalls = 0;
+
+    try {
+      const object = new TestConfigurableFlueObject(
+        { storage: doStorage },
+        {
+          db,
+          workspace: new FakeR2Bucket(),
+          internalToken: "secret",
+          prompt: (args) => {
+            promptCalls += 1;
+            if (promptCalls === 1) {
+              promptStarted.resolve();
+              return finishActivePrompt.promise;
+            }
+            return Promise.resolve({
+              text: `queued:${args.content}`,
+              usage: { input: 4, output: 6 },
+              model: args.model ?? args.agent.model,
+            });
+          },
+        },
+      );
+
+      const created = await object.fetch(new Request("https://oma.example/v1/agents", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          harnessId: "flue",
+          model: "test/model",
+          instructions: "be useful",
+        }),
+      }));
+      expect(created.status).toBe(200);
+      const agent = await created.json() as { agent_id: string };
+
+      const run = await object.fetch(new Request(
+        `https://oma.example/v1/agents/${agent.agent_id}/run`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ task: "active work" }),
+        },
+      ));
+      expect(run.status).toBe(200);
+      const active = await run.json() as { session_id: string; run_id: string };
+      await promptStarted.promise;
+
+      const queued = await object.fetch(new Request(
+        `https://oma.example/v1/sessions/${active.session_id}/events`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ type: "user.message", content: "queued work" }),
+        },
+      ));
+      expect(queued.status).toBe(200);
+      const queuedBody = await queued.json() as { run_id: string; queued: boolean };
+      expect(queuedBody.queued).toBe(true);
+
+      finishActivePrompt.resolve({
+        text: "active done",
+        usage: { input: 2, output: 3 },
+        model: "test/model",
+      });
+      await waitForSessionTurns(object, active.session_id, 2);
+
+      expect(promptCalls).toBe(2);
+      const runs = await object.fetch(new Request(
+        `https://oma.example/v1/sessions/${active.session_id}/runs`,
+      ));
+      await expect(runs.json()).resolves.toMatchObject({
+        runs: [
+          { run_id: active.run_id, status: "succeeded" },
+          { run_id: queuedBody.run_id, status: "succeeded" },
+        ],
+      });
+
+      const queuedEvents = await object.fetch(new Request(
+        `https://oma.example/v1/sessions/${active.session_id}/events?run_id=${queuedBody.run_id}`,
+      ));
+      await expect(queuedEvents.json()).resolves.toMatchObject({
+        count: 2,
+        events: [
+          { type: "user.message", content: "queued work", run_id: queuedBody.run_id },
+          { type: "agent.message", content: "queued:queued work", run_id: queuedBody.run_id },
+        ],
+      });
+    } finally {
+      close();
+      doBacking.close();
+    }
+  });
+
   it("keeps Workflow re-entry available for custom Flue composition", async () => {
     const doBacking = new Database(join(tmpDir, "metadata.db"));
     const doStorage = new FakeDurableObjectStorage(doBacking);
@@ -872,6 +972,27 @@ async function waitForSessionHttpToStopRunning(
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error(`session ${sessionId} stayed inflight`);
+}
+
+async function waitForSessionTurns(
+  object: { fetch(request: Request): Response | Promise<Response> },
+  sessionId: string,
+  turns: number,
+): Promise<void> {
+  const deadline = Date.now() + 500;
+  let last: unknown;
+  while (Date.now() < deadline) {
+    const response = await object.fetch(new Request(
+      `https://oma.example/v1/sessions/${sessionId}`,
+    ));
+    const body = await response.json() as { turns?: number; status?: string };
+    last = body;
+    if (body.turns === turns && body.status !== "starting" && body.status !== "running") {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`session ${sessionId} did not reach ${turns} turns; last=${JSON.stringify(last)}`);
 }
 
 function deferred<T>(): {
