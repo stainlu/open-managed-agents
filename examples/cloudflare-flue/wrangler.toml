@@ -10,17 +10,32 @@ OMA_RATE_LIMIT_RPM = "120"
 OMA_RUN_TIMEOUT_MS = "600000"
 OMA_VERSION = "0.1.0-cloudflare-example"
 OMA_CLOUDFLARE_AI_GATEWAY_ID = "default"
+SANDBOX_TRANSPORT = "rpc"
 
 [ai]
 binding = "AI"
+
+[[containers]]
+class_name = "Sandbox"
+image = "./Dockerfile"
+instance_type = "lite"
+max_instances = 5
 
 [[durable_objects.bindings]]
 name = "OMA_COORDINATOR"
 class_name = "OMACoordinator"
 
+[[durable_objects.bindings]]
+name = "Sandbox"
+class_name = "Sandbox"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = [ "OMACoordinator" ]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = [ "Sandbox" ]
 
 [[workflows]]
 binding = "OMA_RUN_WORKFLOW"

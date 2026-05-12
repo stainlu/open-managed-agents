@@ -372,6 +372,7 @@ describe("FlueHarnessAdapter", () => {
       sessionId: "ses_shell",
       command: "npm test",
       cwd: "/workspace",
+      workspaceRoot: "/workspace",
       relCwd: "",
       env: { FOO: "bar" },
       timeoutSeconds: 7,

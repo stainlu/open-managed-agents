@@ -9,7 +9,10 @@ import type {
   D1PreparedStatementLike,
   D1Result,
 } from "../events/d1.js";
-import type { FlueEngine } from "../harness/flue.js";
+import type {
+  FlueEngine,
+  FlueManagedWorkspaceCommandExecutor,
+} from "../harness/flue.js";
 import {
   DurableObjectSqlStore,
   type DurableObjectSqlCursorLike,
@@ -238,6 +241,42 @@ describe("CloudflareFlueDurableObject", () => {
 
       const store = new DurableObjectSqlStore(doStorage);
       expect(store.secrets.get("parent_token_hmac_secret")?.byteLength).toBe(32);
+    } finally {
+      close();
+      doBacking.close();
+    }
+  });
+
+  it("lets subclasses inject a managed workspace command executor", () => {
+    const doBacking = new Database(join(tmpDir, "metadata.db"));
+    const doStorage = new FakeDurableObjectStorage(doBacking);
+    const { db, close } = sqliteD1();
+    const commandExecutor: FlueManagedWorkspaceCommandExecutor = {
+      exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+    };
+
+    class TestSandboxFlueObject extends CloudflareFlueDurableObject {
+      protected override createWorkspaceCommandExecutor() {
+        return commandExecutor;
+      }
+
+      handlerForTest() {
+        return this.getHandler();
+      }
+    }
+
+    try {
+      const object = new TestSandboxFlueObject(
+        { storage: doStorage },
+        {
+          OMA_DB: db,
+          OMA_WORKSPACE: new FakeR2Bucket(),
+        },
+      );
+      const harness = object.handlerForTest().stack.flueHarness as unknown as {
+        cfg?: { workspaceCommandExecutor?: FlueManagedWorkspaceCommandExecutor };
+      };
+      expect(harness.cfg?.workspaceCommandExecutor).toBe(commandExecutor);
     } finally {
       close();
       doBacking.close();

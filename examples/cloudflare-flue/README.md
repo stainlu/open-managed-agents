@@ -12,6 +12,7 @@ It wires:
 - an R2-compatible workspace binding;
 - a Workflow binding for durable run execution;
 - a Workers AI binding for `cloudflare/<model>` Flue models;
+- a Cloudflare Sandbox binding for Flue shell/build execution;
 - OMA's native Flue harness adapter.
 
 This is still an experimental smoke target. It proves the shape of the
@@ -23,7 +24,9 @@ queued turns, Flue tasks, and sandbox-backed shell/build work.
 
 - Node 22.18+ for the current `@flue/sdk` engine requirement
 - Wrangler authenticated to a Cloudflare account
-- D1 and R2 available on the target account
+- D1, R2, Workers AI, Workflows, and Cloudflare Sandboxes available on the
+  target account
+- Docker running locally for Wrangler to build the Sandbox container image
 
 Install dependencies:
 
@@ -78,6 +81,12 @@ pnpm wrangler secret put MOONSHOT_API_KEY
 OMA maps those managed secrets into Flue `configureProvider()` calls at the
 harness boundary. That avoids relying on ambient `process.env` and keeps the
 same agent JSON portable across Node, Worker, and future managed backends.
+
+The example also binds Cloudflare Sandbox SDK as `Sandbox`. OMA mirrors the
+managed R2 workspace into the sandbox before a Flue shell call, executes the
+command with Cloudflare's `exec()` API, then syncs changed files back into the
+managed workspace. This keeps R2/OMA as the durable source of truth even though
+the sandbox container can sleep between requests.
 
 Useful Flue model strings from the bundled Pi AI catalog:
 
@@ -188,18 +197,20 @@ The `wrangler.toml` uses:
 - `new_sqlite_classes` for the Durable Object metadata backend;
 - `[[workflows]]` for scheduled managed runs;
 - `[[d1_databases]]` for event and harness state;
-- `[[r2_buckets]]` for workspace objects.
+- `[[r2_buckets]]` for workspace objects;
+- `[[containers]]` plus a `Sandbox` Durable Object binding for full Linux
+  shell/build execution.
 
 ## Known gaps
 
 - The example imports OMA from the repo source via `file:../..`; package imports
   can replace this after the Cloudflare backend is published.
 - The current Flue adapter is prompt-first. Flue task/operation telemetry is
-  preserved as nested managed run events, but first-class child sessions, shell
-  cancellation, MCP, and tool policy parity are intentionally not faked.
-- The default Flue engine path still uses Flue's SDK bridge and memory sandbox
-  behavior. A production coding-agent stack still needs explicit sandbox
-  connector capability gates.
+  preserved as nested managed run events, but first-class child sessions, MCP,
+  and tool policy parity are intentionally not faked.
+- Sandbox-backed shell execution is wired through OMA's managed workspace
+  executor seam, but live deployment promotion still needs a deterministic
+  shell/build smoke that proves the path against real Cloudflare Sandboxes.
 - Local Durable Object tests cover active and queued run abort through the
   public run API, but there is no live CI deployment test yet. Do not treat
   this as the default backend until the promotion checklist in

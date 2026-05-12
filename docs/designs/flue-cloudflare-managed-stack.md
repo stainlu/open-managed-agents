@@ -173,6 +173,15 @@ Done in OMA:
   the executor must make command-side file mutations visible before it returns.
   The Cloudflare stack factory accepts this executor so deployment code can
   inject a real sandbox backend without bypassing OMA's stack composition.
+- `createCloudflareSandboxWorkspaceCommandExecutor` now exists as the first
+  concrete backend for that seam. It resolves a Cloudflare Sandbox by stable
+  managed session identity, mirrors OMA's managed workspace into the sandbox,
+  runs the command through Sandbox `exec()` with millisecond timeout conversion,
+  and syncs file changes back into the managed workspace while excluding
+  heavyweight runtime directories such as `node_modules` and `.git`.
+- The Cloudflare example now exports the Sandbox Durable Object class, binds a
+  Sandbox container, and injects the sandbox-backed executor into the OMA
+  coordinator. This is still experimental until a live shell/build smoke passes.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
 - Harness adapters now declare a runtime mode. Existing adapters remain
@@ -461,6 +470,9 @@ workspace ids into the public session identity.
      execution without replacing the Flue adapter or weakening the filesystem
      boundary.
    - [x] Thread that executor seam through the Cloudflare stack factory.
+   - [x] Add a Cloudflare Sandbox-backed executor implementation for Flue shell
+     calls that mirrors OMA workspace files into the sandbox and syncs command
+     mutations back out.
    - Decide when Flue task lineage should graduate from an observable run tree
      to OMA child sessions with real lifecycle control.
 
@@ -494,6 +506,8 @@ workspace ids into the public session identity.
    - [x] Add R2-compatible workspace binding in the Cloudflare deployment
      example.
    - [x] Add experimental `wrangler.toml` deployment wiring.
+   - [x] Add experimental Cloudflare Sandbox binding/container wiring to the
+     Cloudflare example.
    - [x] Add an example smoke client for local or deployed Worker URLs that
      proves health, harness catalog, Flue prompt run, event filtering, run-tree
      projection, and absence of public Cloudflare ids in OMA responses.

@@ -2,6 +2,7 @@ import type { D1DatabaseLike } from "../events/d1.js";
 import {
   type CloudflareAIBindingLike,
   FLUE_PROVIDER_ENV_KEYS,
+  type FlueManagedWorkspaceCommandExecutor,
   type FlueProviderConfig,
   type FlueProviderSettings,
 } from "../harness/flue.js";
@@ -166,7 +167,14 @@ export class CloudflareFlueDurableObject<
       cloudflareAiGateway: this.env.AI
         ? { id: this.env.OMA_CLOUDFLARE_AI_GATEWAY_ID ?? "default" }
         : undefined,
+      workspaceCommandExecutor: this.createWorkspaceCommandExecutor(this.env),
     });
+  }
+
+  protected createWorkspaceCommandExecutor(
+    _env: Env,
+  ): FlueManagedWorkspaceCommandExecutor | undefined {
+    return undefined;
   }
 }
 

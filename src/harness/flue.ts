@@ -69,6 +69,11 @@ export type FlueManagedWorkspaceCommandInvocation = {
    */
   cwd: string;
   /**
+   * Absolute root where the managed workspace is mounted inside Flue's
+   * SessionEnv.
+   */
+  workspaceRoot: string;
+  /**
    * Cwd relative to the managed workspace root. Empty string means workspace
    * root.
    */
@@ -974,6 +979,7 @@ export class FlueManagedWorkspaceSessionEnv {
         sessionId: this.sessionId,
         command,
         cwd,
+        workspaceRoot: this.cwd,
         relCwd,
         env: options?.env,
         timeoutSeconds: options?.timeout,

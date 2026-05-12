@@ -1,0 +1,14 @@
+node_modules/
+**/node_modules/
+.pnpm-store/
+data/
+.wrangler/
+**/.wrangler/
+coverage/
+*.log
+.env
+.env.local
+.dev.vars
+**/.dev.vars
+strategy.md
+docs/strategy.md
