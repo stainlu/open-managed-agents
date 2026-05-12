@@ -752,6 +752,15 @@ async function main(): Promise<void> {
     if (session.status !== "idle") continue;
     const head = store.queue.peek(sessionId);
     if (!head) continue;
+    const headRun = store.runs.getForSession(sessionId, head.runId);
+    if (headRun && headRun.status !== "queued") {
+      store.queue.remove(sessionId, head.runId);
+      log.info(
+        { session_id: sessionId, run_id: head.runId, run_status: headRun.status },
+        "startup queue drain removed already-admitted queued event",
+      );
+      continue;
+    }
     try {
       await router.runEvent({
         sessionId,
@@ -760,7 +769,7 @@ async function main(): Promise<void> {
         model: head.model,
         thinkingLevel: head.thinkingLevel,
       });
-      store.queue.shift(sessionId);
+      store.queue.remove(sessionId, head.runId);
       drainedEvents += 1;
       startupQueueDrainedTotal.inc();
     } catch (err) {

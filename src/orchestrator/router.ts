@@ -40,6 +40,7 @@ import type {
   ManagedRun,
   ManagedRunStatus,
   ManagedRunStore,
+  QueuedEvent,
   QueueStore,
   RunUsage,
   SessionStore,
@@ -692,6 +693,23 @@ export class AgentRouter {
     return this.runs
       .listBySession(sessionId)
       .find((run) => run.status === "starting" || run.status === "running");
+  }
+
+  private peekDispatchableQueuedEvent(sessionId: string): QueuedEvent | undefined {
+    for (;;) {
+      const head = this.queue.peek(sessionId);
+      if (!head) return undefined;
+      const run = this.runs.getForSession(sessionId, head.runId);
+      if (run && run.status !== "queued") {
+        this.queue.remove(sessionId, head.runId);
+        log.info(
+          { session_id: sessionId, run_id: head.runId, run_status: run.status },
+          "removed already-admitted queued event",
+        );
+        continue;
+      }
+      return head;
+    }
   }
 
   private cancelRunsForSession(sessionId: string, reason: string): number {
@@ -1750,7 +1768,7 @@ export class AgentRouter {
     // without flipping to idle and recursively process the next entry —
     // the session stays "running" through the whole chain so polling
     // clients never observe a brief idle window between queued runs.
-    const next = this.queue.shift(sessionId);
+    const next = this.peekDispatchableQueuedEvent(sessionId);
     if (next) {
       this.sessions.addUsage(sessionId, usage);
       this.runs.updateStatus(runId, "succeeded");
@@ -1764,6 +1782,7 @@ export class AgentRouter {
         thinkingLevel: next.thinkingLevel,
         queued: true,
       });
+      this.queue.remove(sessionId, next.runId);
       return;
     }
 
@@ -1897,7 +1916,7 @@ export class AgentRouter {
       // previous process had committed to but not dispatched. One event
       // is enough — runEvent will chain the rest via the normal
       // queue-drain path.
-      const next = this.queue.peek(sessionId);
+      const next = this.peekDispatchableQueuedEvent(sessionId);
       if (next) {
         this.runs.updateStatus(next.runId, "starting");
         void this.runEvent({
@@ -1907,7 +1926,7 @@ export class AgentRouter {
           model: next.model,
           thinkingLevel: next.thinkingLevel,
         }).then(() => {
-          this.queue.shift(sessionId);
+          this.queue.remove(sessionId, next.runId);
         }).catch((err) => {
           log.warn(
             { err, session_id: sessionId },

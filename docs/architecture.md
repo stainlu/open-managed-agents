@@ -355,7 +355,7 @@ Auth is the same `OPENCLAW_GATEWAY_TOKEN` the orchestrator uses on HTTP. The `da
 
 ### QueueStore (`src/store/{types,sqlite,memory}.ts`)
 
-Durable per-session FIFO. When `POST /v1/sessions/:id/events` arrives while the session is already `running`, the event is enqueued instead of returning 409. The router's `executeInBackground` success path shifts the next queued event and recursively starts the next run without flipping status to `idle` — polling clients never observe a brief idle window between queued runs.
+Durable per-session FIFO. When `POST /v1/sessions/:id/events` arrives while the session is already `running`, the event is enqueued instead of returning 409. The router's `executeInBackground` success path peeks the next queued event, skips any head whose `runId` was already admitted before a crash, schedules the next still-queued run, and then removes that queue row by `runId` without flipping status to `idle` — polling clients never observe a brief idle window between queued runs.
 
 On the default SQLite backend, the queue survives orchestrator restart and persists `content`, `model`, `thinkingLevel`, and `enqueued_at`. The in-memory backend drops it, which is acceptable because `memory` is test-only.
 
@@ -663,12 +663,14 @@ For the MVP the JSONL files live on a local Docker bind mount. A future item rep
                 (d) events.latestAgentMessage(agentId, sessionId) reads the
                     newest agent.message from the managed event log and pulls
                     its costUsd when present.
-                (e) queue.shift(sessionId) — if another event was queued
-                    while this run was in flight, the session stays
-                    "running", usage is rolled up via addUsage (no status
-                    flip), and executeInBackground recurses on the next
-                    queued event. Otherwise sessions.endRunSuccess rolls
-                    up usage and flips status to idle.
+                (e) queue.peek(sessionId) — if another event was queued
+                    while this run was in flight, the router drops stale
+                    queue heads whose run was already admitted before a
+                    crash, schedules the next still-queued run, removes
+                    that row by runId, keeps the session "running", and
+                    rolls up usage via addUsage (no status flip).
+                    Otherwise sessions.endRunSuccess rolls up usage and
+                    flips status to idle.
 
 5.  Developer  → GET /v1/sessions/ses_yyy
                  Server reads the session row from SQLite and the newest

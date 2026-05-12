@@ -1356,6 +1356,89 @@ describe("AgentRouter native harness runtime", () => {
     ]);
   });
 
+  it("drops already-admitted queued rows before scheduling the next queued turn", async () => {
+    const { eventReader } = managedEventStore();
+    const runScheduler = new RecordingRunScheduler(true);
+    const releaseTurn: Array<() => void> = [];
+    const invokedContent: string[] = [];
+    const invokeTurn = vi.fn(async (args) => {
+      invokedContent.push(args.content);
+      await new Promise<void>((resolve) => releaseTurn.push(resolve));
+      return {
+        output: `native done ${args.content}`,
+        tokensIn: 1,
+        tokensOut: 1,
+        model: args.agent?.model,
+        events: [
+          {
+            eventId: `evt_native_user_${args.content}`,
+            sessionId: args.sessionId,
+            type: "user.message" as const,
+            content: args.content,
+            createdAt: invokedContent.length * 10 + 1,
+          },
+          {
+            eventId: `evt_native_agent_${args.content}`,
+            sessionId: args.sessionId,
+            type: "agent.message" as const,
+            content: `native done ${args.content}`,
+            createdAt: invokedContent.length * 10 + 2,
+            tokensIn: 1,
+            tokensOut: 1,
+            model: args.agent?.model,
+          },
+        ],
+      };
+    });
+    const { router, store, queue } = makeRouter({
+      extraHarnesses: [nativeTestHarness({ invokeTurn })],
+      poolStub: {
+        acquireForSession: vi.fn(async () => {
+          throw new Error("native harness should not acquire a container");
+        }),
+        evictSession: async () => {},
+      },
+      eventReaderStub: eventReader,
+      runScheduler,
+    });
+    const agent = store.agents.create({
+      model: "flue/native-test",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+      harnessId: "native-test",
+    });
+    const session = router.createSession(agent.agentId);
+
+    await router.runEvent({ sessionId: session.sessionId, content: "first" });
+    await waitForCondition("first turn to start", () => invokeTurn.mock.calls.length === 1);
+    const alreadyAdmitted = await router.runEvent({
+      sessionId: session.sessionId,
+      content: "already-admitted",
+    });
+    const next = await router.runEvent({
+      sessionId: session.sessionId,
+      content: "next",
+    });
+    store.runs.updateStatus(alreadyAdmitted.runId, "succeeded");
+
+    releaseTurn[0]?.();
+    await waitForCondition("next queued turn to be scheduled", () => runScheduler.scheduled.length === 2);
+
+    expect(runScheduler.requests().map((request) => request.content)).toEqual([
+      "first",
+      "next",
+    ]);
+    expect(queue.peek(session.sessionId)?.runId).toBeUndefined();
+    expect(store.runs.get(next.runId)?.status).toBe("running");
+
+    releaseTurn[1]?.();
+    await waitForSessionToStopRunning(store, session.sessionId);
+    expect(invokedContent).toEqual(["first", "next"]);
+  });
+
   it("streams native harness turns without acquiring a container endpoint", async () => {
     const { eventReader } = managedEventStore();
     const acquireForSession = vi.fn(async () => {
