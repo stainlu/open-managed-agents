@@ -175,6 +175,18 @@ async function runSandboxExecSmoke(agentId, sessionId) {
     },
   });
   assert(result.exit_code === 0, `sandbox exec exited ${result.exit_code}: ${result.stderr ?? ""}`);
+  assert(
+    Array.isArray(result.event_types) &&
+      result.event_types.includes("agent.tool_use") &&
+      result.event_types.includes("agent.tool_result") &&
+      result.event_types.includes("session.run_start") &&
+      result.event_types.includes("session.run_end"),
+    `sandbox exec did not report Flue shell operation events: ${JSON.stringify(result.event_types)}`,
+  );
+  assert(
+    Array.isArray(result.run_kinds) && result.run_kinds.includes("shell"),
+    `sandbox exec did not expose shell run kind: ${JSON.stringify(result.run_kinds)}`,
+  );
   assertNoPlatformIds(result, "sandbox exec smoke response");
 
   const output = await getFileText(agentId, sessionId, "dist/result.txt");

@@ -426,6 +426,81 @@ describe("FlueHarnessAdapter", () => {
     });
   });
 
+  it("runs real Flue session.shell through the managed workspace executor", async () => {
+    const workspace = new InMemoryManagedWorkspace({
+      "src/input.txt": "hello",
+    });
+    const calls: Parameters<FlueManagedWorkspaceCommandExecutor["exec"]>[0][] = [];
+    const commandExecutor: FlueManagedWorkspaceCommandExecutor = {
+      async exec(args) {
+        calls.push(args);
+        await args.workspace.writeFile(
+          args.agentId,
+          args.sessionId,
+          "dist/result.txt",
+          Buffer.from(`built:${args.command}:${args.env?.FOO ?? ""}`),
+        );
+        return { stdout: "shell ok", stderr: "", exitCode: 0 };
+      },
+    };
+    const adapter = new FlueHarnessAdapter({
+      workspace,
+      workspaceCommandExecutor: commandExecutor,
+    });
+
+    const result = await adapter.invokeShell({
+      agent: agent(),
+      sessionId: "ses_real_shell",
+      runId: "run_shell_parent",
+      command: "cat src/input.txt > dist/result.txt",
+      cwd: ".",
+      env: { FOO: "bar" },
+      timeoutMs: 60_000,
+    });
+
+    expect(result).toMatchObject({
+      stdout: "shell ok",
+      stderr: "",
+      exitCode: 0,
+      native: {
+        nativeSessionId: "ses_real_shell",
+        nativeMetadata: {
+          harness: "flue",
+          runId: "run_shell_parent",
+          operation: "shell",
+        },
+      },
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      agentId: "agt_flue",
+      sessionId: "ses_real_shell",
+      command: "cat src/input.txt > dist/result.txt",
+      cwd: "/workspace",
+      workspaceRoot: "/workspace",
+      relCwd: "",
+      env: { FOO: "bar" },
+    });
+    await expect(workspace.readFile("agt_flue", "ses_real_shell", "dist/result.txt"))
+      .resolves.toEqual(Buffer.from("built:cat src/input.txt > dist/result.txt:bar"));
+    expect(result.events?.map((event) => event.type)).toEqual([
+      "session.run_start",
+      "agent.tool_use",
+      "agent.tool_result",
+      "session.run_end",
+    ]);
+    expect(result.events?.[0]).toMatchObject({
+      runKind: "shell",
+      parentRunId: "run_shell_parent",
+    });
+    expect(result.events?.[3]).toMatchObject({
+      runKind: "shell",
+      parentRunId: "run_shell_parent",
+      runStatus: "completed",
+      isError: false,
+    });
+  });
+
   it("runs prompt turns through an injected native Flue engine", async () => {
     const prompt = vi.fn<FlueEngine["prompt"]>(async (args) => ({
       text: `echo: ${args.content}`,

@@ -16,8 +16,11 @@ import {
   type CloudflareSandboxResolver,
 } from "../../../src/cloudflare/sandbox-executor.js";
 import {
-  FlueManagedWorkspaceSessionEnv,
+  FlueHarnessAdapter,
 } from "../../../src/harness/flue.js";
+import type {
+  AgentConfig,
+} from "../../../src/orchestrator/types.js";
 import {
   createCloudflareFlueWorkerRouter,
   type CloudflareFlueWorkerEnv,
@@ -90,22 +93,26 @@ async function handleSandboxExecSmoke(request: Request, env: Env): Promise<Respo
 
   const workspace = new R2ManagedWorkspace(env.OMA_WORKSPACE);
   const commandExecutor = createExampleWorkspaceCommandExecutor(env);
-  const sessionEnv = await FlueManagedWorkspaceSessionEnv.create({
+  const harness = new FlueHarnessAdapter({
     workspace,
-    agentId: parsed.value.agentId,
-    sessionId: parsed.value.sessionId,
-    cwd: "/workspace",
-    instructions: "",
-    commandExecutor,
+    workspaceCommandExecutor: commandExecutor,
   });
-  const result = await sessionEnv.exec(parsed.value.command, {
+  const result = await harness.invokeShell({
+    agent: smokeAgent(parsed.value.agentId),
+    sessionId: parsed.value.sessionId,
+    runId: `run_smoke_shell_${crypto.randomUUID()}`,
+    command: parsed.value.command,
     cwd: parsed.value.cwd ?? ".",
-    timeout: parsed.value.timeoutSeconds ?? 30,
+    timeoutMs: Math.trunc((parsed.value.timeoutSeconds ?? 30) * 1_000),
   });
   return jsonResponse({
     stdout: result.stdout,
     stderr: result.stderr,
     exit_code: result.exitCode,
+    event_types: result.events?.map((event) => event.type) ?? [],
+    run_kinds: result.events
+      ?.map((event) => event.runKind)
+      .filter((kind): kind is string => typeof kind === "string") ?? [],
   }, 200);
 }
 
@@ -116,6 +123,26 @@ function createExampleWorkspaceCommandExecutor(env: Env) {
     sandboxIdPrefix: "oma",
     sandboxOptions: { sleepAfter: "10m" },
   });
+}
+
+function smokeAgent(agentId: string): AgentConfig {
+  return {
+    agentId,
+    harnessId: "flue",
+    model: "cloudflare/@cf/openai/gpt-oss-20b",
+    tools: [],
+    instructions: "Run only the requested deterministic sandbox smoke command.",
+    permissionPolicy: { type: "always_allow" },
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    archivedAt: null,
+    version: 1,
+    callableAgents: [],
+    maxSubagentDepth: 0,
+    mcpServers: {},
+    thinkingLevel: "off",
+    channels: { telegram: { enabled: false } },
+  };
 }
 
 type SandboxExecSmokePayload = {

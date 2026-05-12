@@ -47,15 +47,47 @@ export type FlueEnginePromptResult = {
   native?: HarnessTurnResult["native"];
 };
 
+export type FlueEngineShellArgs = Omit<FlueEnginePromptArgs, "content"> & {
+  command: string;
+  cwd?: string;
+  env?: Record<string, string>;
+};
+
+export type FlueEngineShellResult = FlueShellResult & {
+  events?: FlueRuntimeEvent[];
+  native?: {
+    nativeSessionId?: string | null;
+    nativeThreadId?: string | null;
+    nativeMetadata?: Record<string, unknown> | null;
+  };
+};
+
 export type FlueEngine = {
   prompt(args: FlueEnginePromptArgs): Promise<FlueEnginePromptResult>;
   stream?(args: FlueEnginePromptArgs): Promise<HarnessStreamingTurn>;
+  shell?(args: FlueEngineShellArgs): Promise<FlueEngineShellResult>;
 };
 
 export type FlueShellResult = {
   stdout: string;
   stderr: string;
   exitCode: number;
+};
+
+export type FlueShellInvocationArgs = {
+  agent: AgentConfig;
+  session?: Session;
+  sessionId: string;
+  runId?: string;
+  command: string;
+  cwd?: string;
+  env?: Record<string, string>;
+  timeoutMs: number;
+};
+
+export type FlueShellInvocationResult = FlueShellResult & {
+  events?: Event[];
+  native?: FlueEngineShellResult["native"];
 };
 
 export type FlueManagedWorkspaceCommandInvocation = {
@@ -233,7 +265,7 @@ export class FlueHarnessAdapter implements HarnessAdapter {
     },
     streaming: {
       support: "partial",
-      detail: "Streams Flue prompt text deltas and live managed events; task/shell streaming is not wired yet.",
+      detail: "Streams Flue prompt text deltas and live managed events; task streaming and shell streaming are not wired yet.",
     },
     native_session_resume: {
       support: "partial",
@@ -241,7 +273,7 @@ export class FlueHarnessAdapter implements HarnessAdapter {
     },
     cancellation: {
       support: "partial",
-      detail: "Active Flue prompt turns, including streamed prompts, are cancelled with AbortSignal; task cancellation is not wired yet.",
+      detail: "Active Flue prompt turns and shell operations are cancelled with AbortSignal; task cancellation is not exposed through OMA yet.",
     },
     interruption: {
       support: "unsupported",
@@ -269,7 +301,7 @@ export class FlueHarnessAdapter implements HarnessAdapter {
     },
     managed_event_log: {
       support: "partial",
-      detail: "Adapter emits managed user/agent prompt boundary events and maps selected Flue runtime events.",
+      detail: "Adapter emits managed prompt boundary events, maps selected Flue runtime events, and can map Flue shell operation events.",
     },
     usage: {
       support: "supported",
@@ -410,6 +442,51 @@ export class FlueHarnessAdapter implements HarnessAdapter {
         callController.abort(reason ?? new Error(`OMA cancelled Flue session ${args.sessionId}`));
         await stream.abort(reason);
         cleanup();
+      },
+    };
+  }
+
+  async invokeShell(args: FlueShellInvocationArgs): Promise<FlueShellInvocationResult> {
+    const runId = args.runId ?? createFallbackRunId();
+    const engine = await this.resolveEngine();
+    if (!engine.shell) {
+      throw new HarnessInvocationError("Flue engine does not expose shell calls");
+    }
+    const callController = this.startCall(args.sessionId);
+    let result: FlueEngineShellResult;
+    try {
+      result = await engine.shell({
+        command: args.command,
+        cwd: args.cwd,
+        env: args.env,
+        sessionId: args.sessionId,
+        runId,
+        timeoutMs: args.timeoutMs,
+        signal: AbortSignal.any([
+          callController.signal,
+          AbortSignal.timeout(args.timeoutMs),
+        ]),
+        agent: args.agent,
+        session: args.session,
+      });
+    } finally {
+      this.finishCall(args.sessionId, callController);
+    }
+    return {
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+      events: mapFlueEvents(
+        result.events ?? [],
+        args.sessionId,
+        runId,
+        runId,
+        Date.now(),
+      ),
+      native: result.native ?? {
+        nativeSessionId: args.sessionId,
+        nativeThreadId: null,
+        nativeMetadata: { harness: "flue", runId, operation: "shell" },
       },
     };
   }
@@ -680,6 +757,45 @@ class OptionalSdkFlueEngine implements FlueEngine {
     };
   }
 
+  async shell(args: FlueEngineShellArgs): Promise<FlueEngineShellResult> {
+    const runId = args.runId ?? createFallbackRunId();
+    const ctx = await this.createContext({
+      ...args,
+      content: args.command,
+      runId,
+    });
+    const events: FlueRuntimeEvent[] = [];
+    ctx.setEventCallback((event: FlueRuntimeEvent) => {
+      events.push(event);
+    });
+    try {
+      const flueAgent = await ctx.init({
+        id: args.agent.agentId,
+        model: false,
+        thinkingLevel: args.thinkingLevel ?? args.agent.thinkingLevel,
+      });
+      const session = await flueAgent.session(args.sessionId);
+      const result = await session.shell(args.command, {
+        cwd: args.cwd,
+        env: args.env,
+        signal: args.signal ?? AbortSignal.timeout(args.timeoutMs),
+      });
+      return {
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+        events,
+        native: {
+          nativeSessionId: args.sessionId,
+          nativeThreadId: null,
+          nativeMetadata: { harness: "flue", runId, operation: "shell" },
+        },
+      };
+    } finally {
+      ctx.setEventCallback(undefined);
+    }
+  }
+
   private async createContext(args: FlueEnginePromptArgs): Promise<FlueContextLike> {
     await this.configureProviders();
     const internal = await this.loadInternal();
@@ -865,6 +981,14 @@ type FlueSessionLike = {
     content: string,
     options?: Record<string, unknown>,
   ): FlueCallHandle;
+  shell(
+    command: string,
+    options?: {
+      cwd?: string;
+      env?: Record<string, string>;
+      signal?: AbortSignal;
+    },
+  ): FlueCallHandle<FlueShellResult>;
 };
 
 type FluePromptResponseLike = {
@@ -873,7 +997,7 @@ type FluePromptResponseLike = {
   model?: string | { id?: string };
 };
 
-type FlueCallHandle = PromiseLike<FluePromptResponseLike> & {
+type FlueCallHandle<T = FluePromptResponseLike> = PromiseLike<T> & {
   signal?: AbortSignal;
   abort?: (reason?: unknown) => void;
 };

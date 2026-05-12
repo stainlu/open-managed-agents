@@ -173,6 +173,10 @@ Done in OMA:
   the executor must make command-side file mutations visible before it returns.
   The Cloudflare stack factory accepts this executor so deployment code can
   inject a real sandbox backend without bypassing OMA's stack composition.
+- The Flue SDK bridge now exposes real Flue `session.shell()` execution
+  through OMA's Flue adapter. Shell operations go through Flue's own
+  operation/tool event path, map back into normalized OMA run events, and use
+  the same managed workspace command executor as model-driven shell calls.
 - `createCloudflareSandboxWorkspaceCommandExecutor` now exists as the first
   concrete backend for that seam. It resolves a Cloudflare Sandbox by stable
   managed session identity, mirrors OMA's managed workspace into the sandbox,
@@ -185,9 +189,10 @@ Done in OMA:
 - The Cloudflare example smoke client can now require a deterministic
   sandbox-backed shell/build check. The check writes fixtures through OMA's
   public workspace API, calls a token-gated example-only smoke route that runs
-  through the Flue managed workspace command executor, and verifies generated
-  output plus deletions sync back to the managed R2 workspace. This is still a
-  verifier until it is run against a live Cloudflare deployment.
+  through real Flue `session.shell()` plus the managed workspace command
+  executor, and verifies generated output plus deletions sync back to the
+  managed R2 workspace. This is still a verifier until it is run against a
+  live Cloudflare deployment.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
 - Harness adapters now declare a runtime mode. Existing adapters remain
@@ -219,11 +224,12 @@ Still open:
 
 - `ManagedEventLog.stateRoot` still exists as an optional legacy local-Docker
   escape hatch.
-- The Flue harness driver is prompt-only: task/shell cancellation, MCP, tool
-  approvals/deny policy, Cloudflare-backed Flue session persistence, and
-  first-class OMA child sessions for Flue tasks are not wired yet. Current
-  Flue task and operation telemetry is preserved as structured nested run
-  events, but it is not promoted to managed child sessions yet.
+- The Flue harness driver is still prompt-first: task cancellation/control,
+  MCP, tool approvals/deny policy, Cloudflare-backed Flue session persistence
+  promotion, and first-class OMA child sessions for Flue tasks are not wired
+  yet. Current Flue task and operation telemetry is preserved as structured
+  nested run events, and direct Flue shell operations can be executed and
+  mapped, but Flue tasks are not promoted to managed child sessions yet.
 - Cloudflare deployment wiring exists as an experimental example in
   `examples/cloudflare-flue`, but it is not promoted: there is no live
   Workflow deployment test, deterministic live active/queued run abort smoke,
@@ -479,6 +485,9 @@ workspace ids into the public session identity.
    - [x] Add a Cloudflare Sandbox-backed executor implementation for Flue shell
      calls that mirrors OMA workspace files into the sandbox and syncs command
      mutations back out.
+   - [x] Route deterministic shell execution through real Flue
+     `session.shell()` so OMA maps Flue's operation/tool events instead of
+     bypassing the harness with raw `SessionEnv.exec()`.
    - Decide when Flue task lineage should graduate from an observable run tree
      to OMA child sessions with real lifecycle control.
 

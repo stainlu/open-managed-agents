@@ -76,13 +76,15 @@ Working today:
 - Managed runs are now durable control-plane records. OMA records queued,
   starting, running, terminal, and cancelled run status in the metadata store
   and exposes session-scoped run list/get/abort APIs.
-- Experimental Flue native harness driver for prompt turns, opt-in via
-  `OMA_ENABLE_FLUE_HARNESS=1`, including AbortSignal cancellation for active
-  prompt calls, OpenAI-compatible prompt streaming, live managed-event append,
-  OMA-managed local Flue session persistence, and OMA-managed provider secret
-  mapping into Flue provider configuration, including Cloudflare Workers AI
-  binding registration for `cloudflare/<model>`. The bridge prefers Flue's
-  runtime package name `@flue/core` and falls back to legacy `@flue/sdk`.
+- Experimental Flue native harness driver, opt-in via
+  `OMA_ENABLE_FLUE_HARNESS=1`, including prompt turns, real Flue
+  `session.shell()` operations over OMA-managed workspaces, AbortSignal
+  cancellation for active prompt/shell calls, OpenAI-compatible prompt
+  streaming, live managed-event append, OMA-managed local Flue session
+  persistence, and OMA-managed provider secret mapping into Flue provider
+  configuration, including Cloudflare Workers AI binding registration for
+  `cloudflare/<model>`. The bridge prefers Flue's runtime package name
+  `@flue/core` and falls back to legacy `@flue/sdk`.
 - Experimental Hermes adapter runtime via direct `AIAgent` integration.
 - Experimental Codex adapter runtime via `codex app-server`.
 - Experimental Claude Agent SDK adapter runtime via `@anthropic-ai/claude-agent-sdk`.
@@ -91,9 +93,9 @@ Working today:
 
 Not done yet:
 
-- Full Flue parity: task/shell cancellation, tool policy, MCP,
-  Cloudflare-backed Flue session persistence, and OMA first-class child
-  sessions for Flue tasks.
+- Full Flue parity: task cancellation/control, tool policy, MCP,
+  Cloudflare-backed Flue session persistence promotion, and OMA first-class
+  child sessions for Flue tasks.
 - Promoted production Cloudflare backend. The Durable Object, Worker router,
   Workflow runner, DO SQLite metadata store, D1 stores, R2 workspace backend,
   and example Wrangler wiring exist, but live deployment promotion is still

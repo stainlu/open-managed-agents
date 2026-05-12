@@ -189,10 +189,10 @@ pnpm smoke:sandbox
 
 That smoke writes source fixtures through OMA's public workspace API, calls the
 example-only `/_oma/smoke/sandbox-exec` route, runs a shell command through
-OMA's Flue managed workspace executor, and verifies that the generated
-`dist/result.txt` plus a deleted fixture sync back to the managed R2 workspace.
-The smoke route is token-gated and refuses to run when `OMA_API_TOKEN` is not
-configured.
+real Flue `session.shell()` plus OMA's Flue managed workspace executor, and
+verifies that Flue shell operation events, the generated `dist/result.txt`,
+and a deleted fixture sync back to the managed R2 workspace. The smoke route
+is token-gated and refuses to run when `OMA_API_TOKEN` is not configured.
 
 Promotion-only checks are stricter and intentionally separate because they
 require a prompt that remains active long enough to test queueing and aborts:
@@ -222,9 +222,10 @@ The `wrangler.toml` uses:
 
 - The example imports OMA from the repo source via `file:../..`; package imports
   can replace this after the Cloudflare backend is published.
-- The current Flue adapter is prompt-first. Flue task/operation telemetry is
-  preserved as nested managed run events, but first-class child sessions, MCP,
-  and tool policy parity are intentionally not faked.
+- The current Flue adapter is prompt-first, with a direct shell operation path
+  for deployment verification. Flue task/operation telemetry is preserved as
+  nested managed run events, but first-class child sessions, MCP, and tool
+  policy parity are intentionally not faked.
 - Sandbox-backed shell execution is wired through OMA's managed workspace
   executor seam, and the example smoke client can now require a deterministic
   shell/build check against real Cloudflare Sandboxes. This still needs to be
