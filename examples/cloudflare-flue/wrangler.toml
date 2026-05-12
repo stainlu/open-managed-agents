@@ -9,6 +9,10 @@ OMA_COORDINATOR_NAME = "default"
 OMA_RATE_LIMIT_RPM = "120"
 OMA_RUN_TIMEOUT_MS = "600000"
 OMA_VERSION = "0.1.0-cloudflare-example"
+OMA_CLOUDFLARE_AI_GATEWAY_ID = "default"
+
+[ai]
+binding = "AI"
 
 [[durable_objects.bindings]]
 name = "OMA_COORDINATOR"

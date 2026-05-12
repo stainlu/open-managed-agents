@@ -11,6 +11,7 @@ It wires:
 - D1-compatible stores for managed events and Flue harness state;
 - an R2-compatible workspace binding;
 - a Workflow binding for durable run execution;
+- a Workers AI binding for `cloudflare/<model>` Flue models;
 - OMA's native Flue harness adapter.
 
 This is still an experimental smoke target. It proves the shape of the
@@ -57,8 +58,16 @@ pnpm wrangler secret put OMA_PARENT_TOKEN_SECRET_BASE64
 pnpm wrangler secret put OMA_PASSTHROUGH_ENV_JSON
 ```
 
-Provider keys can either live inside `OMA_PASSTHROUGH_ENV_JSON` or as direct
-Worker secrets. Direct secrets are easier to rotate:
+The example also binds Cloudflare Workers AI as `AI`. That enables Flue's
+binding-backed `cloudflare/<model>` prefix without a provider API key:
+
+```json
+{ "model": "cloudflare/@cf/openai/gpt-oss-20b" }
+```
+
+Provider keys for external models can either live inside
+`OMA_PASSTHROUGH_ENV_JSON` or as direct Worker secrets. Direct secrets are
+easier to rotate:
 
 ```bash
 pnpm wrangler secret put ANTHROPIC_API_KEY
@@ -72,6 +81,8 @@ same agent JSON portable across Node, Worker, and future managed backends.
 
 Useful Flue model strings from the bundled Pi AI catalog:
 
+- `cloudflare/@cf/openai/gpt-oss-20b`
+- `cloudflare/@cf/moonshotai/kimi-k2.5`
 - `anthropic/claude-haiku-4-5`
 - `anthropic/claude-sonnet-4-6`
 - `openai/gpt-5.4-mini`
@@ -106,7 +117,7 @@ Minimal local prompt smoke:
 ```bash
 curl -s http://localhost:8787/v1/agents \
   -H 'content-type: application/json' \
-  -d '{"harnessId":"flue","model":"anthropic/claude-haiku-4-5","instructions":"One-sentence answers.","tools":[]}'
+  -d '{"harnessId":"flue","model":"cloudflare/@cf/openai/gpt-oss-20b","instructions":"One-sentence answers.","tools":[]}'
 ```
 
 Use the returned `agent_id` with `POST /v1/agents/:agent_id/run`.

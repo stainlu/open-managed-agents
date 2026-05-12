@@ -55,9 +55,22 @@ export type FlueProviderSettings = {
 
 export type FlueProviderConfig = Record<string, FlueProviderSettings>;
 
+export type CloudflareAIBindingLike = {
+  run: (...args: unknown[]) => unknown;
+};
+
+export type FlueCloudflareAIBindingConfig = {
+  binding: CloudflareAIBindingLike;
+  gateway?: Record<string, unknown>;
+  providerPrefix?: string;
+};
+
 export type FlueHarnessAdapterConfig = {
   passthroughEnv?: Record<string, string>;
   providerConfig?: FlueProviderConfig;
+  cloudflareAiBinding?: CloudflareAIBindingLike;
+  cloudflareAiGateway?: Record<string, unknown>;
+  cloudflareAiProviderPrefix?: string;
   sessionStateStore?: ManagedHarnessStateStore;
   engine?: FlueEngine;
   loadEngine?: () => Promise<FlueEngine>;
@@ -397,6 +410,13 @@ export class FlueHarnessAdapter implements HarnessAdapter {
         : Promise.resolve(new OptionalSdkFlueEngine(
           this.cfg.passthroughEnv ?? {},
           this.cfg.providerConfig,
+          this.cfg.cloudflareAiBinding
+            ? {
+              binding: this.cfg.cloudflareAiBinding,
+              gateway: this.cfg.cloudflareAiGateway,
+              providerPrefix: this.cfg.cloudflareAiProviderPrefix,
+            }
+            : undefined,
           this.cfg.sessionStateStore,
         ));
     }
@@ -436,12 +456,14 @@ export class FlueHarnessAdapter implements HarnessAdapter {
 class OptionalSdkFlueEngine implements FlueEngine {
   private internalPromise: Promise<FlueInternalModule> | undefined;
   private appPromise: Promise<FlueAppModule> | undefined;
+  private cloudflarePromise: Promise<FlueCloudflareModule> | undefined;
   private providersConfigured = false;
   private storePromise: Promise<unknown> | undefined;
 
   constructor(
     private readonly passthroughEnv: Record<string, string>,
     private readonly providerConfig: FlueProviderConfig | undefined,
+    private readonly cloudflareAi: FlueCloudflareAIBindingConfig | undefined,
     private readonly sessionStateStore: ManagedHarnessStateStore | undefined,
   ) {}
 
@@ -623,12 +645,27 @@ class OptionalSdkFlueEngine implements FlueEngine {
       deriveFlueProviderConfigFromEnv(this.passthroughEnv),
       this.providerConfig,
     );
-    if (Object.keys(providerConfig).length === 0) {
+    if (Object.keys(providerConfig).length === 0 && !this.cloudflareAi) {
       this.providersConfigured = true;
       return;
     }
 
     const app = await this.loadApp();
+    if (this.cloudflareAi) {
+      const [internal, cloudflare] = await Promise.all([
+        this.loadInternal(),
+        this.loadCloudflare(),
+      ]);
+      const providerPrefix = this.cloudflareAi.providerPrefix ?? "cloudflare";
+      app.registerApiProvider(cloudflare.getCloudflareAIBindingApiProvider());
+      if (!internal.hasRegisteredProvider(providerPrefix)) {
+        app.registerProvider(providerPrefix, {
+          api: "cloudflare-ai-binding",
+          binding: this.cloudflareAi.binding,
+          gateway: this.cloudflareAi.gateway ?? { id: "default" },
+        });
+      }
+    }
     for (const [provider, settings] of Object.entries(providerConfig)) {
       app.configureProvider(provider, settings);
     }
@@ -647,6 +684,20 @@ class OptionalSdkFlueEngine implements FlueEngine {
         });
     }
     return this.appPromise;
+  }
+
+  private async loadCloudflare(): Promise<FlueCloudflareModule> {
+    if (!this.cloudflarePromise) {
+      this.cloudflarePromise = import("@flue/sdk/cloudflare")
+        .then((mod) => validateFlueCloudflareModule(mod))
+        .catch((err) => {
+          const message = err instanceof Error ? err.message : String(err);
+          throw new HarnessInvocationError(
+            `Flue harness requires @flue/sdk/cloudflare to register Cloudflare AI bindings: ${message}`,
+          );
+        });
+    }
+    return this.cloudflarePromise;
   }
 
   private async loadStore(
@@ -707,10 +758,17 @@ type FlueInternalModule = {
   createFlueContext: (config: Record<string, unknown>) => FlueContextLike;
   InMemorySessionStore: new () => unknown;
   resolveModel: (model: string | false | undefined) => unknown;
+  hasRegisteredProvider: (provider: string) => boolean;
 };
 
 type FlueAppModule = {
   configureProvider: (provider: string, settings: FlueProviderSettings) => void;
+  registerApiProvider: (provider: unknown) => void;
+  registerProvider: (provider: string, registration: Record<string, unknown>) => void;
+};
+
+type FlueCloudflareModule = {
+  getCloudflareAIBindingApiProvider: () => unknown;
 };
 
 type FlueContextLike = {
@@ -745,7 +803,8 @@ function validateFlueInternalModule(mod: unknown): FlueInternalModule {
   if (
     typeof candidate.createFlueContext !== "function" ||
     typeof candidate.InMemorySessionStore !== "function" ||
-    typeof candidate.resolveModel !== "function"
+    typeof candidate.resolveModel !== "function" ||
+    typeof candidate.hasRegisteredProvider !== "function"
   ) {
     throw new Error("@flue/sdk/internal did not expose the expected runtime helpers");
   }
@@ -754,10 +813,22 @@ function validateFlueInternalModule(mod: unknown): FlueInternalModule {
 
 function validateFlueAppModule(mod: unknown): FlueAppModule {
   const candidate = mod as Partial<FlueAppModule>;
-  if (typeof candidate.configureProvider !== "function") {
-    throw new Error("@flue/sdk/app did not expose configureProvider()");
+  if (
+    typeof candidate.configureProvider !== "function" ||
+    typeof candidate.registerApiProvider !== "function" ||
+    typeof candidate.registerProvider !== "function"
+  ) {
+    throw new Error("@flue/sdk/app did not expose the expected provider helpers");
   }
   return candidate as FlueAppModule;
+}
+
+function validateFlueCloudflareModule(mod: unknown): FlueCloudflareModule {
+  const candidate = mod as Partial<FlueCloudflareModule>;
+  if (typeof candidate.getCloudflareAIBindingApiProvider !== "function") {
+    throw new Error("@flue/sdk/cloudflare did not expose getCloudflareAIBindingApiProvider()");
+  }
+  return candidate as FlueCloudflareModule;
 }
 
 class MemorySessionEnv {

@@ -110,6 +110,57 @@ describe("FlueHarnessAdapter", () => {
     });
   });
 
+  it("registers the Cloudflare AI binding for cloudflare-prefixed Flue models", async () => {
+    const run = vi.fn(async () => new Response([
+      `data: ${JSON.stringify({
+        id: "chatcmpl_fake",
+        model: "@cf/openai/gpt-oss-20b",
+        choices: [{ delta: { content: "hi" }, finish_reason: null }],
+      })}`,
+      "",
+      `data: ${JSON.stringify({
+        id: "chatcmpl_fake",
+        model: "@cf/openai/gpt-oss-20b",
+        choices: [{ delta: {}, finish_reason: "stop" }],
+        usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+      })}`,
+      "",
+      "data: [DONE]",
+      "",
+    ].join("\n"), {
+      headers: { "content-type": "text/event-stream" },
+    }));
+    const adapter = new FlueHarnessAdapter({
+      cloudflareAiBinding: { run },
+      cloudflareAiGateway: { id: "test-gateway" },
+    });
+
+    const result = await adapter.invokeTurn({
+      content: "hello",
+      sessionId: "ses_flue_cf",
+      timeoutMs: 60_000,
+      agent: agent({ model: "cloudflare/@cf/openai/gpt-oss-20b" }),
+    });
+
+    expect(result).toMatchObject({
+      output: "hi",
+      tokensIn: 3,
+      tokensOut: 2,
+      model: "@cf/openai/gpt-oss-20b",
+    });
+    expect(run).toHaveBeenCalledWith(
+      "@cf/openai/gpt-oss-20b",
+      expect.objectContaining({
+        stream: true,
+        stream_options: { include_usage: true },
+      }),
+      expect.objectContaining({
+        returnRawResponse: true,
+        gateway: { id: "test-gateway" },
+      }),
+    );
+  });
+
   it("runs prompt turns through an injected native Flue engine", async () => {
     const prompt = vi.fn<FlueEngine["prompt"]>(async (args) => ({
       text: `echo: ${args.content}`,

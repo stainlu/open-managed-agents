@@ -112,6 +112,10 @@ Done in OMA:
   `MOONSHOT_API_KEY` are treated as managed harness configuration rather than
   relying on ambient `process.env`. Deployments can also pass
   `OMA_FLUE_PROVIDER_CONFIG_JSON` for gateway/base URL overrides.
+- The Cloudflare Flue stack can now register the Workers AI binding with
+  Flue's native `cloudflare/<model>` provider prefix. The example declares
+  `[ai] binding = "AI"` and passes the binding through OMA instead of relying
+  on Flue's generated entrypoint.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
 - Harness adapters now declare a runtime mode. Existing adapters remain
@@ -143,9 +147,8 @@ Still open:
 - `ManagedEventLog.stateRoot` still exists as an optional legacy local-Docker
   escape hatch.
 - The Flue harness driver is prompt-only: task/shell cancellation, MCP, tool
-  approvals/deny policy, Cloudflare Workers AI binding registration,
-  Cloudflare-backed Flue session persistence, and first-class OMA child
-  sessions for Flue tasks are not wired yet.
+  approvals/deny policy, Cloudflare-backed Flue session persistence, and
+  first-class OMA child sessions for Flue tasks are not wired yet.
 - Cloudflare deployment wiring exists as an experimental example in
   `examples/cloudflare-flue`, but it is not promoted: there is no live
   Workflow deployment test, Flue task run, sandbox-backed shell/build task, or

@@ -113,7 +113,9 @@ normal composition root. Provider credentials stay an OMA-managed concern:
 the Flue bridge derives Flue `configureProvider()` settings from passthrough
 provider env (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `MOONSHOT_API_KEY`, etc.)
 or explicit Flue provider config, rather than depending on ambient
-`process.env`.
+`process.env`. On Cloudflare, the bridge can also register the Workers AI
+binding as Flue's `cloudflare/<model>` provider prefix, matching Flue's
+generated Cloudflare entrypoint while keeping OMA's custom composition root.
 
 ### Runtime Substrate
 
@@ -255,9 +257,10 @@ an entrypoint helper rather than a full Cloudflare deployment runtime.
 class. It creates `DurableObjectSqlStore` from `ctx.storage`, wires D1-compatible
 managed event and harness-state stores, requires an R2-compatible workspace
 binding, maps direct provider secrets plus `OMA_PASSTHROUGH_ENV_JSON` into the
-Flue harness provider config, and serves the same Hono API. It is not a
-Workflow runtime yet; it is the coordinator/metadata object that removes the
-last fake in-memory store from the Cloudflare path.
+Flue harness provider config, passes the optional Workers AI `AI` binding to
+Flue, and serves the same Hono API. It is not a Workflow runtime yet; it is the
+coordinator/metadata object that removes the last fake in-memory store from the
+Cloudflare path.
 
 `ManagedRunScheduler` is the background-run kickoff boundary. The default
 `InlineRunScheduler` preserves the local behavior by running the turn

@@ -5,6 +5,7 @@ import {
 } from "../events/d1.js";
 import type { ManagedEventLog } from "../events/types.js";
 import {
+  type CloudflareAIBindingLike,
   FlueHarnessAdapter,
   type FlueEngine,
   type FlueProviderConfig,
@@ -36,6 +37,9 @@ export type CloudflareFlueStackOptions = {
   workspaceOptions?: R2ManagedWorkspaceOptions;
   passthroughEnv?: Record<string, string>;
   flueProviderConfig?: FlueProviderConfig;
+  cloudflareAiBinding?: CloudflareAIBindingLike;
+  cloudflareAiGateway?: Record<string, unknown>;
+  cloudflareAiProviderPrefix?: string;
   runTimeoutMs?: number;
   eventLog?: ManagedEventLog;
   eventLogOptions?: D1ManagedEventLogOptions;
@@ -85,6 +89,9 @@ export function createCloudflareFlueStack(
   const flueHarness = new FlueHarnessAdapter({
     passthroughEnv,
     providerConfig: opts.flueProviderConfig,
+    cloudflareAiBinding: opts.cloudflareAiBinding,
+    cloudflareAiGateway: opts.cloudflareAiGateway,
+    cloudflareAiProviderPrefix: opts.cloudflareAiProviderPrefix,
     sessionStateStore: harnessState,
     engine: opts.flueEngine,
     loadEngine: opts.loadFlueEngine,

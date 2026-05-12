@@ -70,7 +70,8 @@ Working today:
   `OMA_ENABLE_FLUE_HARNESS=1`, including AbortSignal cancellation for active
   prompt calls, OpenAI-compatible prompt streaming, live managed-event append,
   OMA-managed local Flue session persistence, and OMA-managed provider secret
-  mapping into Flue provider configuration.
+  mapping into Flue provider configuration, including Cloudflare Workers AI
+  binding registration for `cloudflare/<model>`.
 - Experimental Hermes adapter runtime via direct `AIAgent` integration.
 - Experimental Codex adapter runtime via `codex app-server`.
 - Experimental Claude Agent SDK adapter runtime via `@anthropic-ai/claude-agent-sdk`.

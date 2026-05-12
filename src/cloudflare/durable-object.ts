@@ -1,5 +1,6 @@
 import type { D1DatabaseLike } from "../events/d1.js";
 import {
+  type CloudflareAIBindingLike,
   FLUE_PROVIDER_ENV_KEYS,
   type FlueProviderConfig,
   type FlueProviderSettings,
@@ -41,6 +42,7 @@ export type CloudflareFlueDurableObjectHandlerOptions = Omit<
 
 export type CloudflareFlueDurableObjectEnv = {
   OMA_DB: D1DatabaseLike;
+  AI?: CloudflareAIBindingLike;
   OMA_WORKSPACE?: R2BucketLike;
   OMA_API_TOKEN?: string;
   OMA_PARENT_TOKEN_SECRET_BASE64?: string;
@@ -52,6 +54,7 @@ export type CloudflareFlueDurableObjectEnv = {
   OMA_COMMIT_SHA?: string;
   OMA_PASSTHROUGH_ENV_JSON?: string | Record<string, string>;
   OMA_FLUE_PROVIDER_CONFIG_JSON?: string | FlueProviderConfig;
+  OMA_CLOUDFLARE_AI_GATEWAY_ID?: string;
   ANTHROPIC_API_KEY?: string;
   ANTHROPIC_OAUTH_TOKEN?: string;
   OPENAI_API_KEY?: string;
@@ -159,6 +162,10 @@ export class CloudflareFlueDurableObject<
         "OMA_FLUE_PROVIDER_CONFIG_JSON",
         this.env.OMA_FLUE_PROVIDER_CONFIG_JSON,
       ),
+      cloudflareAiBinding: this.env.AI,
+      cloudflareAiGateway: this.env.AI
+        ? { id: this.env.OMA_CLOUDFLARE_AI_GATEWAY_ID ?? "default" }
+        : undefined,
     });
   }
 }
