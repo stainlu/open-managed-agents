@@ -19,7 +19,28 @@ import {
 
 export const registry = new Registry();
 registry.setDefaultLabels({ service: "open-managed-agents" });
-collectDefaultMetrics({ register: registry });
+if (supportsDefaultNodeMetrics()) {
+  collectDefaultMetrics({ register: registry });
+}
+
+function supportsDefaultNodeMetrics(): boolean {
+  if (typeof process === "undefined") return false;
+  if (
+    typeof process.cpuUsage !== "function" ||
+    typeof process.memoryUsage !== "function" ||
+    typeof process.hrtime !== "function"
+  ) {
+    return false;
+  }
+  try {
+    process.cpuUsage();
+    process.memoryUsage();
+    process.hrtime();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** Every HTTP request the orchestrator answers. */
 export const httpRequestsTotal = new Counter({

@@ -77,13 +77,6 @@ type FlueRuntimeEvent = {
   model?: string | { id?: string };
 };
 
-type OptionalImport = (specifier: string) => Promise<unknown>;
-
-const optionalImport = new Function(
-  "specifier",
-  "return import(specifier)",
-) as OptionalImport;
-
 export class FlueHarnessAdapter implements HarnessAdapter {
   readonly id = "flue";
   readonly displayName = "Flue";
@@ -538,7 +531,7 @@ class OptionalSdkFlueEngine implements FlueEngine {
 
   private async loadInternal(): Promise<FlueInternalModule> {
     if (!this.internalPromise) {
-      this.internalPromise = optionalImport("@flue/sdk/internal")
+      this.internalPromise = import("@flue/sdk/internal")
         .then((mod) => validateFlueInternalModule(mod))
         .catch((err) => {
           const message = err instanceof Error ? err.message : String(err);

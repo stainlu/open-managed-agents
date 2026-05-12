@@ -24,10 +24,29 @@ import { fileURLToPath } from "node:url";
 // dist/ tree. The build step copies src/orchestrator/portal-v2.html
 // to dist/orchestrator/portal-v2.html; both locations contain the
 // same file so the same readFileSync call works in dev and prod.
-const moduleDir = dirname(fileURLToPath(import.meta.url));
-const htmlPath = join(moduleDir, "portal-v2.html");
-const html = readFileSync(htmlPath, "utf8");
+let cachedHtml: string | undefined;
 
 export function portalV2Html(): string {
-  return html;
+  if (cachedHtml !== undefined) return cachedHtml;
+  cachedHtml = loadPortalV2Html();
+  return cachedHtml;
+}
+
+function loadPortalV2Html(): string {
+  try {
+    if (typeof import.meta.url !== "string") return unavailablePortalHtml();
+    const moduleDir = dirname(fileURLToPath(import.meta.url));
+    const htmlPath = join(moduleDir, "portal-v2.html");
+    return readFileSync(htmlPath, "utf8");
+  } catch {
+    return unavailablePortalHtml();
+  }
+}
+
+function unavailablePortalHtml(): string {
+  return `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Open Managed Agents</title></head>
+<body><pre>Portal v2 is not available in this runtime.</pre></body>
+</html>`;
 }

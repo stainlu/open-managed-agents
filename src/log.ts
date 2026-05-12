@@ -26,12 +26,20 @@ export type LogContext = {
 
 const storage = new AsyncLocalStorage<LogContext>();
 
-const level = process.env.OPENCLAW_LOG_LEVEL ?? "info";
+const runtimeEnv = typeof process !== "undefined" ? process.env : {};
+const level = runtimeEnv.OPENCLAW_LOG_LEVEL ?? "info";
 
 // Prod: raw JSON lines (one per log). Dev: pretty-printed TTY.
 // Choose based on NODE_ENV — production defaults to JSON so docker-compose
 // logs and log collectors (Loki, Cloud Logging, CloudWatch) parse natively.
-const devPretty = process.env.NODE_ENV !== "production";
+const devPretty = runtimeEnv.NODE_ENV !== "production" &&
+  typeof pino.transport === "function";
+const prettyTransport = devPretty
+  ? pino.transport({
+      target: "pino-pretty",
+      options: { colorize: true, translateTime: "SYS:HH:MM:ss.l" },
+    })
+  : undefined;
 
 const baseLogger: Logger = pino(
   {
@@ -55,12 +63,7 @@ const baseLogger: Logger = pino(
     },
     base: { service: "open-managed-agents" },
   },
-  devPretty
-    ? pino.transport({
-        target: "pino-pretty",
-        options: { colorize: true, translateTime: "SYS:HH:MM:ss.l" },
-      })
-    : pino.destination(1),
+  prettyTransport,
 );
 
 /** Root logger — call directly for one-off startup lines. */

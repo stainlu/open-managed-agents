@@ -101,6 +101,11 @@ Done in OMA:
   Custom Flue composition roots can inject their own engine/app without losing
   scheduled-run execution, and local coverage now proves a scheduled Flue prompt
   run through that path.
+- The Cloudflare example now starts under `wrangler dev --local` far enough to
+  serve `/healthz`, create Flue agents, schedule a Workflow-backed run, and
+  reach Flue SDK model resolution. The remaining local failure with the smoke
+  `test/model` input is an expected unknown-model error, not a missing SDK or
+  Worker boot failure.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
 - Harness adapters now declare a runtime mode. Existing adapters remain

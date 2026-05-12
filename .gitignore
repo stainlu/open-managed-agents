@@ -27,4 +27,6 @@ docs/reddit-posting-kit.md
 # repo root during dev sessions. Production artifacts go in dist/ or
 # docs/ — these are transient working files.
 .playwright-mcp/
+/.wrangler/
+**/.wrangler/
 /*.png
