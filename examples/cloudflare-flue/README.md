@@ -137,6 +137,50 @@ bindings you expect:
 pnpm deploy
 ```
 
+## Smoke test
+
+Run the basic smoke against local `wrangler dev` or a deployed Worker:
+
+```bash
+OMA_CLOUDFLARE_FLUE_BASE_URL=http://127.0.0.1:8787 \
+OMA_API_TOKEN=replace-with-token-if-configured \
+pnpm smoke
+```
+
+For a deployed Worker:
+
+```bash
+OMA_CLOUDFLARE_FLUE_BASE_URL=https://oma-cloudflare-flue.<account>.workers.dev \
+OMA_API_TOKEN=replace-with-token-if-configured \
+pnpm smoke
+```
+
+The basic smoke proves:
+
+- `/healthz` is reachable;
+- `flue` is present in the harness catalog;
+- a Flue agent can be created;
+- a managed prompt run reaches `succeeded`;
+- `events?run_id=...` returns run-scoped events;
+- `run-tree` contains the managed run;
+- public responses do not expose Durable Object, Workflow, D1, or R2 ids.
+
+The smoke deletes the agent and sessions it creates. Set `OMA_SMOKE_KEEP=1` or
+pass `--keep` if you want to inspect the resources afterward.
+
+Promotion-only checks are stricter and intentionally separate because they
+require a prompt that remains active long enough to test queueing and aborts:
+
+```bash
+OMA_CLOUDFLARE_FLUE_BASE_URL=https://oma-cloudflare-flue.<account>.workers.dev \
+OMA_API_TOKEN=replace-with-token-if-configured \
+pnpm smoke:promotion
+```
+
+If your model answers too quickly, the promotion smoke will fail at the queue
+or active-abort gate. That is expected: the script is a promotion verifier, not
+a flaky green badge.
+
 The `wrangler.toml` uses:
 
 - `compatibility_flags = [ "nodejs_compat" ]` because OMA imports Node builtins

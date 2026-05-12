@@ -6,6 +6,8 @@
     "deploy": "wrangler deploy",
     "dry-run": "wrangler deploy --dry-run",
     "dev": "wrangler dev",
+    "smoke": "node scripts/smoke.mjs",
+    "smoke:promotion": "node scripts/smoke.mjs --check-queue-abort --check-active-abort",
     "types": "wrangler types"
   },
   "dependencies": {

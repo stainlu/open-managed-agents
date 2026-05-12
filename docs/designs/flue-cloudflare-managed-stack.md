@@ -177,8 +177,9 @@ Still open:
   events, but it is not promoted to managed child sessions yet.
 - Cloudflare deployment wiring exists as an experimental example in
   `examples/cloudflare-flue`, but it is not promoted: there is no live
-  Workflow deployment test, live active/queued run abort smoke, Flue task run,
-  sandbox-backed shell/build task, or replay-after-hibernation proof yet.
+  Workflow deployment test, deterministic live active/queued run abort smoke,
+  Flue task run, sandbox-backed shell/build task, or replay-after-hibernation
+  proof yet.
 
 ## Non-Decision
 
@@ -439,6 +440,9 @@ workspace ids into the public session identity.
    - [x] Add R2-compatible workspace binding in the Cloudflare deployment
      example.
    - [x] Add experimental `wrangler.toml` deployment wiring.
+   - [x] Add an example smoke client for local or deployed Worker URLs that
+     proves health, harness catalog, Flue prompt run, event filtering, run-tree
+     projection, and absence of public Cloudflare ids in OMA responses.
    - [ ] Promote production `wrangler.toml` only after live Cloudflare smoke
      coverage.
    - [x] No Docker compatibility shims.
