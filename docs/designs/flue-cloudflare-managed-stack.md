@@ -152,6 +152,11 @@ Done in OMA:
   in DO SQLite, run events survive in the D1-compatible event log, run-tree
   projection still has both managed-run and event-log sources, and the
   restarted object can continue the same session with another turn.
+- Local Cloudflare/Flue Durable Object coverage now proves injected Flue task
+  and operation lineage flows through the Cloudflare API shape: task and shell
+  operation events appear as run-tree children and remain queryable by
+  `parent_run_id`. This proves the managed projection, not yet a live
+  sandbox-backed Flue task promotion proof.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
 - Harness adapters now declare a runtime mode. Existing adapters remain
@@ -427,6 +432,8 @@ workspace ids into the public session identity.
    - [x] Preserve current Flue task/operation/tool/compaction telemetry as
      normalized OMA events.
    - [x] Add a read-only run-tree projection over nested run events.
+   - [x] Add local Cloudflare Durable Object coverage for Flue task/operation
+     lineage through run-tree and `parent_run_id` event filters.
    - Decide when Flue task lineage should graduate from an observable run tree
      to OMA child sessions with real lifecycle control.
 

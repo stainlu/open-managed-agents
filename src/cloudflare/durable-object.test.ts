@@ -680,6 +680,176 @@ describe("ConfigurableCloudflareFlueDurableObject", () => {
     }
   });
 
+  it("exposes Flue task and operation lineage through run-tree and event filters", async () => {
+    const doBacking = new Database(join(tmpDir, "metadata.db"));
+    const doStorage = new FakeDurableObjectStorage(doBacking);
+    const { db, close } = sqliteD1();
+
+    try {
+      const object = new TestConfigurableFlueObject(
+        { storage: doStorage },
+        {
+          db,
+          workspace: new FakeR2Bucket(),
+          internalToken: "secret",
+          prompt: (args) => Promise.resolve({
+            text: "parent done",
+            usage: { input: 8, output: 13 },
+            model: args.model ?? args.agent.model,
+            events: [
+              {
+                type: "task_start",
+                runId: args.runId,
+                taskId: "task_review",
+                prompt: "inspect the workspace",
+                role: "reviewer",
+                cwd: "/workspace",
+                eventIndex: 0,
+              },
+              {
+                type: "operation_start",
+                runId: "task_review",
+                operationId: "op_shell",
+                operationKind: "shell",
+                eventIndex: 1,
+              },
+              {
+                type: "operation",
+                runId: "task_review",
+                operationId: "op_shell",
+                operationKind: "shell",
+                result: "tests passed",
+                durationMs: 12,
+                usage: { input: 5, output: 7, cost: { total: 0.002 } },
+                isError: false,
+                eventIndex: 2,
+              },
+              {
+                type: "task",
+                runId: args.runId,
+                taskId: "task_review",
+                result: "workspace looks sane",
+                durationMs: 42,
+                isError: false,
+                eventIndex: 3,
+              },
+            ],
+          }),
+        },
+      );
+
+      const created = await object.fetch(new Request("https://oma.example/v1/agents", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          harnessId: "flue",
+          model: "test/model",
+          instructions: "be useful",
+        }),
+      }));
+      expect(created.status).toBe(200);
+      const agent = await created.json() as { agent_id: string };
+
+      const run = await object.fetch(new Request(
+        `https://oma.example/v1/agents/${agent.agent_id}/run`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ task: "review workspace" }),
+        },
+      ));
+      expect(run.status).toBe(200);
+      const runBody = await run.json() as { session_id: string; run_id: string };
+      await waitForSessionHttpToStopRunning(object, runBody.session_id);
+
+      const tree = await object.fetch(new Request(
+        `https://oma.example/v1/sessions/${runBody.session_id}/run-tree`,
+      ));
+      expect(tree.status).toBe(200);
+      await expect(tree.json()).resolves.toMatchObject({
+        session_id: runBody.session_id,
+        count: 3,
+        runs: [
+          {
+            run_id: runBody.run_id,
+            source: { managed_run: true, event_log: true },
+            children: [
+              {
+                run_id: "task_review",
+                parent_run_id: runBody.run_id,
+                run_kind: "task",
+                status: "completed",
+                source: { managed_run: false, event_log: true },
+                children: [
+                  {
+                    run_id: "op_shell",
+                    parent_run_id: "task_review",
+                    run_kind: "shell",
+                    status: "completed",
+                    tokens: { input: 5, output: 7 },
+                    cost_usd: 0.002,
+                    source: { managed_run: false, event_log: true },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+
+      const taskEvents = await object.fetch(new Request(
+        `https://oma.example/v1/sessions/${runBody.session_id}/events?parent_run_id=${runBody.run_id}`,
+      ));
+      expect(taskEvents.status).toBe(200);
+      await expect(taskEvents.json()).resolves.toMatchObject({
+        count: 2,
+        events: [
+          {
+            type: "session.run_start",
+            run_id: "task_review",
+            parent_run_id: runBody.run_id,
+            run_kind: "task",
+          },
+          {
+            type: "session.run_end",
+            run_id: "task_review",
+            parent_run_id: runBody.run_id,
+            run_kind: "task",
+            run_status: "completed",
+          },
+        ],
+      });
+
+      const operationEvents = await object.fetch(new Request(
+        `https://oma.example/v1/sessions/${runBody.session_id}/events?parent_run_id=task_review`,
+      ));
+      expect(operationEvents.status).toBe(200);
+      await expect(operationEvents.json()).resolves.toMatchObject({
+        count: 2,
+        events: [
+          {
+            type: "session.run_start",
+            run_id: "op_shell",
+            parent_run_id: "task_review",
+            run_kind: "shell",
+          },
+          {
+            type: "session.run_end",
+            run_id: "op_shell",
+            parent_run_id: "task_review",
+            run_kind: "shell",
+            run_status: "completed",
+            tokens: { input: 5, output: 7 },
+            cost_usd: 0.002,
+          },
+        ],
+      });
+    } finally {
+      close();
+      doBacking.close();
+    }
+  });
+
   it("keeps Workflow re-entry available for custom Flue composition", async () => {
     const doBacking = new Database(join(tmpDir, "metadata.db"));
     const doStorage = new FakeDurableObjectStorage(doBacking);
