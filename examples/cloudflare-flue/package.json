@@ -8,7 +8,8 @@
     "dev": "wrangler dev",
     "smoke": "node scripts/smoke.mjs",
     "smoke:sandbox": "node scripts/smoke.mjs --check-sandbox-exec",
-    "smoke:promotion": "node scripts/smoke.mjs --check-sandbox-exec --check-queue-abort --check-active-abort",
+    "smoke:task": "node scripts/smoke.mjs --check-flue-task",
+    "smoke:promotion": "node scripts/smoke.mjs --check-sandbox-exec --check-flue-task --check-queue-abort --check-active-abort",
     "types": "wrangler types"
   },
   "dependencies": {

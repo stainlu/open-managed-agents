@@ -51,12 +51,16 @@ export type Env =
 const router = createCloudflareFlueWorkerRouter();
 const resolveSandbox = getSandbox as unknown as CloudflareSandboxResolver;
 const SMOKE_SANDBOX_EXEC_PATH = "/_oma/smoke/sandbox-exec";
+const SMOKE_FLUE_TASK_PATH = "/_oma/smoke/flue-task";
 
 export default {
   fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
     if (url.pathname === SMOKE_SANDBOX_EXEC_PATH) {
       return handleSandboxExecSmoke(request, env);
+    }
+    if (url.pathname === SMOKE_FLUE_TASK_PATH) {
+      return handleFlueTaskSmoke(request, env);
     }
     return router.fetch(request, env, ctx);
   },
@@ -69,18 +73,8 @@ export class OMACoordinator extends CloudflareFlueDurableObject<Env> {
 }
 
 async function handleSandboxExecSmoke(request: Request, env: Env): Promise<Response> {
-  if (request.method !== "POST") {
-    return jsonResponse({ error: "method_not_allowed" }, 405);
-  }
-  if (!env.OMA_API_TOKEN) {
-    return jsonResponse({ error: "smoke_exec_requires_oma_api_token" }, 403);
-  }
-  if (request.headers.get("authorization") !== `Bearer ${env.OMA_API_TOKEN}`) {
-    return jsonResponse({ error: "forbidden" }, 403);
-  }
-  if (!env.OMA_WORKSPACE) {
-    return jsonResponse({ error: "missing_workspace_binding" }, 500);
-  }
+  const gate = requireSmokeRequest(request, env);
+  if (gate) return gate;
 
   let payload: unknown;
   try {
@@ -91,7 +85,11 @@ async function handleSandboxExecSmoke(request: Request, env: Env): Promise<Respo
   const parsed = parseSandboxExecSmokePayload(payload);
   if (!parsed.ok) return jsonResponse({ error: "invalid_request", message: parsed.message }, 400);
 
-  const workspace = new R2ManagedWorkspace(env.OMA_WORKSPACE);
+  const workspaceBinding = env.OMA_WORKSPACE;
+  if (!workspaceBinding) {
+    return jsonResponse({ error: "missing_workspace_binding" }, 500);
+  }
+  const workspace = new R2ManagedWorkspace(workspaceBinding);
   const commandExecutor = createExampleWorkspaceCommandExecutor(env);
   const harness = new FlueHarnessAdapter({
     workspace,
@@ -116,6 +114,76 @@ async function handleSandboxExecSmoke(request: Request, env: Env): Promise<Respo
   }, 200);
 }
 
+async function handleFlueTaskSmoke(request: Request, env: Env): Promise<Response> {
+  const gate = requireSmokeRequest(request, env);
+  if (gate) return gate;
+  if (!env.AI) {
+    return jsonResponse({ error: "missing_ai_binding" }, 500);
+  }
+
+  let payload: unknown;
+  try {
+    payload = await request.json();
+  } catch {
+    return jsonResponse({ error: "invalid_json" }, 400);
+  }
+  const parsed = parseFlueTaskSmokePayload(payload);
+  if (!parsed.ok) return jsonResponse({ error: "invalid_request", message: parsed.message }, 400);
+
+  const workspaceBinding = env.OMA_WORKSPACE;
+  if (!workspaceBinding) {
+    return jsonResponse({ error: "missing_workspace_binding" }, 500);
+  }
+  const workspace = new R2ManagedWorkspace(workspaceBinding);
+  const harness = new FlueHarnessAdapter({
+    workspace,
+    workspaceCommandExecutor: createExampleWorkspaceCommandExecutor(env),
+    cloudflareAiBinding: env.AI,
+    cloudflareAiGateway: { id: env.OMA_CLOUDFLARE_AI_GATEWAY_ID ?? "default" },
+  });
+  const model = parsed.value.model ?? "cloudflare/@cf/openai/gpt-oss-20b";
+  const result = await harness.invokeTask({
+    agent: smokeAgent(
+      parsed.value.agentId,
+      model,
+      "Run only the requested deterministic smoke task.",
+    ),
+    sessionId: parsed.value.sessionId,
+    runId: `run_smoke_task_${crypto.randomUUID()}`,
+    task: parsed.value.task,
+    cwd: parsed.value.cwd,
+    timeoutMs: Math.trunc((parsed.value.timeoutSeconds ?? 60) * 1_000),
+    model,
+    thinkingLevel: "off",
+  });
+  return jsonResponse({
+    text: result.output,
+    tokens_in: result.tokensIn,
+    tokens_out: result.tokensOut,
+    model: result.model,
+    event_types: result.events?.map((event) => event.type) ?? [],
+    run_kinds: result.events
+      ?.map((event) => event.runKind)
+      .filter((kind): kind is string => typeof kind === "string") ?? [],
+  }, 200);
+}
+
+function requireSmokeRequest(request: Request, env: Env): Response | undefined {
+  if (request.method !== "POST") {
+    return jsonResponse({ error: "method_not_allowed" }, 405);
+  }
+  if (!env.OMA_API_TOKEN) {
+    return jsonResponse({ error: "smoke_route_requires_oma_api_token" }, 403);
+  }
+  if (request.headers.get("authorization") !== `Bearer ${env.OMA_API_TOKEN}`) {
+    return jsonResponse({ error: "forbidden" }, 403);
+  }
+  if (!env.OMA_WORKSPACE) {
+    return jsonResponse({ error: "missing_workspace_binding" }, 500);
+  }
+  return undefined;
+}
+
 function createExampleWorkspaceCommandExecutor(env: Env) {
   return createCloudflareSandboxWorkspaceCommandExecutor({
     binding: env.Sandbox,
@@ -125,13 +193,17 @@ function createExampleWorkspaceCommandExecutor(env: Env) {
   });
 }
 
-function smokeAgent(agentId: string): AgentConfig {
+function smokeAgent(
+  agentId: string,
+  model = "cloudflare/@cf/openai/gpt-oss-20b",
+  instructions = "Run only the requested deterministic sandbox smoke command.",
+): AgentConfig {
   return {
     agentId,
     harnessId: "flue",
-    model: "cloudflare/@cf/openai/gpt-oss-20b",
+    model,
     tools: [],
-    instructions: "Run only the requested deterministic sandbox smoke command.",
+    instructions,
     permissionPolicy: { type: "always_allow" },
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -150,6 +222,15 @@ type SandboxExecSmokePayload = {
   sessionId: string;
   command: string;
   cwd?: string;
+  timeoutSeconds?: number;
+};
+
+type FlueTaskSmokePayload = {
+  agentId: string;
+  sessionId: string;
+  task: string;
+  cwd?: string;
+  model?: string;
   timeoutSeconds?: number;
 };
 
@@ -190,6 +271,53 @@ function parseSandboxExecSmokePayload(
       sessionId,
       command,
       cwd,
+      timeoutSeconds: typeof timeoutSeconds === "number" ? timeoutSeconds : undefined,
+    },
+  };
+}
+
+function parseFlueTaskSmokePayload(
+  payload: unknown,
+): { ok: true; value: FlueTaskSmokePayload } | { ok: false; message: string } {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return { ok: false, message: "body must be an object" };
+  }
+  const record = payload as Record<string, unknown>;
+  const agentId = record.agent_id;
+  const sessionId = record.session_id;
+  const task = record.task;
+  const cwd = record.cwd;
+  const model = record.model;
+  const timeoutSeconds = record.timeout_seconds;
+  if (typeof agentId !== "string" || agentId.length === 0) {
+    return { ok: false, message: "agent_id must be a non-empty string" };
+  }
+  if (typeof sessionId !== "string" || sessionId.length === 0) {
+    return { ok: false, message: "session_id must be a non-empty string" };
+  }
+  if (typeof task !== "string" || task.length === 0) {
+    return { ok: false, message: "task must be a non-empty string" };
+  }
+  if (cwd !== undefined && typeof cwd !== "string") {
+    return { ok: false, message: "cwd must be a string when provided" };
+  }
+  if (model !== undefined && (typeof model !== "string" || model.length === 0)) {
+    return { ok: false, message: "model must be a non-empty string when provided" };
+  }
+  if (
+    timeoutSeconds !== undefined &&
+    (typeof timeoutSeconds !== "number" || !Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0)
+  ) {
+    return { ok: false, message: "timeout_seconds must be a positive number when provided" };
+  }
+  return {
+    ok: true,
+    value: {
+      agentId,
+      sessionId,
+      task,
+      cwd,
+      model: typeof model === "string" ? model : undefined,
       timeoutSeconds: typeof timeoutSeconds === "number" ? timeoutSeconds : undefined,
     },
   };

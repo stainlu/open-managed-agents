@@ -177,6 +177,10 @@ Done in OMA:
   through OMA's Flue adapter. Shell operations go through Flue's own
   operation/tool event path, map back into normalized OMA run events, and use
   the same managed workspace command executor as model-driven shell calls.
+- The Flue SDK bridge now exposes deterministic Flue `session.task()` execution
+  through OMA's Flue adapter. This is deliberately a direct task invocation
+  plus normalized task lineage, not a claim that Flue tasks are first-class OMA
+  child sessions yet.
 - `createCloudflareSandboxWorkspaceCommandExecutor` now exists as the first
   concrete backend for that seam. It resolves a Cloudflare Sandbox by stable
   managed session identity, mirrors OMA's managed workspace into the sandbox,
@@ -193,6 +197,11 @@ Done in OMA:
   executor, and verifies generated output plus deletions sync back to the
   managed R2 workspace. This is still a verifier until it is run against a
   live Cloudflare deployment.
+- The Cloudflare example smoke client can also require a deterministic Flue
+  task run through a token-gated example-only route. The route invokes real
+  Flue `session.task()` through OMA's Flue adapter and checks that task
+  lifecycle events survive as normalized OMA run lineage. This is still a
+  verifier until it is run against a live Cloudflare deployment.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
 - Harness adapters now declare a runtime mode. Existing adapters remain
@@ -228,7 +237,7 @@ Still open:
   MCP, tool approvals/deny policy, Cloudflare-backed Flue session persistence
   promotion, and first-class OMA child sessions for Flue tasks are not wired
   yet. Current Flue task and operation telemetry is preserved as structured
-  nested run events, and direct Flue shell operations can be executed and
+  nested run events, direct Flue task and shell operations can be executed and
   mapped, but Flue tasks are not promoted to managed child sessions yet.
 - Cloudflare deployment wiring exists as an experimental example in
   `examples/cloudflare-flue`, but it is not promoted: there is no live
@@ -488,6 +497,9 @@ workspace ids into the public session identity.
    - [x] Route deterministic shell execution through real Flue
      `session.shell()` so OMA maps Flue's operation/tool events instead of
      bypassing the harness with raw `SessionEnv.exec()`.
+   - [x] Route deterministic task execution through real Flue
+     `session.task()` so OMA can prove task lineage through the harness without
+     prematurely promoting Flue tasks to managed child sessions.
    - Decide when Flue task lineage should graduate from an observable run tree
      to OMA child sessions with real lifecycle control.
 
@@ -528,6 +540,8 @@ workspace ids into the public session identity.
      projection, and absence of public Cloudflare ids in OMA responses.
    - [x] Add an opt-in example smoke check for sandbox-backed shell/build
      execution and workspace sync-back.
+   - [x] Add an opt-in example smoke check for real Flue task invocation and
+     normalized task lineage.
    - [ ] Promote production `wrangler.toml` only after live Cloudflare smoke
      coverage.
    - [x] No Docker compatibility shims.

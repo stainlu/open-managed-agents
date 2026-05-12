@@ -62,10 +62,18 @@ export type FlueEngineShellResult = FlueShellResult & {
   };
 };
 
+export type FlueEngineTaskArgs = Omit<FlueEnginePromptArgs, "content"> & {
+  task: string;
+  cwd?: string;
+};
+
+export type FlueEngineTaskResult = FlueEnginePromptResult;
+
 export type FlueEngine = {
   prompt(args: FlueEnginePromptArgs): Promise<FlueEnginePromptResult>;
   stream?(args: FlueEnginePromptArgs): Promise<HarnessStreamingTurn>;
   shell?(args: FlueEngineShellArgs): Promise<FlueEngineShellResult>;
+  task?(args: FlueEngineTaskArgs): Promise<FlueEngineTaskResult>;
 };
 
 export type FlueShellResult = {
@@ -88,6 +96,28 @@ export type FlueShellInvocationArgs = {
 export type FlueShellInvocationResult = FlueShellResult & {
   events?: Event[];
   native?: FlueEngineShellResult["native"];
+};
+
+export type FlueTaskInvocationArgs = {
+  agent: AgentConfig;
+  session?: Session;
+  sessionId: string;
+  runId?: string;
+  task: string;
+  cwd?: string;
+  timeoutMs: number;
+  model?: string;
+  thinkingLevel?: AgentConfig["thinkingLevel"];
+};
+
+export type FlueTaskInvocationResult = {
+  output: string;
+  tokensIn: number;
+  tokensOut: number;
+  costUsd?: number;
+  model?: string;
+  events?: Event[];
+  native?: HarnessTurnResult["native"];
 };
 
 export type FlueManagedWorkspaceCommandInvocation = {
@@ -273,7 +303,7 @@ export class FlueHarnessAdapter implements HarnessAdapter {
     },
     cancellation: {
       support: "partial",
-      detail: "Active Flue prompt turns and shell operations are cancelled with AbortSignal; task cancellation is not exposed through OMA yet.",
+      detail: "Active Flue prompt, task, and shell operations are cancelled with AbortSignal; task lifecycle is not promoted to OMA child sessions yet.",
     },
     interruption: {
       support: "unsupported",
@@ -301,7 +331,7 @@ export class FlueHarnessAdapter implements HarnessAdapter {
     },
     managed_event_log: {
       support: "partial",
-      detail: "Adapter emits managed prompt boundary events, maps selected Flue runtime events, and can map Flue shell operation events.",
+      detail: "Adapter emits managed prompt boundary events and maps selected Flue runtime, task, and shell operation events.",
     },
     usage: {
       support: "supported",
@@ -309,7 +339,7 @@ export class FlueHarnessAdapter implements HarnessAdapter {
     },
     subagents: {
       support: "partial",
-      detail: "Flue task events can be observed, but OMA first-class child sessions are not wired yet.",
+      detail: "Flue task operations can be observed and invoked through the bridge, but OMA first-class child sessions are not wired yet.",
     },
   } satisfies HarnessCapabilities;
 
@@ -332,7 +362,7 @@ export class FlueHarnessAdapter implements HarnessAdapter {
   }
 
   async invokeTurn(args: HarnessTurnInvocationArgs): Promise<HarnessTurnResult> {
-    this.assertPromptCallable(args);
+    this.assertLlmCallable(args);
     const runId = args.runId ?? createFallbackRunId();
     const callController = this.startCall(args.sessionId);
     const engine = await this.resolveEngine();
@@ -389,7 +419,7 @@ export class FlueHarnessAdapter implements HarnessAdapter {
   async invokeStreamingTurn(
     args: HarnessStreamingTurnInvocationArgs,
   ): Promise<HarnessStreamingTurn> {
-    this.assertPromptCallable(args);
+    this.assertLlmCallable(args);
     const runId = args.runId ?? createFallbackRunId();
     const engine = await this.resolveEngine();
     if (!engine.stream) {
@@ -491,6 +521,59 @@ export class FlueHarnessAdapter implements HarnessAdapter {
     };
   }
 
+  async invokeTask(args: FlueTaskInvocationArgs): Promise<FlueTaskInvocationResult> {
+    this.assertLlmCallable(args);
+    const runId = args.runId ?? createFallbackRunId();
+    const engine = await this.resolveEngine();
+    if (!engine.task) {
+      throw new HarnessInvocationError("Flue engine does not expose task calls");
+    }
+    const callController = this.startCall(args.sessionId);
+    let result: FlueEngineTaskResult;
+    try {
+      result = await engine.task({
+        task: args.task,
+        cwd: args.cwd,
+        sessionId: args.sessionId,
+        runId,
+        timeoutMs: args.timeoutMs,
+        signal: AbortSignal.any([
+          callController.signal,
+          AbortSignal.timeout(args.timeoutMs),
+        ]),
+        agent: args.agent,
+        session: args.session,
+        model: args.model,
+        thinkingLevel: args.thinkingLevel,
+      });
+    } finally {
+      this.finishCall(args.sessionId, callController);
+    }
+    const model = modelId(result.model) ?? args.model ?? args.agent.model;
+    const tokensIn = finiteTokenCount(result.usage?.input);
+    const tokensOut = finiteTokenCount(result.usage?.output);
+    const costUsd = finiteNumber(result.usage?.cost?.total);
+    return {
+      output: result.text,
+      tokensIn,
+      tokensOut,
+      costUsd,
+      model,
+      events: mapFlueEvents(
+        result.events ?? [],
+        args.sessionId,
+        runId,
+        runId,
+        Date.now(),
+      ),
+      native: result.native ?? {
+        nativeSessionId: args.sessionId,
+        nativeThreadId: null,
+        nativeMetadata: { harness: "flue", runId, operation: "task" },
+      },
+    };
+  }
+
   async patchSession(): Promise<void> {
     // Native Flue turns receive model/thinking at invocation time; there is no
     // endpoint-backed live session patch in this adapter.
@@ -571,11 +654,11 @@ export class FlueHarnessAdapter implements HarnessAdapter {
     return this.enginePromise;
   }
 
-  private assertPromptCallable(
-    args: HarnessTurnInvocationArgs | HarnessStreamingTurnInvocationArgs,
+  private assertLlmCallable(
+    args: { agent?: AgentConfig },
   ): asserts args is typeof args & { agent: AgentConfig } {
     if (!args.agent) {
-      throw new HarnessInvocationError("Flue turn requires agent config");
+      throw new HarnessInvocationError("Flue LLM call requires agent config");
     }
     if (args.agent.tools.length > 0) {
       throw new HarnessInvocationError(
@@ -796,6 +879,46 @@ class OptionalSdkFlueEngine implements FlueEngine {
     }
   }
 
+  async task(args: FlueEngineTaskArgs): Promise<FlueEngineTaskResult> {
+    const runId = args.runId ?? createFallbackRunId();
+    const ctx = await this.createContext({
+      ...args,
+      content: args.task,
+      runId,
+    });
+    const events: FlueRuntimeEvent[] = [];
+    ctx.setEventCallback((event: FlueRuntimeEvent) => {
+      events.push(event);
+    });
+    try {
+      const flueAgent = await ctx.init({
+        id: args.agent.agentId,
+        model: args.model ?? args.agent.model,
+        thinkingLevel: args.thinkingLevel ?? args.agent.thinkingLevel,
+      });
+      const session = await flueAgent.session(args.sessionId);
+      const response = await session.task(args.task, {
+        cwd: args.cwd,
+        model: args.model,
+        thinkingLevel: args.thinkingLevel,
+        signal: args.signal ?? AbortSignal.timeout(args.timeoutMs),
+      });
+      return {
+        text: typeof response.text === "string" ? response.text : "",
+        usage: response.usage,
+        model: response.model,
+        events,
+        native: {
+          nativeSessionId: args.sessionId,
+          nativeThreadId: null,
+          nativeMetadata: { harness: "flue", runId, operation: "task" },
+        },
+      };
+    } finally {
+      ctx.setEventCallback(undefined);
+    }
+  }
+
   private async createContext(args: FlueEnginePromptArgs): Promise<FlueContextLike> {
     await this.configureProviders();
     const internal = await this.loadInternal();
@@ -989,6 +1112,15 @@ type FlueSessionLike = {
       signal?: AbortSignal;
     },
   ): FlueCallHandle<FlueShellResult>;
+  task(
+    content: string,
+    options?: {
+      cwd?: string;
+      model?: string;
+      thinkingLevel?: AgentConfig["thinkingLevel"];
+      signal?: AbortSignal;
+    },
+  ): FlueCallHandle<FluePromptResponseLike>;
 };
 
 type FluePromptResponseLike = {

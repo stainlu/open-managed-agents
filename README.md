@@ -70,6 +70,9 @@ Working today:
   shell/build smoke that verifies workspace fixture writes, sandbox execution,
   generated artifacts, and deletion sync-back through the managed workspace
   executor.
+- The Cloudflare/Flue example also includes an opt-in, token-gated Flue task
+  smoke route that invokes real Flue `session.task()` through the OMA Flue
+  adapter and verifies normalized task lineage.
 - OMA-managed run ids are assigned when a turn is accepted and preserved
   through session queues, Workflow-backed re-entry, server responses, and Flue
   run/event mapping.
@@ -78,8 +81,9 @@ Working today:
   and exposes session-scoped run list/get/abort APIs.
 - Experimental Flue native harness driver, opt-in via
   `OMA_ENABLE_FLUE_HARNESS=1`, including prompt turns, real Flue
-  `session.shell()` operations over OMA-managed workspaces, AbortSignal
-  cancellation for active prompt/shell calls, OpenAI-compatible prompt
+  `session.task()` and `session.shell()` operations over OMA-managed
+  workspaces, AbortSignal cancellation for active prompt/task/shell calls,
+  OpenAI-compatible prompt
   streaming, live managed-event append, OMA-managed local Flue session
   persistence, and OMA-managed provider secret mapping into Flue provider
   configuration, including Cloudflare Workers AI binding registration for

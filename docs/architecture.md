@@ -94,18 +94,19 @@ Current adapters:
 | `hermes` | experimental | in-container `oma.adapter.v1` HTTP/SSE server wrapping Hermes `AIAgent` directly |
 | `codex` | experimental | in-container `oma.adapter.v1` HTTP/SSE server driving `codex app-server` JSON-RPC |
 | `claude-agent-sdk` | experimental | in-container `oma.adapter.v1` HTTP/SSE server driving `@anthropic-ai/claude-agent-sdk` `query()` |
-| `flue` | experimental / opt-in | native SDK bridge for Flue prompt turns and prompt streaming, enabled with `OMA_ENABLE_FLUE_HARNESS=1` |
+| `flue` | experimental / opt-in | native SDK bridge for Flue prompt turns, prompt streaming, task calls, and shell calls, enabled with `OMA_ENABLE_FLUE_HARNESS=1` |
 
 Unsupported behavior is capability-gated. For example, Hermes MCP, compaction,
 and managed subagents, Codex MCP, Codex per-tool deny policy, and Codex managed
 subagents, plus Claude Agent SDK managed subagents and manual compaction, are
 rejected explicitly instead of being silently faked. The same rule applies to
-Flue: task/shell cancellation, OMA tool-policy mapping, MCP, and first-class
-managed child sessions for Flue tasks are not claimed until the adapter
-actually owns those surfaces. The current Flue adapter owns prompt streaming:
-Flue `text_delta` callbacks become OpenAI-compatible streaming chunks, and
-normalized OMA events are appended while the streamed turn is still running.
-Current Flue task and operation telemetry is preserved as nested
+Flue: OMA tool-policy mapping, MCP, and first-class managed child sessions for
+Flue tasks are not claimed until the adapter actually owns those surfaces. The
+current Flue adapter owns prompt streaming: Flue `text_delta` callbacks become
+OpenAI-compatible streaming chunks, and normalized OMA events are appended
+while the streamed turn is still running. It also owns direct Flue
+`session.task()` and `session.shell()` invocation paths with AbortSignal
+cancellation. Current Flue task and operation telemetry is preserved as nested
 `session.run_start` / `session.run_end` events, including parent run ids, but
 those nested runs are not first-class managed child sessions yet. The session
 API exposes an event-derived run tree so clients can inspect that lineage

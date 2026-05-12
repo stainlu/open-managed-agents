@@ -501,6 +501,112 @@ describe("FlueHarnessAdapter", () => {
     });
   });
 
+  it("invokes Flue task operations and maps task lineage without promoting child sessions", async () => {
+    const task = vi.fn<NonNullable<FlueEngine["task"]>>(async (args) => ({
+      text: `task:${args.task}`,
+      usage: { input: 17, output: 19, cost: { total: 0.004 } },
+      model: { id: args.model ?? args.agent.model },
+      events: [
+        {
+          type: "operation_start",
+          runId: args.runId,
+          operationId: "op_task",
+          operationKind: "task",
+          eventIndex: 0,
+        },
+        {
+          type: "task_start",
+          runId: args.runId,
+          taskId: "task_child",
+          prompt: args.task,
+          cwd: args.cwd,
+          eventIndex: 1,
+        },
+        {
+          type: "task",
+          runId: args.runId,
+          taskId: "task_child",
+          result: "child done",
+          durationMs: 33,
+          isError: false,
+          eventIndex: 2,
+        },
+        {
+          type: "operation",
+          runId: args.runId,
+          operationId: "op_task",
+          operationKind: "task",
+          result: "child done",
+          durationMs: 34,
+          isError: false,
+          usage: { input: 17, output: 19, cost: { total: 0.004 } },
+          eventIndex: 3,
+        },
+      ],
+    }));
+    const adapter = new FlueHarnessAdapter({
+      engine: {
+        prompt: vi.fn(async () => ({ text: "unused" })),
+        task,
+      },
+    });
+
+    const result = await adapter.invokeTask({
+      agent: agent(),
+      sessionId: "ses_task",
+      runId: "run_task_parent",
+      task: "inspect this",
+      cwd: "subdir",
+      timeoutMs: 60_000,
+      model: "anthropic/claude-opus-4-7",
+      thinkingLevel: "high",
+    });
+
+    expect(task).toHaveBeenCalledWith(expect.objectContaining({
+      task: "inspect this",
+      cwd: "subdir",
+      sessionId: "ses_task",
+      runId: "run_task_parent",
+      model: "anthropic/claude-opus-4-7",
+      thinkingLevel: "high",
+      signal: expect.any(AbortSignal),
+    }));
+    expect(result).toMatchObject({
+      output: "task:inspect this",
+      tokensIn: 17,
+      tokensOut: 19,
+      costUsd: 0.004,
+      model: "anthropic/claude-opus-4-7",
+      native: {
+        nativeSessionId: "ses_task",
+        nativeMetadata: {
+          harness: "flue",
+          runId: "run_task_parent",
+          operation: "task",
+        },
+      },
+    });
+    expect(result.events?.map((event) => event.type)).toEqual([
+      "session.run_start",
+      "session.run_start",
+      "session.run_end",
+      "session.run_end",
+    ]);
+    expect(result.events?.find((event) => event.runId === "task_child" && event.type === "session.run_start"))
+      .toMatchObject({
+        runKind: "task",
+        parentRunId: "run_task_parent",
+        content: expect.stringContaining("inspect this"),
+      });
+    expect(result.events?.find((event) => event.runId === "task_child" && event.type === "session.run_end"))
+      .toMatchObject({
+        runKind: "task",
+        parentRunId: "run_task_parent",
+        runStatus: "completed",
+        content: expect.stringContaining("child done"),
+      });
+  });
+
   it("runs prompt turns through an injected native Flue engine", async () => {
     const prompt = vi.fn<FlueEngine["prompt"]>(async (args) => ({
       text: `echo: ${args.content}`,

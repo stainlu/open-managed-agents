@@ -13,6 +13,7 @@ const pollMs = positiveInt(opts["poll-ms"] ?? process.env.OMA_SMOKE_POLL_MS, 1_0
 const checkQueueAbort = boolOpt(opts["check-queue-abort"] ?? process.env.OMA_SMOKE_CHECK_QUEUE_ABORT);
 const checkActiveAbort = boolOpt(opts["check-active-abort"] ?? process.env.OMA_SMOKE_CHECK_ACTIVE_ABORT);
 const checkSandboxExec = boolOpt(opts["check-sandbox-exec"] ?? process.env.OMA_SMOKE_CHECK_SANDBOX_EXEC);
+const checkFlueTask = boolOpt(opts["check-flue-task"] ?? process.env.OMA_SMOKE_CHECK_FLUE_TASK);
 const keep = boolOpt(opts.keep ?? process.env.OMA_SMOKE_KEEP);
 const smokeId = `oma-smoke-${Date.now().toString(36)}`;
 const createdAgentIds = new Set();
@@ -84,6 +85,12 @@ async function main() {
       await runSandboxExecSmoke(agent.agent_id, promptRun.session_id);
     } else {
       console.log("skip sandbox exec smoke; pass --check-sandbox-exec to require it");
+    }
+
+    if (checkFlueTask) {
+      await runFlueTaskSmoke(agent.agent_id, promptRun.session_id);
+    } else {
+      console.log("skip Flue task smoke; pass --check-flue-task to require it");
     }
 
     if (checkQueueAbort) {
@@ -193,6 +200,34 @@ async function runSandboxExecSmoke(agentId, sessionId) {
   assert(output === `built:${smokeId}`, `sandbox output mismatch: ${JSON.stringify(output)}`);
   assert(!await fileExists(agentId, sessionId, "obsolete.txt"), "sandbox deletion did not sync back");
   console.log("ok sandbox exec wrote dist/result.txt and synced deletion");
+}
+
+async function runFlueTaskSmoke(agentId, sessionId) {
+  if (!token) {
+    throw new Error("Flue task smoke requires OMA_API_TOKEN because it uses an example-only smoke route");
+  }
+  const result = await request("POST", "/_oma/smoke/flue-task", {
+    body: {
+      agent_id: agentId,
+      session_id: sessionId,
+      model,
+      task: `Reply with a short sentence containing this deployment smoke token: ${smokeId}`,
+      timeout_seconds: Math.ceil(timeoutMs / 1_000),
+    },
+  });
+  assert(typeof result.text === "string" && result.text.length > 0, "Flue task smoke returned empty text");
+  assert(
+    Array.isArray(result.event_types) &&
+      result.event_types.includes("session.run_start") &&
+      result.event_types.includes("session.run_end"),
+    `Flue task did not report run lifecycle events: ${JSON.stringify(result.event_types)}`,
+  );
+  assert(
+    Array.isArray(result.run_kinds) && result.run_kinds.includes("task"),
+    `Flue task did not expose task run kind: ${JSON.stringify(result.run_kinds)}`,
+  );
+  assertNoPlatformIds(result, "Flue task smoke response");
+  console.log("ok Flue task run emitted task lineage");
 }
 
 async function startRun(agentId, task) {
