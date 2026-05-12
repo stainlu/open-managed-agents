@@ -271,7 +271,7 @@ function harnessResponse(harness: HarnessAdapter) {
 
 type AgentHarnessCapabilityInput = Pick<
   AgentConfig,
-  "harnessId" | "permissionPolicy" | "callableAgents" | "maxSubagentDepth" | "mcpServers"
+  "harnessId" | "tools" | "permissionPolicy" | "callableAgents" | "maxSubagentDepth" | "mcpServers"
 >;
 
 function unsupportedHarnessCapabilityBody(
@@ -333,6 +333,14 @@ function validateAgentHarnessCapabilities(
       harness,
       "tool_approvals",
       caps.tool_approvals.detail,
+    );
+  }
+  const validationIssue = harness.validateAgentConfig?.(agent);
+  if (validationIssue) {
+    return unsupportedHarnessCapabilityBody(
+      harness,
+      validationIssue.capability,
+      validationIssue.detail,
     );
   }
   return undefined;
@@ -1124,6 +1132,7 @@ export function buildApp(deps: ServerDeps): Hono {
     }
     const candidate: AgentHarnessCapabilityInput = {
       harnessId: patch.harnessId ?? agent.harnessId,
+      tools: patch.tools === null ? [] : (patch.tools ?? agent.tools),
       permissionPolicy: patch.permissionPolicy ?? agent.permissionPolicy,
       callableAgents: patch.callableAgents === null
         ? []

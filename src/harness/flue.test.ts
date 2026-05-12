@@ -17,6 +17,7 @@ import {
   mergeFlueProviderConfig,
   type FlueEngine,
   type FlueManagedWorkspaceCommandExecutor,
+  type FlueMcpConnector,
 } from "./flue.js";
 
 function agent(patch: Partial<AgentConfig> = {}): AgentConfig {
@@ -850,6 +851,196 @@ describe("FlueHarnessAdapter", () => {
         agent: agent({ tools: ["calculator"] }),
       }),
     ).rejects.toThrow(HarnessInvocationError);
+  });
+
+  it("fails loudly instead of silently ignoring OMA Flue tool policy", async () => {
+    const adapter = new FlueHarnessAdapter({
+      engine: {
+        prompt: vi.fn(async () => ({ text: "unused" })),
+      },
+    });
+
+    await expect(
+      adapter.invokeTurn({
+        content: "hello",
+        sessionId: "ses_flue",
+        timeoutMs: 60_000,
+        agent: agent({ permissionPolicy: { type: "deny", tools: ["docs_search"] } }),
+      }),
+    ).rejects.toThrow("Flue harness does not map OMA deny policy");
+
+    await expect(
+      adapter.invokeTurn({
+        content: "hello",
+        sessionId: "ses_flue",
+        timeoutMs: 60_000,
+        agent: agent({ permissionPolicy: { type: "always_ask" } }),
+      }),
+    ).rejects.toThrow("Flue harness does not map OMA tool approvals");
+  });
+
+  it("rejects stdio MCP servers instead of pretending Flue can run them", async () => {
+    const adapter = new FlueHarnessAdapter({
+      engine: {
+        prompt: vi.fn(async () => ({ text: "unused" })),
+      },
+    });
+
+    await expect(
+      adapter.invokeTurn({
+        content: "hello",
+        sessionId: "ses_flue",
+        timeoutMs: 60_000,
+        agent: agent({
+          mcpServers: {
+            local: {
+              command: "npx",
+              args: ["-y", "@modelcontextprotocol/server-filesystem"],
+            },
+          },
+        }),
+      }),
+    ).rejects.toThrow("Flue MCP server \"local\" uses stdio/local fields");
+  });
+
+  it("connects URL MCP servers through Flue tools and closes them", async () => {
+    const close = vi.fn(async () => {});
+    const mcpConnector = vi.fn<FlueMcpConnector>(async (name) => ({
+      name,
+      tools: [
+        {
+          name: `${name}_search`,
+          description: "Search docs",
+          parameters: {
+            type: "object",
+            properties: { query: { type: "string" } },
+            required: ["query"],
+          },
+          execute: async () => "result",
+        },
+      ],
+      close,
+    }));
+    const run = vi.fn(async () => cloudflareTextResponse("ok"));
+    const adapter = new FlueHarnessAdapter({
+      cloudflareAiBinding: { run },
+      cloudflareAiProviderPrefix: "cloudflare-mcp-test",
+      mcpConnector,
+    });
+
+    const result = await adapter.invokeTurn({
+      content: "search docs",
+      sessionId: "ses_flue_mcp",
+      timeoutMs: 60_000,
+      agent: agent({
+        model: "cloudflare-mcp-test/@cf/openai/gpt-oss-20b",
+        mcpServers: {
+          docs: {
+            url: "https://mcp.example.com/v2",
+            headers: { "x-static": "kept" },
+            transport: "sse",
+          },
+        },
+      }),
+    });
+
+    expect(result.output).toBe("ok");
+    expect(mcpConnector).toHaveBeenCalledWith("docs", {
+      url: "https://mcp.example.com/v2",
+      headers: { "x-static": "kept" },
+      transport: "sse",
+      clientName: "open-managed-agents",
+      clientVersion: "0.1.0",
+    });
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("injects OMA vault bearer credentials into Flue URL MCP headers", async () => {
+    const mcpConnector = vi.fn<FlueMcpConnector>(async (name) => ({
+      name,
+      tools: [],
+      close: async () => {},
+    }));
+    const run = vi.fn(async () => cloudflareTextResponse("ok"));
+    const adapter = new FlueHarnessAdapter({
+      cloudflareAiBinding: { run },
+      cloudflareAiProviderPrefix: "cloudflare-mcp-vault-test",
+      mcpConnector,
+      vaults: {
+        listCredentials: vi.fn(() => [
+          {
+            credentialId: "cred_generic",
+            vaultId: "vault_1",
+            name: "generic",
+            type: "static_bearer",
+            matchUrl: "https://mcp.example.com/",
+            token: "generic-token",
+            createdAt: 1,
+            updatedAt: 1,
+          },
+          {
+            credentialId: "cred_specific",
+            vaultId: "vault_1",
+            name: "specific",
+            type: "static_bearer",
+            matchUrl: "https://mcp.example.com/v2/",
+            token: "specific-token",
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ]),
+      },
+    });
+
+    await adapter.invokeTurn({
+      content: "search docs",
+      sessionId: "ses_flue_mcp_vault",
+      timeoutMs: 60_000,
+      agent: agent({
+        model: "cloudflare-mcp-vault-test/@cf/openai/gpt-oss-20b",
+        mcpServers: {
+          docs: {
+            url: "https://mcp.example.com/v2/mcp",
+            headers: { "x-static": "kept" },
+          },
+        },
+      }),
+      session: session({ vaultId: "vault_1" }),
+    });
+
+    expect(mcpConnector).toHaveBeenCalledWith("docs", expect.objectContaining({
+      headers: {
+        "x-static": "kept",
+        Authorization: "Bearer specific-token",
+      },
+    }));
+  });
+
+  it("fails loudly when Flue URL MCP needs vault credentials but no vault store is wired", async () => {
+    const adapter = new FlueHarnessAdapter({
+      cloudflareAiBinding: { run: vi.fn(async () => cloudflareTextResponse("unused")) },
+      cloudflareAiProviderPrefix: "cloudflare-mcp-missing-vault-test",
+      mcpConnector: vi.fn<FlueMcpConnector>(async (name) => ({
+        name,
+        tools: [],
+        close: async () => {},
+      })),
+    });
+
+    await expect(
+      adapter.invokeTurn({
+        content: "search docs",
+        sessionId: "ses_flue_mcp_missing_vault",
+        timeoutMs: 60_000,
+        agent: agent({
+          model: "cloudflare-mcp-missing-vault-test/@cf/openai/gpt-oss-20b",
+          mcpServers: {
+            docs: { url: "https://mcp.example.com/v2/mcp" },
+          },
+        }),
+        session: session({ vaultId: "vault_1" }),
+      }),
+    ).rejects.toThrow("MCP vault credential injection requires a vault store");
   });
 
   it("aborts active prompt turns through AbortSignal", async () => {

@@ -38,6 +38,7 @@ const TEST_HERMES_CAPABILITIES = {
 function makeApp(opts: {
   passthroughEnv?: Record<string, string>;
   routerOverrides?: Partial<ServerDeps["router"]>;
+  harnessAdapters?: HarnessAdapter[];
 } = {}) {
   const store = new InMemoryStore();
   const eventsBySession = new Map<string, Event[]>();
@@ -276,6 +277,7 @@ function makeApp(opts: {
           displayName: "Hermes",
           capabilities: TEST_HERMES_CAPABILITIES,
         } as HarnessAdapter,
+        ...(opts.harnessAdapters ?? []),
       ],
     }),
     apiToken: "admin-secret",
@@ -580,6 +582,56 @@ describe("model catalog API", () => {
 });
 
 describe("agent harness capability validation", () => {
+  it("applies harness-specific validation for partial capabilities", async () => {
+    const { app } = makeApp({
+      harnessAdapters: [
+        {
+          id: "flue",
+          displayName: "Flue",
+          capabilities: {
+            ...TEST_OPENCLAW_CAPABILITIES,
+            mcp: {
+              support: "partial",
+              detail: "URL MCP only",
+            },
+          },
+          validateAgentConfig(agent) {
+            if (Object.values(agent.mcpServers).some((server) => server.command)) {
+              return {
+                capability: "mcp",
+                detail: "stdio MCP is not supported",
+              };
+            }
+            return undefined;
+          },
+        } as HarnessAdapter,
+      ],
+    });
+
+    const res = await req(app, "/v1/agents", {
+      method: "POST",
+      token: "admin-secret",
+      body: {
+        harnessId: "flue",
+        model: "deepseek/deepseek-v4-pro",
+        tools: [],
+        instructions: "",
+        permissionPolicy: { type: "always_allow" },
+        mcpServers: {
+          local: { command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem"] },
+        },
+      },
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      error: "unsupported_harness_capability",
+      harness_id: "flue",
+      capability: "mcp",
+    });
+    expect(res.body.message).toContain("stdio MCP is not supported");
+  });
+
   it("rejects Hermes agent configs for unsupported managed features", async () => {
     const { app, store } = makeApp();
 

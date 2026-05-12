@@ -350,6 +350,13 @@ export class AgentRouter {
     if (callableAgents.length > 0 || maxSubagentDepth > 0) {
       this.assertHarnessCapability(harness, "subagents");
     }
+    const validationIssue = harness.validateAgentConfig?.(agent);
+    if (validationIssue) {
+      throw new RouterError(
+        "unsupported_capability",
+        `harness ${harness.id} does not support ${validationIssue.capability}: ${validationIssue.detail}`,
+      );
+    }
   }
 
   private assertDynamicPatchIfNeeded(

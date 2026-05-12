@@ -227,7 +227,9 @@ Done in OMA:
   OpenAI-compatible chat chunks, appends normalized managed events while
   streamed turns are still running, cancels active prompt calls with Flue's
   native `AbortSignal` path, persists Flue session data through OMA-managed
-  harness state, and fails loudly for unsupported OMA tool mapping.
+  harness state, connects URL-based MCP servers through Flue's MCP client with
+  OMA vault bearer injection, and fails loudly for unsupported OMA tool
+  mapping, stdio MCP, and tool-policy semantics.
   Local and D1-compatible stores both exist for the same harness-state contract;
   the Cloudflare stack uses the D1-compatible placement.
 
@@ -241,8 +243,8 @@ Still open:
 
 - `ManagedEventLog.stateRoot` still exists as an optional legacy local-Docker
   escape hatch.
-- The Flue harness driver still does not map MCP, tool approvals/deny policy,
-  or first-class OMA child sessions for Flue tasks. Current Flue task and
+- The Flue harness driver still does not map stdio MCP, tool approvals/deny
+  policy, or first-class OMA child sessions for Flue tasks. Current Flue task and
   operation telemetry is preserved as structured nested run events, direct
   Flue task and shell operations can be executed and mapped, but Flue tasks are
   not promoted to managed child sessions yet.
@@ -507,6 +509,9 @@ workspace ids into the public session identity.
    - [x] Route deterministic task execution through real Flue
      `session.task()` so OMA can prove task lineage through the harness without
      prematurely promoting Flue tasks to managed child sessions.
+   - [x] Connect URL-based MCP servers through Flue's MCP client, including
+     OMA vault bearer credential injection, while rejecting stdio/local MCP
+     configs instead of silently ignoring them.
    - Decide when Flue task lineage should graduate from an observable run tree
      to OMA child sessions with real lifecycle control.
 

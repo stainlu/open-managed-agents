@@ -485,6 +485,7 @@ async function main(): Promise<void> {
     harnessAdapters.push(new FlueHarnessAdapter({
       passthroughEnv,
       sessionStateStore: harnessStateStore,
+      vaults: store.vaults,
     }));
   }
 

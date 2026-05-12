@@ -112,6 +112,16 @@ export type HarnessCapabilities = {
   subagents: HarnessCapability;
 };
 
+export type HarnessAgentConfigValidationInput = Pick<
+  AgentConfig,
+  "tools" | "permissionPolicy" | "callableAgents" | "maxSubagentDepth" | "mcpServers"
+>;
+
+export type HarnessAgentConfigValidationIssue = {
+  capability: string;
+  detail: string;
+};
+
 export class HarnessInvocationError extends Error {
   constructor(message: string) {
     super(message);
@@ -142,6 +152,9 @@ export type HarnessAdapter = {
   readonly runtimeMode?: HarnessRuntimeMode;
   readonly capabilities: HarnessCapabilities;
   readonly controlPlane?: ContainerControlPlane;
+  validateAgentConfig?(
+    agent: HarnessAgentConfigValidationInput,
+  ): HarnessAgentConfigValidationIssue | undefined;
   buildSpawnOptions?(args: HarnessSpawnOptionsArgs): SpawnOptions;
   shouldBypassWarmPool(session: Pick<Session, "environmentId" | "vaultId"> | undefined): boolean;
   modelForUsage(model: string): string;

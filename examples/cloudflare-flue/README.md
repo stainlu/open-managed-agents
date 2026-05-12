@@ -224,8 +224,9 @@ The `wrangler.toml` uses:
   can replace this after the Cloudflare backend is published.
 - The current Flue adapter owns direct prompt, task, and shell paths for
   deployment verification. Flue task/operation telemetry is preserved as nested
-  managed run events, but first-class child sessions, MCP, and tool policy
-  parity are intentionally not faked.
+  managed run events. URL MCP servers are wired through Flue's MCP client, but
+  stdio MCP servers, first-class child sessions, and tool policy parity are
+  intentionally not faked.
 - Local Durable Object tests cover real Flue SDK session persistence through
   the D1-compatible harness-state binding across a simulated restart. This
   still needs live deployment coverage before backend promotion.

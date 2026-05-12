@@ -97,6 +97,7 @@ export function createCloudflareFlueStack(
     workspace,
     workspaceCommandExecutor: opts.workspaceCommandExecutor,
     sessionStateStore: harnessState,
+    vaults: opts.store.vaults,
     engine: opts.flueEngine,
     loadEngine: opts.loadFlueEngine,
   });

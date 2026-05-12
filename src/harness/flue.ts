@@ -1,12 +1,16 @@
 import { randomUUID } from "node:crypto";
-import type { AgentConfig, Event, Session } from "../orchestrator/types.js";
+import type { AgentConfig, Event, McpServerConfig, Session } from "../orchestrator/types.js";
+import type { VaultStore } from "../store/types.js";
 import {
   WorkspaceError,
   type ManagedWorkspace,
   type WorkspaceEntry,
 } from "../workspace/types.js";
+import { injectMcpVaultCredentials } from "./mcp-credentials.js";
 import type {
   HarnessAdapter,
+  HarnessAgentConfigValidationInput,
+  HarnessAgentConfigValidationIssue,
   HarnessApprovalRequest,
   HarnessApprovalResolution,
   HarnessCapabilities,
@@ -163,6 +167,41 @@ export type FlueProviderSettings = {
 
 export type FlueProviderConfig = Record<string, FlueProviderSettings>;
 
+export type FlueMcpTransport = "streamable-http" | "sse";
+
+export type FlueToolDef = {
+  name: string;
+  description: string;
+  parameters: unknown;
+  execute: (args: Record<string, unknown>, signal?: AbortSignal) => Promise<string>;
+};
+
+export type FlueMcpConnectOptions = {
+  url: string | URL;
+  transport?: FlueMcpTransport;
+  headers?: Record<string, string>;
+  requestInit?: RequestInit;
+  fetch?: typeof fetch;
+  clientName?: string;
+  clientVersion?: string;
+};
+
+export type FlueMcpConnection = {
+  name: string;
+  tools: FlueToolDef[];
+  close(): Promise<void>;
+};
+
+type FlueMcpScope = {
+  tools: FlueToolDef[];
+  close(): Promise<void>;
+};
+
+export type FlueMcpConnector = (
+  name: string,
+  options: FlueMcpConnectOptions,
+) => Promise<FlueMcpConnection>;
+
 export type CloudflareAIBindingLike = {
   run: (...args: unknown[]) => unknown;
 };
@@ -183,6 +222,8 @@ export type FlueHarnessAdapterConfig = {
   workspaceCwd?: string;
   workspaceCommandExecutor?: FlueManagedWorkspaceCommandExecutor;
   sessionStateStore?: ManagedHarnessStateStore;
+  vaults?: Pick<VaultStore, "listCredentials">;
+  mcpConnector?: FlueMcpConnector;
   engine?: FlueEngine;
   loadEngine?: () => Promise<FlueEngine>;
 };
@@ -326,8 +367,8 @@ export class FlueHarnessAdapter implements HarnessAdapter {
       detail: "OMA per-tool deny policy is not mapped to Flue tools yet.",
     },
     mcp: {
-      support: "unsupported",
-      detail: "OMA MCP server config is not mapped to Flue yet.",
+      support: "partial",
+      detail: "URL-based MCP servers are connected through Flue's MCP client; stdio MCP servers and OMA tool approvals/deny policy are rejected.",
     },
     managed_event_log: {
       support: "partial",
@@ -348,6 +389,12 @@ export class FlueHarnessAdapter implements HarnessAdapter {
   private readonly pendingAborts = new Map<string, unknown>();
 
   constructor(private readonly cfg: FlueHarnessAdapterConfig = {}) {}
+
+  validateAgentConfig(
+    agent: HarnessAgentConfigValidationInput,
+  ): HarnessAgentConfigValidationIssue | undefined {
+    return validateFlueAgentConfig(agent);
+  }
 
   shouldBypassWarmPool(): boolean {
     return true;
@@ -649,6 +696,8 @@ export class FlueHarnessAdapter implements HarnessAdapter {
           this.cfg.workspaceCwd,
           this.cfg.workspaceCommandExecutor,
           this.cfg.sessionStateStore,
+          this.cfg.vaults,
+          this.cfg.mcpConnector,
         ));
     }
     return this.enginePromise;
@@ -660,10 +709,9 @@ export class FlueHarnessAdapter implements HarnessAdapter {
     if (!args.agent) {
       throw new HarnessInvocationError("Flue LLM call requires agent config");
     }
-    if (args.agent.tools.length > 0) {
-      throw new HarnessInvocationError(
-        "Flue harness does not map OMA agent.tools yet; use an agent with an empty tools list or wire Flue-native tools in a Flue app",
-      );
+    const issue = validateFlueAgentConfig(args.agent);
+    if (issue) {
+      throw new HarnessInvocationError(issue.detail);
     }
   }
 
@@ -688,6 +736,7 @@ class OptionalSdkFlueEngine implements FlueEngine {
   private internalPromise: Promise<FlueInternalModule> | undefined;
   private appPromise: Promise<FlueAppModule> | undefined;
   private cloudflarePromise: Promise<FlueCloudflareModule> | undefined;
+  private clientPromise: Promise<FlueClientModule> | undefined;
   private providersConfigured = false;
   private storePromise: Promise<unknown> | undefined;
 
@@ -699,6 +748,8 @@ class OptionalSdkFlueEngine implements FlueEngine {
     private readonly workspaceCwd: string | undefined,
     private readonly workspaceCommandExecutor: FlueManagedWorkspaceCommandExecutor | undefined,
     private readonly sessionStateStore: ManagedHarnessStateStore | undefined,
+    private readonly vaults: Pick<VaultStore, "listCredentials"> | undefined,
+    private readonly mcpConnector: FlueMcpConnector | undefined,
   ) {}
 
   async prompt(args: FlueEnginePromptArgs): Promise<FlueEnginePromptResult> {
@@ -708,24 +759,31 @@ class OptionalSdkFlueEngine implements FlueEngine {
     ctx.setEventCallback((event: FlueRuntimeEvent) => {
       events.push(event);
     });
-
-    const flueAgent = await ctx.init({
-      id: args.agent.agentId,
-      model: args.model ?? args.agent.model,
-      thinkingLevel: args.thinkingLevel ?? args.agent.thinkingLevel,
-    });
-    const session = await flueAgent.session(args.sessionId);
-    const response = await session.prompt(args.content, {
-      model: args.model,
-      thinkingLevel: args.thinkingLevel,
-      signal: args.signal ?? AbortSignal.timeout(args.timeoutMs),
-    });
-    return {
-      text: typeof response.text === "string" ? response.text : "",
-      usage: response.usage,
-      model: response.model,
-      events,
-    };
+    let mcp: FlueMcpScope | undefined;
+    try {
+      mcp = await this.connectMcpTools(args);
+      const flueAgent = await ctx.init({
+        id: args.agent.agentId,
+        model: args.model ?? args.agent.model,
+        thinkingLevel: args.thinkingLevel ?? args.agent.thinkingLevel,
+        tools: mcp.tools,
+      });
+      const session = await flueAgent.session(args.sessionId);
+      const response = await session.prompt(args.content, {
+        model: args.model,
+        thinkingLevel: args.thinkingLevel,
+        signal: args.signal ?? AbortSignal.timeout(args.timeoutMs),
+      });
+      return {
+        text: typeof response.text === "string" ? response.text : "",
+        usage: response.usage,
+        model: response.model,
+        events,
+      };
+    } finally {
+      ctx.setEventCallback(undefined);
+      await mcp?.close();
+    }
   }
 
   async stream(args: FlueEnginePromptArgs): Promise<HarnessStreamingTurn> {
@@ -737,6 +795,7 @@ class OptionalSdkFlueEngine implements FlueEngine {
     let output = "";
     let result: HarnessTurnResult | undefined;
     let promptHandle: FlueCallHandle | undefined;
+    let mcp: FlueMcpScope | undefined;
     const chunks = new AsyncQueue<string>();
     const liveEvents = new AsyncQueue<Event>();
     const modelForChunks = args.model ?? args.agent.model;
@@ -772,10 +831,12 @@ class OptionalSdkFlueEngine implements FlueEngine {
 
     (async () => {
       try {
+        mcp = await this.connectMcpTools(args);
         const flueAgent = await ctx.init({
           id: args.agent.agentId,
           model: args.model ?? args.agent.model,
           thinkingLevel: args.thinkingLevel ?? args.agent.thinkingLevel,
+          tools: mcp.tools,
         });
         const session = await flueAgent.session(args.sessionId);
         promptHandle = session.prompt(args.content, {
@@ -825,6 +886,7 @@ class OptionalSdkFlueEngine implements FlueEngine {
         liveEvents.fail(err);
       } finally {
         ctx.setEventCallback(undefined);
+        await mcp?.close();
       }
     })();
 
@@ -890,11 +952,14 @@ class OptionalSdkFlueEngine implements FlueEngine {
     ctx.setEventCallback((event: FlueRuntimeEvent) => {
       events.push(event);
     });
+    let mcp: FlueMcpScope | undefined;
     try {
+      mcp = await this.connectMcpTools(args);
       const flueAgent = await ctx.init({
         id: args.agent.agentId,
         model: args.model ?? args.agent.model,
         thinkingLevel: args.thinkingLevel ?? args.agent.thinkingLevel,
+        tools: mcp.tools,
       });
       const session = await flueAgent.session(args.sessionId);
       const response = await session.task(args.task, {
@@ -916,6 +981,7 @@ class OptionalSdkFlueEngine implements FlueEngine {
       };
     } finally {
       ctx.setEventCallback(undefined);
+      await mcp?.close();
     }
   }
 
@@ -1035,6 +1101,62 @@ class OptionalSdkFlueEngine implements FlueEngine {
     }
     return this.storePromise;
   }
+
+  private async connectMcpTools(args: {
+    agent: AgentConfig;
+    session?: Session;
+    signal?: AbortSignal;
+  }): Promise<FlueMcpScope> {
+    let servers: AgentConfig["mcpServers"];
+    try {
+      servers = injectMcpVaultCredentials(
+        args.agent.mcpServers,
+        this.vaults,
+        args.session?.vaultId,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new HarnessInvocationError(message);
+    }
+    const entries = Object.entries(servers ?? {});
+    if (entries.length === 0) return emptyFlueMcpScope();
+    if (args.signal?.aborted) throw abortErrorFor(args.signal);
+
+    const connector = await this.resolveMcpConnector();
+    const connections: FlueMcpConnection[] = [];
+    try {
+      for (const [name, server] of entries) {
+        connections.push(await connector(
+          name,
+          flueMcpConnectOptions(name, server),
+        ));
+      }
+    } catch (err) {
+      await closeFlueMcpConnections(connections);
+      throw err;
+    }
+    return {
+      tools: connections.flatMap((connection) => connection.tools),
+      close: () => closeFlueMcpConnections(connections),
+    };
+  }
+
+  private async resolveMcpConnector(): Promise<FlueMcpConnector> {
+    if (this.mcpConnector) return this.mcpConnector;
+    const client = await this.loadClient();
+    return client.connectMcpServer;
+  }
+
+  private async loadClient(): Promise<FlueClientModule> {
+    if (!this.clientPromise) {
+      this.clientPromise = importFlueModule(
+        "client",
+        validateFlueClientModule,
+        "MCP client helpers",
+      );
+    }
+    return this.clientPromise;
+  }
 }
 
 export class FlueManagedSessionStore {
@@ -1090,6 +1212,10 @@ type FlueCloudflareModule = {
   getCloudflareAIBindingApiProvider: () => unknown;
 };
 
+type FlueClientModule = {
+  connectMcpServer: FlueMcpConnector;
+};
+
 type FlueContextLike = {
   setEventCallback(callback: ((event: FlueRuntimeEvent) => void) | undefined): void;
   init(options: Record<string, unknown>): Promise<FlueAgentLike>;
@@ -1135,7 +1261,7 @@ type FlueCallHandle<T = FluePromptResponseLike> = PromiseLike<T> & {
 };
 
 async function importFlueModule<T>(
-  subpath: "app" | "cloudflare" | "internal",
+  subpath: "app" | "client" | "cloudflare" | "internal",
   validate: (mod: unknown) => T,
   purpose: string,
 ): Promise<T> {
@@ -1185,6 +1311,106 @@ function validateFlueCloudflareModule(mod: unknown): FlueCloudflareModule {
     throw new Error("@flue/sdk/cloudflare did not expose getCloudflareAIBindingApiProvider()");
   }
   return candidate as FlueCloudflareModule;
+}
+
+function validateFlueClientModule(mod: unknown): FlueClientModule {
+  const candidate = mod as Partial<FlueClientModule>;
+  if (typeof candidate.connectMcpServer !== "function") {
+    throw new Error("@flue/sdk/client did not expose connectMcpServer()");
+  }
+  return candidate as FlueClientModule;
+}
+
+function validateFlueAgentConfig(
+  agent: HarnessAgentConfigValidationInput,
+): HarnessAgentConfigValidationIssue | undefined {
+  if (agent.tools.length > 0) {
+    return {
+      capability: "agent_tools",
+      detail:
+        "Flue harness does not map OMA agent.tools yet; use an agent with an empty tools list or wire Flue-native tools in a Flue app",
+    };
+  }
+  if (agent.permissionPolicy.type === "deny") {
+    return {
+      capability: "permission_deny",
+      detail: "Flue harness does not map OMA deny policy to Flue tools yet",
+    };
+  }
+  if (agent.permissionPolicy.type === "always_ask") {
+    return {
+      capability: "tool_approvals",
+      detail: "Flue harness does not map OMA tool approvals to Flue tools yet",
+    };
+  }
+  for (const [name, server] of Object.entries(agent.mcpServers ?? {})) {
+    const detail = validateFlueMcpServerConfig(name, server);
+    if (detail) return { capability: "mcp", detail };
+  }
+  return undefined;
+}
+
+function validateFlueMcpServerConfig(
+  name: string,
+  server: McpServerConfig,
+): string | undefined {
+  const stdioFields = [
+    typeof server.command === "string" ? "command" : undefined,
+    Array.isArray(server.args) ? "args" : undefined,
+    server.env ? "env" : undefined,
+    typeof server.cwd === "string" ? "cwd" : undefined,
+  ].filter(Boolean);
+  if (stdioFields.length > 0) {
+    return `Flue MCP server "${name}" uses stdio/local fields (${stdioFields.join(", ")}); Flue MCP support only accepts URL-based streamable-http/SSE servers`;
+  }
+  if (!nonEmptyString(server.url)) {
+    return `Flue MCP server "${name}" must provide a URL; stdio MCP servers are not supported by the Flue bridge`;
+  }
+  const transport = (objectRecord(server) ?? {}).transport;
+  if (
+    transport !== undefined &&
+    transport !== "streamable-http" &&
+    transport !== "sse"
+  ) {
+    return `Flue MCP server "${name}" has unsupported transport "${String(transport)}"; expected streamable-http or sse`;
+  }
+  return undefined;
+}
+
+function flueMcpConnectOptions(
+  name: string,
+  server: McpServerConfig,
+): FlueMcpConnectOptions {
+  const detail = validateFlueMcpServerConfig(name, server);
+  if (detail) throw new HarnessInvocationError(detail);
+  const extra = objectRecord(server) ?? {};
+  const options: FlueMcpConnectOptions = {
+    url: server.url as string,
+    clientName: "open-managed-agents",
+    clientVersion: "0.1.0",
+  };
+  const transport = extra.transport;
+  if (transport === "streamable-http" || transport === "sse") {
+    options.transport = transport;
+  }
+  if (server.headers) options.headers = server.headers;
+  if (objectRecord(extra.requestInit)) {
+    options.requestInit = extra.requestInit as RequestInit;
+  }
+  return options;
+}
+
+function emptyFlueMcpScope(): FlueMcpScope {
+  return {
+    tools: [],
+    close: async () => {},
+  };
+}
+
+async function closeFlueMcpConnections(
+  connections: FlueMcpConnection[],
+): Promise<void> {
+  await Promise.allSettled(connections.map((connection) => connection.close()));
 }
 
 export class FlueManagedWorkspaceSessionEnv {

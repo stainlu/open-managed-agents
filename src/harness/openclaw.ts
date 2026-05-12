@@ -7,6 +7,7 @@ import { GatewayWebSocketClient, GatewayWsError } from "../runtime/gateway-ws.js
 import type { ParentTokenMinter } from "../runtime/parent-token.js";
 import type { EnvironmentStore, VaultStore } from "../store/types.js";
 import type { AgentConfig, Session } from "../orchestrator/types.js";
+import { injectMcpVaultCredentials } from "./mcp-credentials.js";
 import type {
   HarnessApprovalRequest,
   HarnessApprovalResolution,
@@ -197,8 +198,9 @@ export class OpenClawHarnessAdapter implements HarnessAdapter {
     if (envConfig?.packages) {
       env.OPENCLAW_PACKAGES_JSON = JSON.stringify(envConfig.packages);
     }
-    const effectiveMcpServers = this.injectVaultCredentials(
+    const effectiveMcpServers = injectMcpVaultCredentials(
       agent.mcpServers,
+      this.cfg.vaults,
       session.vaultId ?? null,
     );
     if (effectiveMcpServers && Object.keys(effectiveMcpServers).length > 0) {
@@ -423,47 +425,6 @@ export class OpenClawHarnessAdapter implements HarnessAdapter {
     return instructions ? `${instructions}\n${hint}` : hint.trimStart();
   }
 
-  /**
-   * Merge vault credentials into an agent's MCP server config for a
-   * specific session. Pure function over store reads; the router still
-   * owns OAuth refresh before calling into the adapter.
-   */
-  private injectVaultCredentials(
-    agentMcpServers: AgentConfig["mcpServers"],
-    vaultId: string | null,
-  ): AgentConfig["mcpServers"] {
-    if (!vaultId) return agentMcpServers;
-    if (!agentMcpServers || Object.keys(agentMcpServers).length === 0) {
-      return agentMcpServers;
-    }
-    const creds = this.cfg.vaults.listCredentials(vaultId);
-    if (creds.length === 0) return agentMcpServers;
-    const out: AgentConfig["mcpServers"] = {};
-    for (const [name, server] of Object.entries(agentMcpServers)) {
-      const url = typeof server.url === "string" ? server.url : undefined;
-      if (!url) {
-        out[name] = server;
-        continue;
-      }
-      const match = creds
-        .filter((c) => url.startsWith(c.matchUrl))
-        .sort((a, b) => b.matchUrl.length - a.matchUrl.length)[0];
-      if (!match) {
-        out[name] = server;
-        continue;
-      }
-      const bearer = match.type === "mcp_oauth" ? match.accessToken : match.token;
-      const existingHeaders = (server.headers ?? {}) as Record<string, string>;
-      out[name] = {
-        ...server,
-        headers: {
-          ...existingHeaders,
-          Authorization: `Bearer ${bearer}`,
-        },
-      };
-    }
-    return out;
-  }
 }
 
 function openClawSessionKey(sessionId: string): string {
