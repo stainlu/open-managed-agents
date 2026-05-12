@@ -72,6 +72,15 @@ The public API is the same OMA HTTP surface as the Node orchestrator. With
 
 ## Deploy
 
+Check the bundle and bindings without uploading:
+
+```bash
+pnpm dry-run
+```
+
+Deploy after the dry-run sees the Durable Object, Workflow, D1, R2, and env
+bindings you expect:
+
 ```bash
 pnpm deploy
 ```

@@ -4,6 +4,7 @@
   "scripts": {
     "check": "tsc --noEmit",
     "deploy": "wrangler deploy",
+    "dry-run": "wrangler deploy --dry-run",
     "dev": "wrangler dev",
     "types": "wrangler types"
   },
