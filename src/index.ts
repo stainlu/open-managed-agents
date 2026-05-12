@@ -501,6 +501,7 @@ async function main(): Promise<void> {
     store.agents,
     store.environments,
     store.sessions,
+    store.runs,
     eventReader,
     workspace,
     pool,
@@ -696,6 +697,17 @@ async function main(): Promise<void> {
       "orchestrator restarted mid-run; post a new message to resume",
     );
     store.queue.clear(session.sessionId);
+    for (const run of store.runs.listBySession(session.sessionId)) {
+      if (run.status === "starting" || run.status === "running") {
+        store.runs.updateStatus(run.runId, "failed", {
+          error: "orchestrator restarted mid-run; post a new message to resume",
+        });
+      } else if (run.status === "queued") {
+        store.runs.updateStatus(run.runId, "cancelled", {
+          error: "queued run dropped after orchestrator restart",
+        });
+      }
+    }
     orphanedRunningSessions += 1;
   }
 
@@ -727,6 +739,13 @@ async function main(): Promise<void> {
     const session = store.sessions.get(sessionId);
     if (!session) {
       store.queue.clear(sessionId);
+      for (const run of store.runs.listBySession(sessionId)) {
+        if (run.status === "queued") {
+          store.runs.updateStatus(run.runId, "cancelled", {
+            error: "queued run dropped because session no longer exists",
+          });
+        }
+      }
       continue;
     }
     if (session.status !== "idle") continue;

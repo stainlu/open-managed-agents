@@ -119,8 +119,12 @@ Done in OMA:
 - OMA now assigns a stable managed run id at turn admission and preserves it
   through queued turns, Workflow-backed re-entry, HTTP responses, Flue
   `createFlueContext()`, streamed events, and normalized Flue lifecycle event
-  mapping. This gives the managed layer a durable control-plane handle before
-  run-level abort/status APIs are added.
+  mapping.
+- OMA now persists managed run records in the metadata store. Runs carry
+  queued/starting/running/terminal status, model/thinking metadata, errors, and
+  timestamps, and the HTTP API exposes session-scoped run list/get/abort routes.
+  This makes the run id a real control-plane handle rather than just a
+  correlation id.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
 - Harness adapters now declare a runtime mode. Existing adapters remain
@@ -156,8 +160,8 @@ Still open:
   first-class OMA child sessions for Flue tasks are not wired yet.
 - Cloudflare deployment wiring exists as an experimental example in
   `examples/cloudflare-flue`, but it is not promoted: there is no live
-  Workflow deployment test, Flue task run, sandbox-backed shell/build task, or
-  replay-after-hibernation proof yet.
+  Workflow deployment test, active run abort smoke, Flue task run,
+  sandbox-backed shell/build task, or replay-after-hibernation proof yet.
 
 ## Non-Decision
 
@@ -407,6 +411,8 @@ workspace ids into the public session identity.
    - [x] Add token-gated internal coordinator re-entry for scheduled runs.
    - [x] Keep Workflow re-entry available for configurable Cloudflare/Flue
      Durable Object composition roots.
+   - [x] Add durable managed run records plus session-scoped run list/get/abort
+     routes.
    - [x] Add R2-compatible workspace binding in the Cloudflare deployment
      example.
    - [x] Add experimental `wrangler.toml` deployment wiring.
@@ -416,7 +422,8 @@ workspace ids into the public session identity.
 
 7. [ ] Promote Cloudflare runtime only after it proves:
    - durable event replay after restart/hibernation;
-   - cancellation path;
+   - active run cancellation path;
+   - queued run cancellation path;
    - queued turns;
    - one Flue prompt run;
    - one Flue task run;

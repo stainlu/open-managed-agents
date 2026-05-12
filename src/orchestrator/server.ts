@@ -20,6 +20,7 @@ import type {
   AgentStore,
   AuditStore,
   EnvironmentStore,
+  ManagedRun,
   SessionContainerStore,
   SessionStore,
   Vault,
@@ -56,6 +57,17 @@ function generateRequestId(): string {
   const bytes = new Uint8Array(8);
   globalThis.crypto.getRandomValues(bytes);
   return `req_${Buffer.from(bytes).toString("hex")}`;
+}
+
+async function readOptionalJsonObject(req: Request): Promise<Record<string, unknown> | undefined> {
+  const contentType = req.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) return undefined;
+  const text = await req.text();
+  if (text.trim().length === 0) return undefined;
+  const parsed = JSON.parse(text) as unknown;
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : undefined;
 }
 
 /**
@@ -564,6 +576,22 @@ function eventResponse(event: Event) {
   };
 }
 
+function runResponse(run: ManagedRun) {
+  return {
+    run_id: run.runId,
+    session_id: run.sessionId,
+    agent_id: run.agentId,
+    status: run.status,
+    queued: run.queued,
+    model: run.model,
+    thinking_level: run.thinkingLevel,
+    error: run.error,
+    created_at: run.createdAt,
+    started_at: run.startedAt,
+    completed_at: run.completedAt,
+  };
+}
+
 function handleRouterError(err: unknown, c: Context): Response {
   const reply = routerErrorReply(err);
   return c.json(reply.body, reply.status);
@@ -579,6 +607,7 @@ function routerErrorReply(err: unknown): JsonReply {
     if (
       err.code === "agent_not_found" ||
       err.code === "session_not_found" ||
+      err.code === "run_not_found" ||
       err.code === "file_not_found" ||
       err.code === "vault_not_found"
     ) {
@@ -587,7 +616,12 @@ function routerErrorReply(err: unknown): JsonReply {
     if (err.code === "agent_archived") {
       return { status: 409, body: { error: err.code, message: err.message } };
     }
-    if (err.code === "session_busy" || err.code === "session_not_running") {
+    if (
+      err.code === "session_busy" ||
+      err.code === "session_not_running" ||
+      err.code === "run_not_active" ||
+      err.code === "run_conflict"
+    ) {
       return { status: 409, body: { error: err.code, message: err.message } };
     }
     if (err.code === "capacity_exceeded") {
@@ -803,6 +837,9 @@ export function buildApp(deps: ServerDeps): Hono {
           list_events: "GET /v1/sessions/:sessionId/events",
           stream_events: "GET /v1/sessions/:sessionId/events?stream=true",
           cancel: "POST /v1/sessions/:sessionId/cancel",
+          list_runs: "GET /v1/sessions/:sessionId/runs",
+          get_run: "GET /v1/sessions/:sessionId/runs/:runId",
+          abort_run: "POST /v1/sessions/:sessionId/runs/:runId/abort",
           compact: "POST /v1/sessions/:sessionId/compact",
           logs: "GET /v1/sessions/:sessionId/logs?tail=<n>",
         },
@@ -1616,6 +1653,79 @@ export function buildApp(deps: ServerDeps): Hono {
       writeAudit(deps.audit, c, {
         action: "session.cancel",
         target: sessionId,
+        outcome: err instanceof RouterError ? err.code : "error",
+      });
+      return handleRouterError(err, c);
+    }
+  });
+
+  app.get("/v1/sessions/:sessionId/runs", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    if (!getScopedSession(c, sessionId)) {
+      return c.json({ error: "session_not_found" }, 404);
+    }
+    try {
+      return c.json({
+        runs: deps.router.listRuns(sessionId).map(runResponse),
+      });
+    } catch (err) {
+      return handleRouterError(err, c);
+    }
+  });
+
+  app.get("/v1/sessions/:sessionId/runs/:runId", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    if (!getScopedSession(c, sessionId)) {
+      return c.json({ error: "session_not_found" }, 404);
+    }
+    try {
+      return c.json(runResponse(deps.router.getRun(sessionId, c.req.param("runId"))));
+    } catch (err) {
+      return handleRouterError(err, c);
+    }
+  });
+
+  app.post("/v1/sessions/:sessionId/runs/:runId/abort", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const runId = c.req.param("runId");
+    if (!getScopedSession(c, sessionId)) {
+      writeAudit(deps.audit, c, {
+        action: "run.abort",
+        target: runId,
+        outcome: "session_not_found",
+      });
+      return c.json({ error: "session_not_found" }, 404);
+    }
+    try {
+      let body: Record<string, unknown> | undefined;
+      try {
+        body = await readOptionalJsonObject(c.req.raw);
+      } catch {
+        return c.json({
+          error: "invalid_request",
+          message: "abort body must be valid JSON when provided",
+        }, 400);
+      }
+      const reason = typeof body?.reason === "string" && body.reason.trim().length > 0
+        ? body.reason.trim()
+        : undefined;
+      const result = await deps.router.abortRun(sessionId, runId, reason);
+      writeAudit(deps.audit, c, {
+        action: "run.abort",
+        target: runId,
+        outcome: "ok",
+      });
+      return c.json({
+        session_id: result.session.sessionId,
+        session_status: result.session.status,
+        run: runResponse(result.run),
+        aborted: result.aborted,
+        removed_queued: result.removedQueued,
+      });
+    } catch (err) {
+      writeAudit(deps.audit, c, {
+        action: "run.abort",
+        target: runId,
         outcome: err instanceof RouterError ? err.code : "error",
       });
       return handleRouterError(err, c);

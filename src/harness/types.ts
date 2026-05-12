@@ -153,7 +153,7 @@ export type HarnessAdapter = {
     sessionId: string,
     fields: { model?: string; thinkingLevel?: AgentConfig["thinkingLevel"] },
   ): Promise<void>;
-  abortSession(controlClient: unknown, sessionId: string): Promise<void>;
+  abortSession(controlClient: unknown, sessionId: string, runId?: string): Promise<void>;
   compactSession(controlClient: unknown, sessionId: string): Promise<void>;
   resolveApproval(
     controlClient: unknown,

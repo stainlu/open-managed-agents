@@ -26,6 +26,7 @@ Open Managed Agents owns the managed boundary. The harness owns the agent brain.
 | Agent | Reusable template: harness id, model, instructions, tools, policy, MCP, channels | OMA |
 | Environment | Runtime template: packages, files, networking, storage constraints | OMA |
 | Session | Durable managed conversation/run context | OMA |
+| Run | One admitted unit of work inside a session: queued, active, terminal, or cancelled | OMA |
 | Event | Normalized observable history for the public API | OMA |
 | Harness | Native agent loop: OpenClaw, Codex, Claude Agent SDK, Hermes, etc. | Adapter/native harness |
 | Adapter | Translation layer from one harness to the managed contract | OMA integration code |
@@ -38,10 +39,12 @@ implementation detail of the contract.
 
 OMA must provide these guarantees no matter which harness is underneath:
 
-- Stable public API for agents, environments, sessions, events, logs, approvals,
-  cancellation, and OpenAI-compatible chat.
+- Stable public API for agents, environments, sessions, runs, events, logs,
+  approvals, cancellation, and OpenAI-compatible chat.
 - One managed session id for the whole public lifecycle.
+- One managed run id for each accepted unit of work inside that session.
 - Durable session metadata across orchestrator restarts.
+- Durable run metadata across orchestrator restarts.
 - Durable event history in normalized managed event shape.
 - Isolation of active agent execution from other sessions.
 - Explicit capability reporting at `GET /v1/harnesses`.
@@ -100,6 +103,38 @@ Rules:
 - Native ids are adapter-owned and stored as session metadata:
   `nativeSessionId`, `nativeThreadId`, `nativeMetadata`.
 - Native ids are never exposed as identifiers clients must use.
+
+## Run Lifecycle
+
+Runs are the managed control-plane handle for individual turns or scheduled
+background work inside a session. They do not replace sessions or events:
+
+- `Session` is the durable execution context.
+- `Run` is one admitted unit of work in that context.
+- `Event` is the observable history produced by that work.
+
+The run lifecycle is:
+
+```text
+accepted
+  -> queued | starting
+  -> running
+  -> succeeded | failed | cancelled | skipped
+```
+
+Rules:
+
+- `run_id` is assigned by OMA before queueing, scheduling, Workflow handoff, or
+  harness invocation.
+- Queued runs remain addressable before they become active.
+- `GET /v1/sessions/:id/runs` lists the runs for a session.
+- `GET /v1/sessions/:id/runs/:runId` reads one run.
+- `POST /v1/sessions/:id/runs/:runId/abort` cancels a queued run without
+  stopping the active session. For the currently active run, it maps to the
+  harness/runtime cancellation path and marks non-terminal work cancelled.
+- Terminal runs are immutable from the client's point of view.
+- Harness-native run ids are adapter metadata. Public clients use OMA
+  `run_id`.
 
 ## Runtime Contract
 

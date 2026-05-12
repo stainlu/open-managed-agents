@@ -182,6 +182,36 @@ function makeApp(opts: {
       }
       return session;
     },
+    listRuns(sessionId: string) {
+      const session = store.sessions.get(sessionId);
+      if (!session) {
+        throw new RouterError("session_not_found", `session ${sessionId} does not exist`);
+      }
+      return store.runs.listBySession(sessionId);
+    },
+    getRun(sessionId: string, runId: string) {
+      const session = store.sessions.get(sessionId);
+      if (!session) {
+        throw new RouterError("session_not_found", `session ${sessionId} does not exist`);
+      }
+      const run = store.runs.getForSession(sessionId, runId);
+      if (!run) {
+        throw new RouterError("run_not_found", `run ${runId} does not exist`);
+      }
+      return run;
+    },
+    async abortRun(sessionId: string, runId: string, reason?: string) {
+      const session = store.sessions.get(sessionId);
+      if (!session) {
+        throw new RouterError("session_not_found", `session ${sessionId} does not exist`);
+      }
+      const run = store.runs.getForSession(sessionId, runId);
+      if (!run) {
+        throw new RouterError("run_not_found", `run ${runId} does not exist`);
+      }
+      const cancelled = store.runs.updateStatus(runId, "cancelled", { error: reason ?? "test abort" }) ?? run;
+      return { session, run: cancelled, aborted: true, removedQueued: false };
+    },
     async logs() {
       return "";
     },
@@ -678,9 +708,26 @@ describe("session ownership in the HTTP API", () => {
       agentId: agent.agentId,
       userId: alice.userId,
     });
+    store.runs.create({
+      runId: "run_private",
+      sessionId: session.sessionId,
+      agentId: agent.agentId,
+      status: "queued",
+      queued: true,
+    });
 
     expect((await req(app, `/v1/sessions/${session.sessionId}`, { token: alice.apiToken })).status).toBe(200);
     expect((await req(app, `/v1/sessions/${session.sessionId}`, { token: bob.apiToken })).status).toBe(404);
+    expect((await req(app, `/v1/sessions/${session.sessionId}/runs`, { token: bob.apiToken })).status).toBe(404);
+    expect((await req(app, `/v1/sessions/${session.sessionId}/runs/run_private`, { token: bob.apiToken })).status).toBe(404);
+    expect(
+      (
+        await req(app, `/v1/sessions/${session.sessionId}/runs/run_private/abort`, {
+          method: "POST",
+          token: bob.apiToken,
+        })
+      ).status,
+    ).toBe(404);
     expect(
       (
         await req(app, `/v1/sessions/${session.sessionId}/events`, {
@@ -702,6 +749,84 @@ describe("session ownership in the HTTP API", () => {
     });
 
     expect((await req(app, `/v1/sessions/${session.sessionId}`, { token: "admin-secret" })).status).toBe(200);
+  });
+
+  it("lists, reads, and aborts managed runs through the session API", async () => {
+    const { app, store } = makeApp();
+    const agent = createAgent(store);
+    const session = store.sessions.create({
+      agentId: agent.agentId,
+      userId: null,
+    });
+    store.runs.create({
+      runId: "run_first",
+      sessionId: session.sessionId,
+      agentId: agent.agentId,
+      status: "succeeded",
+      queued: false,
+      model: "openai/gpt-5.4",
+      thinkingLevel: "medium",
+    });
+    store.runs.create({
+      runId: "run_second",
+      sessionId: session.sessionId,
+      agentId: agent.agentId,
+      status: "queued",
+      queued: true,
+    });
+
+    const listed = await req(app, `/v1/sessions/${session.sessionId}/runs`, {
+      token: "admin-secret",
+    });
+    expect(listed.status).toBe(200);
+    expect(listed.body).toMatchObject({
+      runs: [
+        {
+          run_id: "run_first",
+          session_id: session.sessionId,
+          agent_id: agent.agentId,
+          status: "succeeded",
+          queued: false,
+          model: "openai/gpt-5.4",
+          thinking_level: "medium",
+        },
+        {
+          run_id: "run_second",
+          session_id: session.sessionId,
+          agent_id: agent.agentId,
+          status: "queued",
+          queued: true,
+        },
+      ],
+    });
+
+    const fetched = await req(app, `/v1/sessions/${session.sessionId}/runs/run_second`, {
+      token: "admin-secret",
+    });
+    expect(fetched.status).toBe(200);
+    expect(fetched.body).toMatchObject({
+      run_id: "run_second",
+      status: "queued",
+      queued: true,
+    });
+
+    const aborted = await req(app, `/v1/sessions/${session.sessionId}/runs/run_second/abort`, {
+      method: "POST",
+      token: "admin-secret",
+      body: { reason: "user changed direction" },
+    });
+    expect(aborted.status).toBe(200);
+    expect(aborted.body).toMatchObject({
+      session_id: session.sessionId,
+      session_status: session.status,
+      aborted: true,
+      removed_queued: false,
+      run: {
+        run_id: "run_second",
+        status: "cancelled",
+        error: "user changed direction",
+      },
+    });
   });
 
   it("binds legacy /run sessions to the authenticated user", async () => {

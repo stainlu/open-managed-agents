@@ -88,6 +88,7 @@ function makeRouter(opts: {
     store.agents,
     store.environments,
     store.sessions,
+    store.runs,
     eventReader,
     workspace,
     pool,
@@ -803,11 +804,50 @@ describe("AgentRouter.runEvent — decision tree", () => {
     });
     expect(result.queued).toBe(true);
     expect(result.session.status).toBe("starting");
+    expect(store.runs.get(result.runId)).toMatchObject({
+      runId: result.runId,
+      sessionId: session.sessionId,
+      agentId: agent.agentId,
+      status: "queued",
+      queued: true,
+    });
     // Queue now has the one event we pushed.
     const next = queue.shift(session.sessionId);
     expect(next?.content).toBe("second message while first is running");
+    expect(next?.runId).toBe(result.runId);
     // No more events queued.
     expect(queue.shift(session.sessionId)).toBeUndefined();
+  });
+
+  it("aborts one queued run by run id without cancelling the active session", async () => {
+    const { router, store, queue } = makeRouter();
+    const agent = store.agents.create({
+      model: "m",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [],
+      maxSubagentDepth: 0,
+    });
+    const session = router.createSession(agent.agentId);
+    store.sessions.beginRun(session.sessionId);
+
+    const queued = await router.runEvent({
+      sessionId: session.sessionId,
+      content: "queued work",
+    });
+
+    const aborted = await router.abortRun(session.sessionId, queued.runId, "not needed");
+
+    expect(aborted.aborted).toBe(true);
+    expect(aborted.removedQueued).toBe(true);
+    expect(aborted.run).toMatchObject({
+      runId: queued.runId,
+      status: "cancelled",
+      error: "not needed",
+    });
+    expect(queue.shift(session.sessionId)).toBeUndefined();
+    expect(store.sessions.get(session.sessionId)?.status).toBe("starting");
   });
 
   it("includes an optional `model` override in the queued entry", async () => {
@@ -877,6 +917,12 @@ describe("AgentRouter.runEvent — decision tree", () => {
 
     expect(result.queued).toBe(false);
     expect(store.sessions.get(session.sessionId)?.status).toBe("starting");
+    expect(store.runs.get(result.runId)).toMatchObject({
+      status: "starting",
+      queued: false,
+      model: "anthropic/claude-sonnet-4-6",
+      thinkingLevel: "high",
+    });
     expect(runScheduler.requests()).toEqual([
       {
         runId: result.runId,
@@ -918,6 +964,10 @@ describe("AgentRouter.runEvent — decision tree", () => {
     expect(result.queued).toBe(false);
     expect(store.sessions.get(session.sessionId)?.status).toBe("failed");
     expect(store.sessions.get(session.sessionId)?.error).toBe("scheduler unavailable");
+    expect(store.runs.get(result.runId)).toMatchObject({
+      status: "failed",
+      error: "scheduler unavailable",
+    });
   });
 
   it("rejects queued per-turn model overrides when the harness cannot patch a live session", async () => {
@@ -1093,6 +1143,13 @@ describe("AgentRouter native harness runtime", () => {
     const session = router.createSession(agent.agentId);
     store.sessions.beginRun(session.sessionId);
     store.sessions.bumpTurns(session.sessionId);
+    store.runs.create({
+      runId: "run_scheduled",
+      sessionId: session.sessionId,
+      agentId: agent.agentId,
+      status: "starting",
+      queued: false,
+    });
 
     const result = await router.executeScheduledRun({
       runId: "run_scheduled",
@@ -1107,6 +1164,25 @@ describe("AgentRouter native harness runtime", () => {
     expect(store.sessions.get(session.sessionId)?.status).toBe("idle");
     expect(store.sessions.get(session.sessionId)?.tokensIn).toBe(3);
     expect(store.sessions.get(session.sessionId)?.tokensOut).toBe(4);
+    expect(store.runs.get("run_scheduled")).toMatchObject({
+      status: "succeeded",
+      error: null,
+    });
+
+    await expect(router.executeScheduledRun({
+      runId: "run_scheduled",
+      sessionId: session.sessionId,
+      agentId: agent.agentId,
+      content: "duplicate delivery",
+      queued: false,
+    })).resolves.toEqual({
+      status: "skipped",
+      reason: "session_not_inflight",
+    });
+    expect(store.runs.get("run_scheduled")).toMatchObject({
+      status: "succeeded",
+      error: null,
+    });
   });
 
   it("skips a scheduled run that is no longer inflight", async () => {
@@ -1162,6 +1238,13 @@ describe("AgentRouter native harness runtime", () => {
     const session = router.createSession(agent.agentId);
     store.sessions.beginRun(session.sessionId);
     store.sessions.bumpTurns(session.sessionId);
+    store.runs.create({
+      runId: "run_failed",
+      sessionId: session.sessionId,
+      agentId: agent.agentId,
+      status: "starting",
+      queued: false,
+    });
 
     await expect(router.executeScheduledRun({
       runId: "run_failed",
@@ -1175,6 +1258,10 @@ describe("AgentRouter native harness runtime", () => {
     });
     expect(store.sessions.get(session.sessionId)?.status).toBe("failed");
     expect(store.sessions.get(session.sessionId)?.error).toBe("native scheduled failure");
+    expect(store.runs.get("run_failed")).toMatchObject({
+      status: "failed",
+      error: "native scheduled failure",
+    });
   });
 
   it("schedules queued follow-up turns through the same run scheduler", async () => {
@@ -1258,6 +1345,14 @@ describe("AgentRouter native harness runtime", () => {
     await waitForSessionToStopRunning(store, session.sessionId);
     expect(invokeTurn).toHaveBeenCalledTimes(2);
     expect(store.sessions.get(session.sessionId)?.status).toBe("idle");
+    expect(store.runs.listBySession(session.sessionId).map((run) => ({
+      runId: run.runId,
+      status: run.status,
+      queued: run.queued,
+    }))).toEqual([
+      { runId: expect.stringMatching(/^run_/), status: "succeeded", queued: false },
+      { runId: queued.runId, status: "succeeded", queued: true },
+    ]);
   });
 
   it("streams native harness turns without acquiring a container endpoint", async () => {
@@ -1333,6 +1428,10 @@ describe("AgentRouter native harness runtime", () => {
     expect(finished?.status).toBe("idle");
     expect(finished?.tokensIn).toBe(13);
     expect(finished?.tokensOut).toBe(5);
+    expect(store.runs.get(handle.runId)).toMatchObject({
+      status: "succeeded",
+      completedAt: expect.any(Number),
+    });
   });
 
   it("appends live managed events while a native streaming turn is still running", async () => {
@@ -2358,7 +2457,7 @@ describe("AgentRouter.cancel — pre-abort checks", () => {
 
     expect(result.status).toBe("idle");
     expect(pool.getWsClient).not.toHaveBeenCalled();
-    expect(abortSession).toHaveBeenCalledWith(undefined, session.sessionId);
+    expect(abortSession).toHaveBeenCalledWith(undefined, session.sessionId, undefined);
   });
 
   it("drains the queue and pending approvals then marks the session idle", async () => {

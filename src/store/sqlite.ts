@@ -25,6 +25,9 @@ import type {
   AuditStore,
   EnvironmentStore,
   AddCredentialInput,
+  ManagedRun,
+  ManagedRunStatus,
+  ManagedRunStore,
   QueuedEvent,
   QueueStore,
   RunUsage,
@@ -61,6 +64,14 @@ export type SyncSqlDatabaseLike = {
 
 const nanoid = customAlphabet("abcdefghijklmnopqrstuvwxyz0123456789", 12);
 const SESSION_STATUS_VALUES_SQL = `'idle', 'starting', 'running', 'failed'`;
+const MANAGED_RUN_STATUS_VALUES_SQL =
+  `'queued', 'starting', 'running', 'succeeded', 'failed', 'cancelled', 'skipped'`;
+const TERMINAL_RUN_STATUSES = new Set<ManagedRunStatus>([
+  "succeeded",
+  "failed",
+  "cancelled",
+  "skipped",
+]);
 const THINKING_LEVELS = new Set<string>(["off", "low", "medium", "high", "xhigh"]);
 
 function parseQueuedThinkingLevel(value: string | null): ThinkingLevel | undefined {
@@ -124,6 +135,20 @@ type SessionRow = {
   vault_id: string | null;
   parent_session_id: string | null;
   user_id: string | null;
+};
+
+type ManagedRunRow = {
+  run_id: string;
+  session_id: string;
+  agent_id: string;
+  status: string;
+  queued: number;
+  model: string | null;
+  thinking_level: string | null;
+  error: string | null;
+  created_at: number;
+  started_at: number | null;
+  completed_at: number | null;
 };
 
 /** True when at least one channel is enabled on the agent — used to
@@ -198,6 +223,22 @@ function rowToSession(r: SessionRow): Session {
     vaultId: r.vault_id,
     parentSessionId: r.parent_session_id ?? null,
     userId: r.user_id ?? null,
+  };
+}
+
+function rowToManagedRun(r: ManagedRunRow): ManagedRun {
+  return {
+    runId: r.run_id,
+    sessionId: r.session_id,
+    agentId: r.agent_id,
+    status: r.status as ManagedRunStatus,
+    queued: r.queued === 1,
+    model: r.model ?? undefined,
+    thinkingLevel: parseQueuedThinkingLevel(r.thinking_level),
+    error: r.error,
+    createdAt: r.created_at,
+    startedAt: r.started_at,
+    completedAt: r.completed_at,
   };
 }
 
@@ -367,6 +408,25 @@ CREATE TABLE IF NOT EXISTS queued_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_queued_events_session ON queued_events(session_id, id);
+
+CREATE TABLE IF NOT EXISTS managed_runs (
+  run_id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN (${MANAGED_RUN_STATUS_VALUES_SQL})),
+  queued INTEGER NOT NULL DEFAULT 0,
+  model TEXT,
+  thinking_level TEXT,
+  error TEXT,
+  created_at INTEGER NOT NULL,
+  started_at INTEGER,
+  completed_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_managed_runs_session_created
+  ON managed_runs(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_managed_runs_status
+  ON managed_runs(status);
 
 -- Multi-tenant user accounts. Anonymous users auto-expire after 24h;
 -- GitHub-authenticated users persist. api_token is the bearer token
@@ -1371,12 +1431,123 @@ class SqliteSecretStore implements SecretStore {
   }
 }
 
+// ---------- Managed run store ----------
+
+class SqliteManagedRunStore implements ManagedRunStore {
+  private readonly insertStmt: SqlStatementLike;
+  private readonly getStmt: SqlStatementLike;
+  private readonly getForSessionStmt: SqlStatementLike;
+  private readonly listBySessionStmt: SqlStatementLike;
+  private readonly updateStmt: SqlStatementLike;
+
+  constructor(private readonly db: SyncSqlDatabaseLike) {
+    this.insertStmt = db.prepare(
+      `INSERT OR IGNORE INTO managed_runs (
+        run_id, session_id, agent_id, status, queued, model, thinking_level,
+        error, created_at, started_at, completed_at
+      ) VALUES (
+        @run_id, @session_id, @agent_id, @status, @queued, @model, @thinking_level,
+        NULL, @created_at, @started_at, @completed_at
+      )`,
+    );
+    this.getStmt = db.prepare(`SELECT * FROM managed_runs WHERE run_id = ?`);
+    this.getForSessionStmt = db.prepare(
+      `SELECT * FROM managed_runs WHERE session_id = ? AND run_id = ?`,
+    );
+    this.listBySessionStmt = db.prepare(
+      `SELECT * FROM managed_runs WHERE session_id = ? ORDER BY created_at ASC, run_id ASC`,
+    );
+    this.updateStmt = db.prepare(
+      `UPDATE managed_runs
+       SET status = @status,
+           error = @error,
+           started_at = @started_at,
+           completed_at = @completed_at
+       WHERE run_id = @run_id`,
+    );
+  }
+
+  create(args: {
+    runId: string;
+    sessionId: string;
+    agentId: string;
+    status: ManagedRunStatus;
+    queued: boolean;
+    model?: string;
+    thinkingLevel?: AgentConfig["thinkingLevel"];
+    createdAt?: number;
+  }): ManagedRun {
+    const now = args.createdAt ?? Date.now();
+    this.insertStmt.run({
+      run_id: args.runId,
+      session_id: args.sessionId,
+      agent_id: args.agentId,
+      status: args.status,
+      queued: args.queued ? 1 : 0,
+      model: args.model ?? null,
+      thinking_level: args.thinkingLevel ?? null,
+      created_at: now,
+      started_at: args.status === "running" ? now : null,
+      completed_at: TERMINAL_RUN_STATUSES.has(args.status) ? now : null,
+    });
+    const run = this.get(args.runId);
+    if (!run) throw new Error(`managed run ${args.runId} was not created`);
+    return run;
+  }
+
+  get(runId: string): ManagedRun | undefined {
+    const row = this.getStmt.get(runId) as ManagedRunRow | undefined;
+    return row ? rowToManagedRun(row) : undefined;
+  }
+
+  getForSession(sessionId: string, runId: string): ManagedRun | undefined {
+    const row = this.getForSessionStmt.get(sessionId, runId) as ManagedRunRow | undefined;
+    return row ? rowToManagedRun(row) : undefined;
+  }
+
+  listBySession(sessionId: string): ManagedRun[] {
+    const rows = this.listBySessionStmt.all(sessionId) as ManagedRunRow[];
+    return rows.map(rowToManagedRun);
+  }
+
+  updateStatus(
+    runId: string,
+    status: ManagedRunStatus,
+    opts: { error?: string | null; now?: number } = {},
+  ): ManagedRun | undefined {
+    const current = this.get(runId);
+    if (!current) return undefined;
+    if (TERMINAL_RUN_STATUSES.has(current.status)) return current;
+    const now = opts.now ?? Date.now();
+    const terminal = TERMINAL_RUN_STATUSES.has(status);
+    const updated: ManagedRun = {
+      ...current,
+      status,
+      error: status === "failed" || status === "cancelled" || status === "skipped"
+        ? opts.error ?? current.error
+        : null,
+      startedAt: status === "running" && current.startedAt === null ? now : current.startedAt,
+      completedAt: terminal ? now : current.completedAt,
+    };
+    this.updateStmt.run({
+      run_id: runId,
+      status: updated.status,
+      error: updated.error,
+      started_at: updated.startedAt,
+      completed_at: updated.completedAt,
+    });
+    return this.get(runId);
+  }
+}
+
 // ---------- Queue store ----------
 
 class SqliteQueueStore implements QueueStore {
   private readonly insertStmt: SqlStatementLike;
   private readonly peekStmt: SqlStatementLike;
   private readonly deleteByIdStmt: SqlStatementLike;
+  private readonly getByRunIdStmt: SqlStatementLike;
+  private readonly deleteByRunIdStmt: SqlStatementLike;
   private readonly countStmt: SqlStatementLike;
   private readonly clearStmt: SqlStatementLike;
   private readonly listSessionsStmt: SqlStatementLike;
@@ -1397,6 +1568,14 @@ class SqliteQueueStore implements QueueStore {
        ORDER BY id ASC LIMIT 1`,
     );
     this.deleteByIdStmt = db.prepare(`DELETE FROM queued_events WHERE id = ?`);
+    this.getByRunIdStmt = db.prepare(
+      `SELECT id, run_id, content, model, thinking_level, enqueued_at
+       FROM queued_events WHERE session_id = ? AND run_id = ?
+       ORDER BY id ASC LIMIT 1`,
+    );
+    this.deleteByRunIdStmt = db.prepare(
+      `DELETE FROM queued_events WHERE session_id = ? AND run_id = ?`,
+    );
     this.countStmt = db.prepare(
       `SELECT COUNT(*) as n FROM queued_events WHERE session_id = ?`,
     );
@@ -1451,6 +1630,28 @@ class SqliteQueueStore implements QueueStore {
       | undefined;
     if (!row) return undefined;
     this.deleteByIdStmt.run(row.id);
+    return {
+      runId: row.run_id ?? legacyQueuedRunId(row.id),
+      content: row.content,
+      model: row.model ?? undefined,
+      thinkingLevel: parseQueuedThinkingLevel(row.thinking_level),
+      enqueuedAt: row.enqueued_at,
+    };
+  }
+
+  remove(sessionId: string, runId: string): QueuedEvent | undefined {
+    const row = this.getByRunIdStmt.get(sessionId, runId) as
+      | {
+          id: number;
+          run_id: string | null;
+          content: string;
+          model: string | null;
+          thinking_level: string | null;
+          enqueued_at: number;
+        }
+      | undefined;
+    if (!row) return undefined;
+    this.deleteByRunIdStmt.run(sessionId, runId);
     return {
       runId: row.run_id ?? legacyQueuedRunId(row.id),
       content: row.content,
@@ -1826,6 +2027,7 @@ export class SqliteStore implements Store {
   readonly agents: AgentStore;
   readonly environments: EnvironmentStore;
   readonly sessions: SessionStore;
+  readonly runs: ManagedRunStore;
   readonly secrets: SecretStore;
   readonly queue: QueueStore;
   readonly audit: AuditStore;
@@ -2057,6 +2259,7 @@ export class SqliteStore implements Store {
     this.agents = new SqliteAgentStore(this.db);
     this.environments = new SqliteEnvironmentStore(this.db);
     this.sessions = new SqliteSessionStore(this.db);
+    this.runs = new SqliteManagedRunStore(this.db);
     this.secrets = new SqliteSecretStore(this.db);
     this.queue = new SqliteQueueStore(this.db);
     this.audit = new SqliteAuditStore(this.db);

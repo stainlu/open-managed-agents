@@ -37,6 +37,9 @@ import {
 import type {
   AgentStore,
   EnvironmentStore,
+  ManagedRun,
+  ManagedRunStatus,
+  ManagedRunStore,
   QueueStore,
   RunUsage,
   SessionStore,
@@ -56,6 +59,13 @@ const log = getLogger("router");
 
 function isSessionInflight(session: Session | undefined): boolean {
   return session?.status === "starting" || session?.status === "running";
+}
+
+function isTerminalRunStatus(status: ManagedRunStatus): boolean {
+  return status === "succeeded" ||
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "skipped";
 }
 
 export type RouterConfig = {
@@ -101,6 +111,13 @@ export type RunEventResult = {
   runId: string;
   /** True when the event was queued instead of triggering a run immediately. */
   queued: boolean;
+};
+
+export type AbortRunResult = {
+  session: Session;
+  run: ManagedRun;
+  aborted: boolean;
+  removedQueued: boolean;
 };
 
 export type StreamOutcome = { ok: true } | { ok: false; error: string };
@@ -180,6 +197,7 @@ export class AgentRouter {
     private readonly agents: AgentStore,
     private readonly environments: EnvironmentStore,
     private readonly sessions: SessionStore,
+    private readonly runs: ManagedRunStore,
     private readonly events: ManagedEventLog,
     private readonly workspace: ManagedWorkspace,
     private readonly pool: ManagedSessionRuntime,
@@ -193,6 +211,79 @@ export class AgentRouter {
   /** Return any pending approval requests for a session (non-destructive). */
   getPendingApprovals(sessionId: string): PendingApproval[] {
     return this.pendingApprovals.get(sessionId) ?? [];
+  }
+
+  listRuns(sessionId: string): ManagedRun[] {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new RouterError(
+        "session_not_found",
+        `session ${sessionId} does not exist`,
+      );
+    }
+    return this.runs.listBySession(sessionId);
+  }
+
+  getRun(sessionId: string, runId: string): ManagedRun {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new RouterError(
+        "session_not_found",
+        `session ${sessionId} does not exist`,
+      );
+    }
+    const run = this.runs.getForSession(sessionId, runId);
+    if (!run) {
+      throw new RouterError(
+        "run_not_found",
+        `run ${runId} does not exist for session ${sessionId}`,
+      );
+    }
+    return run;
+  }
+
+  async abortRun(
+    sessionId: string,
+    runId: string,
+    reason = "run aborted",
+  ): Promise<AbortRunResult> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new RouterError(
+        "session_not_found",
+        `session ${sessionId} does not exist`,
+      );
+    }
+    const run = this.getRun(sessionId, runId);
+    if (isTerminalRunStatus(run.status)) {
+      return { session, run, aborted: false, removedQueued: false };
+    }
+    if (run.status === "queued") {
+      const removed = this.queue.remove(sessionId, runId);
+      const cancelled = this.runs.updateStatus(runId, "cancelled", {
+        error: reason,
+      }) ?? run;
+      return {
+        session: this.sessions.get(sessionId) ?? session,
+        run: cancelled,
+        aborted: true,
+        removedQueued: Boolean(removed),
+      };
+    }
+    const active = this.activeRunForSession(sessionId);
+    if (active?.runId !== runId) {
+      throw new RouterError(
+        "run_not_active",
+        `run ${runId} is not the active run for session ${sessionId}`,
+      );
+    }
+    const cancelledSession = await this.cancel(sessionId, { runId, reason });
+    return {
+      session: cancelledSession,
+      run: this.runs.getForSession(sessionId, runId) ?? run,
+      aborted: true,
+      removedQueued: false,
+    };
   }
 
   private harnessForId(harnessId: string): HarnessAdapter {
@@ -559,9 +650,63 @@ export class AgentRouter {
   async disposeSessionRuntime(sessionId: string): Promise<void> {
     this.cancelledDuringAcquire.delete(sessionId);
     this.queue.clear(sessionId);
+    this.cancelRunsForSession(sessionId, "session runtime disposed");
     this.pendingApprovals.delete(sessionId);
     this.clearApprovalSubscriptions(sessionId);
     await this.pool.evictSession(sessionId);
+  }
+
+  private admitRun(args: {
+    runId: string;
+    sessionId: string;
+    agentId: string;
+    status: ManagedRunStatus;
+    queued: boolean;
+    model?: string;
+    thinkingLevel?: AgentConfig["thinkingLevel"];
+  }): ManagedRun {
+    const existing = this.runs.get(args.runId);
+    if (!existing) {
+      return this.runs.create(args);
+    }
+    if (existing.sessionId !== args.sessionId || existing.agentId !== args.agentId) {
+      throw new RouterError(
+        "run_conflict",
+        `run ${args.runId} is already bound to a different session or agent`,
+      );
+    }
+    if (!isTerminalRunStatus(existing.status) && existing.status !== args.status) {
+      return this.runs.updateStatus(args.runId, args.status) ?? existing;
+    }
+    return existing;
+  }
+
+  private activeRunForSession(sessionId: string): ManagedRun | undefined {
+    return this.runs
+      .listBySession(sessionId)
+      .find((run) => run.status === "starting" || run.status === "running");
+  }
+
+  private cancelRunsForSession(sessionId: string, reason: string): number {
+    let count = 0;
+    for (const run of this.runs.listBySession(sessionId)) {
+      if (run.status === "queued" || run.status === "starting" || run.status === "running") {
+        this.runs.updateStatus(run.runId, "cancelled", { error: reason });
+        count++;
+      }
+    }
+    return count;
+  }
+
+  private failActiveRunForSession(sessionId: string, reason: string, runId?: string): void {
+    const run = runId ? this.runs.getForSession(sessionId, runId) : this.activeRunForSession(sessionId);
+    if (run && (run.status === "starting" || run.status === "running")) {
+      this.runs.updateStatus(run.runId, "failed", { error: reason });
+    }
+  }
+
+  private skipRun(runId: string, reason: string): void {
+    this.runs.updateStatus(runId, "skipped", { error: reason });
   }
 
   /**
@@ -629,6 +774,15 @@ export class AgentRouter {
         thinkingLevel: args.thinkingLevel,
       });
       const runId = args.runId ?? createManagedRunId();
+      this.admitRun({
+        runId,
+        sessionId: args.sessionId,
+        agentId: agent.agentId,
+        status: "queued",
+        queued: true,
+        model: args.model,
+        thinkingLevel: args.thinkingLevel,
+      });
       this.queue.enqueue(args.sessionId, {
         runId,
         content: args.content,
@@ -649,6 +803,15 @@ export class AgentRouter {
     this.sessions.bumpTurns(args.sessionId);
     addContext({ sessionId: args.sessionId, agentId: agent.agentId });
     const runId = args.runId ?? createManagedRunId();
+    this.admitRun({
+      runId,
+      sessionId: args.sessionId,
+      agentId: agent.agentId,
+      status: "starting",
+      queued: Boolean(args.runId && this.queue.peek(args.sessionId)?.runId === args.runId),
+      model: args.model,
+      thinkingLevel: args.thinkingLevel,
+    });
 
     this.scheduleBackgroundRun({
       runId,
@@ -678,16 +841,20 @@ export class AgentRouter {
   ): Promise<ManagedRunExecutionResult> {
     const session = this.sessions.get(request.sessionId);
     if (!session) {
+      this.skipRun(request.runId, "session_not_found");
       return { status: "skipped", reason: "session_not_found" };
     }
     if (session.agentId !== request.agentId) {
+      this.skipRun(request.runId, "agent_mismatch");
       return { status: "skipped", reason: "agent_mismatch" };
     }
     if (!isSessionInflight(session)) {
+      this.skipRun(request.runId, "session_not_inflight");
       return { status: "skipped", reason: "session_not_inflight" };
     }
     const agent = this.agents.get(request.agentId);
     if (!agent) {
+      this.skipRun(request.runId, "agent_not_found");
       return { status: "skipped", reason: "agent_not_found" };
     }
 
@@ -703,7 +870,7 @@ export class AgentRouter {
       );
       return { status: "executed" };
     } catch (err) {
-      this.handleBackgroundFailure(request.sessionId, err);
+      this.handleBackgroundFailure(request.sessionId, err, request.runId);
       return { status: "failed", error: errorMessage(err) };
     }
   }
@@ -756,6 +923,15 @@ export class AgentRouter {
     const bumped = this.sessions.bumpTurns(args.sessionId) ?? running;
     addContext({ sessionId: args.sessionId, agentId: agent.agentId });
     const runId = args.runId ?? createManagedRunId();
+    this.admitRun({
+      runId,
+      sessionId: args.sessionId,
+      agentId: agent.agentId,
+      status: "starting",
+      queued: false,
+      model: args.model,
+      thinkingLevel: args.thinkingLevel,
+    });
 
     try {
       // Refresh any OAuth credentials bound to this session that are
@@ -813,6 +989,7 @@ export class AgentRouter {
       }
 
       this.sessions.markRunning(args.sessionId);
+      this.runs.updateStatus(runId, "running");
       const beforeTurn = await this.snapshotTurnProgress(agent.agentId, args.sessionId);
       const endpoint = runtimeEndpoint(runtimeLease);
 
@@ -902,6 +1079,7 @@ export class AgentRouter {
           }
           router.pendingApprovals.delete(args.sessionId);
           router.sessions.endRunSuccess(args.sessionId, { tokensIn, tokensOut, costUsd });
+          router.runs.updateStatus(runId, "succeeded");
           return;
         }
         sessionRunFailuresTotal.inc();
@@ -915,6 +1093,7 @@ export class AgentRouter {
           /* best-effort */
         });
         router.sessions.endRunFailure(args.sessionId, outcome.error);
+        router.runs.updateStatus(runId, "failed", { error: outcome.error });
       };
 
       return { session: bumped, runId, chunks, abort: stream.abort, finalize };
@@ -930,6 +1109,7 @@ export class AgentRouter {
         /* best-effort */
       });
       this.sessions.endRunFailure(args.sessionId, msg);
+      this.runs.updateStatus(runId, "failed", { error: msg });
       throw err;
     }
   }
@@ -1216,7 +1396,10 @@ export class AgentRouter {
     };
   }
 
-  async cancel(sessionId: string): Promise<Session> {
+  async cancel(
+    sessionId: string,
+    opts: { runId?: string; reason?: string } = {},
+  ): Promise<Session> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       throw new RouterError(
@@ -1244,15 +1427,17 @@ export class AgentRouter {
       log.info({ session_id: sessionId }, "cancel during acquire phase — flagging");
       this.cancelledDuringAcquire.add(sessionId);
       this.queue.clear(sessionId);
+      this.cancelRunsForSession(sessionId, opts.reason ?? "session cancelled during acquire");
       this.pendingApprovals.delete(sessionId);
       return this.sessions.endRunCancelled(sessionId) ?? session;
     }
     try {
-      await harness.abortSession(controlClient, sessionId);
+      await harness.abortSession(controlClient, sessionId, opts.runId);
     } catch (err) {
       throw wrapHarnessControlError(err, "cancel_failed");
     }
     this.queue.clear(sessionId);
+    this.cancelRunsForSession(sessionId, opts.reason ?? "session cancelled");
     this.pendingApprovals.delete(sessionId);
     return this.sessions.endRunCancelled(sessionId) ?? session;
   }
@@ -1374,7 +1559,7 @@ export class AgentRouter {
       ),
     );
     const handleFailure = withCapturedContext((err: unknown) =>
-      this.handleBackgroundFailure(args.sessionId, err),
+      this.handleBackgroundFailure(args.sessionId, err, args.runId),
     );
     try {
       const scheduled = this.runScheduler.schedule({
@@ -1473,6 +1658,7 @@ export class AgentRouter {
       "turn pre-LLM timings (receipt → chat.completions dispatch)",
     );
     this.sessions.markRunning(sessionId);
+    this.runs.updateStatus(runId, "running");
     const beforeTurn = await this.snapshotTurnProgress(agent.agentId, sessionId);
     const endpoint = runtimeEndpoint(runtimeLease);
 
@@ -1547,6 +1733,8 @@ export class AgentRouter {
     const next = this.queue.shift(sessionId);
     if (next) {
       this.sessions.addUsage(sessionId, usage);
+      this.runs.updateStatus(runId, "succeeded");
+      this.runs.updateStatus(next.runId, "starting");
       this.scheduleBackgroundRun({
         runId: next.runId,
         sessionId,
@@ -1561,6 +1749,7 @@ export class AgentRouter {
 
     this.pendingApprovals.delete(sessionId);
     this.sessions.endRunSuccess(sessionId, usage);
+    this.runs.updateStatus(runId, "succeeded");
   }
 
   /**
@@ -1666,6 +1855,10 @@ export class AgentRouter {
       );
       this.pendingApprovals.delete(sessionId);
       this.sessions.endRunSuccess(sessionId, { tokensIn, tokensOut, costUsd });
+      const activeRun = this.activeRunForSession(sessionId);
+      if (activeRun) {
+        this.runs.updateStatus(activeRun.runId, "succeeded");
+      }
       log.info(
         { session_id: sessionId, cost_usd: costUsd },
         "adopted session finalized",
@@ -1676,8 +1869,10 @@ export class AgentRouter {
       // queue-drain path.
       const next = this.queue.peek(sessionId);
       if (next) {
+        this.runs.updateStatus(next.runId, "starting");
         void this.runEvent({
           sessionId,
+          runId: next.runId,
           content: next.content,
           model: next.model,
           thinkingLevel: next.thinkingLevel,
@@ -1698,6 +1893,17 @@ export class AgentRouter {
       "adopted session run failed post-restart",
     );
     this.queue.clear(sessionId);
+    const activeRun = this.activeRunForSession(sessionId);
+    if (activeRun) {
+      this.runs.updateStatus(activeRun.runId, "failed", { error: outcome.error });
+    }
+    for (const run of this.runs.listBySession(sessionId)) {
+      if (run.status === "queued") {
+        this.runs.updateStatus(run.runId, "cancelled", {
+          error: "dropped after active run failed",
+        });
+      }
+    }
     this.pendingApprovals.delete(sessionId);
     this.clearApprovalSubscriptions(sessionId);
     await this.pool.evictSession(sessionId).catch(() => {
@@ -1840,14 +2046,23 @@ export class AgentRouter {
    * the failure is a side-effect of an external cancel and the container
    * is still healthy — leave it in the pool.
    */
-  private handleBackgroundFailure(sessionId: string, err: unknown): void {
+  private handleBackgroundFailure(sessionId: string, err: unknown, runId?: string): void {
     this.cancelledDuringAcquire.delete(sessionId);
     const current = this.sessions.get(sessionId);
     if (!isSessionInflight(current)) {
       return;
     }
+    const msg = errorMessage(err);
+    this.failActiveRunForSession(sessionId, msg, runId);
     // Drop any queued events and pending approvals.
     const dropped = this.queue.clear(sessionId);
+    for (const run of this.runs.listBySession(sessionId)) {
+      if (run.status === "queued") {
+        this.runs.updateStatus(run.runId, "cancelled", {
+          error: "dropped after active run failed",
+        });
+      }
+    }
     this.pendingApprovals.delete(sessionId);
     this.clearApprovalSubscriptions(sessionId);
     if (dropped > 0) {
@@ -1859,7 +2074,6 @@ export class AgentRouter {
     void this.pool.evictSession(sessionId).catch(() => {
       /* best-effort */
     });
-    const msg = errorMessage(err);
     sessionRunFailuresTotal.inc();
     log.error({ session_id: sessionId, err }, "session run failed");
     this.sessions.endRunFailure(sessionId, msg);
@@ -2032,6 +2246,9 @@ export type RouterErrorCode =
   | "session_not_found"
   | "session_busy"
   | "session_not_running"
+  | "run_not_found"
+  | "run_not_active"
+  | "run_conflict"
   | "capacity_exceeded"
   | "no_active_container"
   | "chat_completions_failed"

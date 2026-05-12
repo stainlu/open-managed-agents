@@ -110,6 +110,7 @@ export function createCloudflareFlueStack(
     opts.store.agents,
     opts.store.environments,
     opts.store.sessions,
+    opts.store.runs,
     events,
     workspace,
     runtime,

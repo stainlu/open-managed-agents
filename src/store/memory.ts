@@ -18,6 +18,9 @@ import type {
   AuditRecord,
   AuditStore,
   EnvironmentStore,
+  ManagedRun,
+  ManagedRunStatus,
+  ManagedRunStore,
   QueuedEvent,
   QueueStore,
   RunUsage,
@@ -344,6 +347,97 @@ class InMemorySecretStore implements SecretStore {
   }
 }
 
+// ---------- Managed runs ----------
+
+const TERMINAL_RUN_STATUSES = new Set<ManagedRunStatus>([
+  "succeeded",
+  "failed",
+  "cancelled",
+  "skipped",
+]);
+
+function transitionRunStatus(
+  run: ManagedRun,
+  status: ManagedRunStatus,
+  opts: { error?: string | null; now?: number } = {},
+): ManagedRun {
+  if (TERMINAL_RUN_STATUSES.has(run.status)) return run;
+  const now = opts.now ?? Date.now();
+  const terminal = TERMINAL_RUN_STATUSES.has(status);
+  return {
+    ...run,
+    status,
+    error: status === "failed" || status === "cancelled" || status === "skipped"
+      ? opts.error ?? run.error
+      : null,
+    startedAt: status === "running" && run.startedAt === null ? now : run.startedAt,
+    completedAt: terminal ? now : run.completedAt,
+  };
+}
+
+class InMemoryManagedRunStore implements ManagedRunStore {
+  private readonly runs = new Map<string, ManagedRun>();
+
+  create(args: {
+    runId: string;
+    sessionId: string;
+    agentId: string;
+    status: ManagedRunStatus;
+    queued: boolean;
+    model?: string;
+    thinkingLevel?: AgentConfig["thinkingLevel"];
+    createdAt?: number;
+  }): ManagedRun {
+    const existing = this.runs.get(args.runId);
+    if (existing) return { ...existing };
+    const now = args.createdAt ?? Date.now();
+    const run: ManagedRun = {
+      runId: args.runId,
+      sessionId: args.sessionId,
+      agentId: args.agentId,
+      status: args.status,
+      queued: args.queued,
+      model: args.model,
+      thinkingLevel: args.thinkingLevel,
+      error: null,
+      createdAt: now,
+      startedAt: args.status === "running" ? now : null,
+      completedAt: TERMINAL_RUN_STATUSES.has(args.status) ? now : null,
+    };
+    this.runs.set(run.runId, run);
+    return { ...run };
+  }
+
+  get(runId: string): ManagedRun | undefined {
+    const run = this.runs.get(runId);
+    return run ? { ...run } : undefined;
+  }
+
+  getForSession(sessionId: string, runId: string): ManagedRun | undefined {
+    const run = this.runs.get(runId);
+    return run?.sessionId === sessionId ? { ...run } : undefined;
+  }
+
+  listBySession(sessionId: string): ManagedRun[] {
+    return Array.from(this.runs.values())
+      .filter((run) => run.sessionId === sessionId)
+      .sort((a, b) => a.createdAt - b.createdAt || a.runId.localeCompare(b.runId))
+      .map((run) => ({ ...run }));
+  }
+
+  updateStatus(
+    runId: string,
+    status: ManagedRunStatus,
+    opts?: { error?: string | null; now?: number },
+  ): ManagedRun | undefined {
+    const current = this.runs.get(runId);
+    if (!current) return undefined;
+    const next = transitionRunStatus(current, status, opts);
+    this.runs.set(runId, next);
+    return { ...next };
+  }
+}
+
 // ---------- Queue ----------
 
 class InMemoryQueueStore implements QueueStore {
@@ -369,6 +463,16 @@ class InMemoryQueueStore implements QueueStore {
     const next = queue.shift();
     if (queue.length === 0) this.bySession.delete(sessionId);
     return next;
+  }
+
+  remove(sessionId: string, runId: string): QueuedEvent | undefined {
+    const queue = this.bySession.get(sessionId);
+    if (!queue || queue.length === 0) return undefined;
+    const index = queue.findIndex((event) => event.runId === runId);
+    if (index === -1) return undefined;
+    const [removed] = queue.splice(index, 1);
+    if (queue.length === 0) this.bySession.delete(sessionId);
+    return removed;
   }
 
   size(sessionId: string): number {
@@ -635,6 +739,7 @@ export class InMemoryStore implements Store {
   readonly agents: AgentStore;
   readonly environments: EnvironmentStore;
   readonly sessions: SessionStore;
+  readonly runs: ManagedRunStore;
   readonly secrets: SecretStore;
   readonly queue: QueueStore;
   readonly audit: AuditStore;
@@ -646,6 +751,7 @@ export class InMemoryStore implements Store {
     this.agents = new InMemoryAgentStore();
     this.environments = new InMemoryEnvironmentStore();
     this.sessions = new InMemorySessionStore();
+    this.runs = new InMemoryManagedRunStore();
     this.secrets = new InMemorySecretStore();
     this.queue = new InMemoryQueueStore();
     this.audit = new InMemoryAuditStore();

@@ -52,6 +52,9 @@ export { SqliteStore, type SyncSqlDatabaseLike } from "./sqlite.js";
 export type {
   AgentStore,
   EnvironmentStore,
+  ManagedRun,
+  ManagedRunStatus,
+  ManagedRunStore,
   QueuedEvent,
   QueueStore,
   RunUsage,

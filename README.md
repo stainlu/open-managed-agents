@@ -69,6 +69,9 @@ Working today:
 - OMA-managed run ids are assigned when a turn is accepted and preserved
   through session queues, Workflow-backed re-entry, server responses, and Flue
   run/event mapping.
+- Managed runs are now durable control-plane records. OMA records queued,
+  starting, running, terminal, and cancelled run status in the metadata store
+  and exposes session-scoped run list/get/abort APIs.
 - Experimental Flue native harness driver for prompt turns, opt-in via
   `OMA_ENABLE_FLUE_HARNESS=1`, including AbortSignal cancellation for active
   prompt calls, OpenAI-compatible prompt streaming, live managed-event append,
@@ -89,7 +92,7 @@ Not done yet:
 - Promoted production Cloudflare backend. The Durable Object, Worker router,
   Workflow runner, DO SQLite metadata store, D1 stores, R2 workspace backend,
   and example Wrangler wiring exist, but live deployment promotion is still
-  gated on replay, cancellation, queued turns, Flue task runs, and
+  gated on replay, run cancellation, queued turns, Flue task runs, and
   sandbox-backed shell/build work.
 - Full Hermes parity: arbitrary pre-tool approvals, MCP, compaction, subagents.
 - Full Codex parity: MCP, managed subagents, and per-tool deny policy.

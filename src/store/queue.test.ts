@@ -91,6 +91,22 @@ function sharedQueueSuite(label: string, build: () => QueueStore) {
       expect(q.shift("ses_x")).toMatchObject({ runId: "run_peek_a", content: "a" });
     });
 
+    it("removes a queued event by run id without disturbing FIFO order", () => {
+      const q = build();
+      q.enqueue("ses_x", { runId: "run_remove_a", content: "a", enqueuedAt: 1 });
+      q.enqueue("ses_x", { runId: "run_remove_b", content: "b", enqueuedAt: 2 });
+      q.enqueue("ses_x", { runId: "run_remove_c", content: "c", enqueuedAt: 3 });
+
+      expect(q.remove("ses_x", "run_remove_b")).toMatchObject({
+        runId: "run_remove_b",
+        content: "b",
+      });
+      expect(q.remove("ses_x", "run_remove_missing")).toBeUndefined();
+      expect(q.shift("ses_x")).toMatchObject({ runId: "run_remove_a", content: "a" });
+      expect(q.shift("ses_x")).toMatchObject({ runId: "run_remove_c", content: "c" });
+      expect(q.shift("ses_x")).toBeUndefined();
+    });
+
     it("listSessionsWithQueued reports sessions with non-empty queues only", () => {
       const q = build();
       expect(q.listSessionsWithQueued()).toEqual([]);

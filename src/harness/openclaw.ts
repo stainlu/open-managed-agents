@@ -59,7 +59,7 @@ export type OpenClawHarnessAdapterConfig = {
 };
 
 type OpenClawControlClient = {
-  abort(sessionKey: string): Promise<unknown>;
+  abort(sessionKey: string, runId?: string): Promise<unknown>;
   patch(sessionKey: string, fields: Record<string, unknown>): Promise<unknown>;
   compact(sessionKey: string): Promise<unknown>;
   approvalResolve(id: string, decision: "allow-once" | "deny"): Promise<unknown>;
@@ -284,9 +284,9 @@ export class OpenClawHarnessAdapter implements HarnessAdapter {
     await runControl(() => ws.patch(openClawSessionKey(sessionId), patch));
   }
 
-  async abortSession(controlClient: unknown, sessionId: string): Promise<void> {
+  async abortSession(controlClient: unknown, sessionId: string, runId?: string): Promise<void> {
     const ws = openClawControlClient(controlClient, ["abort"]);
-    await runControl(() => ws.abort(openClawSessionKey(sessionId)));
+    await runControl(() => ws.abort(openClawSessionKey(sessionId), runId));
   }
 
   async compactSession(controlClient: unknown, sessionId: string): Promise<void> {

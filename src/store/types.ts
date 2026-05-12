@@ -79,6 +79,60 @@ export interface SecretStore {
   set(key: string, value: Buffer): void;
 }
 
+export type ManagedRunStatus =
+  | "queued"
+  | "starting"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "skipped";
+
+export type ManagedRun = {
+  runId: string;
+  sessionId: string;
+  agentId: string;
+  status: ManagedRunStatus;
+  /** True when the run entered through the busy-session queue. */
+  queued: boolean;
+  model?: string;
+  thinkingLevel?: AgentConfig["thinkingLevel"];
+  error: string | null;
+  createdAt: number;
+  startedAt: number | null;
+  completedAt: number | null;
+};
+
+/**
+ * Durable control-plane state for accepted runs. Session status is still the
+ * coarse lifecycle; this store gives clients and schedulers a stable per-run
+ * handle for status, cancellation, Workflow idempotency, and future replay.
+ */
+export interface ManagedRunStore {
+  /**
+   * Idempotently create a run record. If the run id already exists, return the
+   * existing record so restart/drain paths can safely re-use admitted ids.
+   */
+  create(args: {
+    runId: string;
+    sessionId: string;
+    agentId: string;
+    status: ManagedRunStatus;
+    queued: boolean;
+    model?: string;
+    thinkingLevel?: AgentConfig["thinkingLevel"];
+    createdAt?: number;
+  }): ManagedRun;
+  get(runId: string): ManagedRun | undefined;
+  getForSession(sessionId: string, runId: string): ManagedRun | undefined;
+  listBySession(sessionId: string): ManagedRun[];
+  updateStatus(
+    runId: string,
+    status: ManagedRunStatus,
+    opts?: { error?: string | null; now?: number },
+  ): ManagedRun | undefined;
+}
+
 /**
  * End-user credential bundle. Scoped to a single user in the developer's
  * app (identified by `userId` — arbitrary opaque string the developer
@@ -352,6 +406,7 @@ export interface Store {
   readonly agents: AgentStore;
   readonly environments: EnvironmentStore;
   readonly sessions: SessionStore;
+  readonly runs: ManagedRunStore;
   readonly secrets: SecretStore;
   readonly vaults: VaultStore;
   /** Queue backend — durable on SQLite, in-memory on memory. */
@@ -441,6 +496,8 @@ export interface QueueStore {
   peek(sessionId: string): QueuedEvent | undefined;
   /** Remove and return the head event for the session, or undefined if empty. */
   shift(sessionId: string): QueuedEvent | undefined;
+  /** Remove one queued event by managed run id. */
+  remove(sessionId: string, runId: string): QueuedEvent | undefined;
   /** Non-destructive count of queued events for a session. */
   size(sessionId: string): number;
   /** Remove every queued event for a session. Returns the number removed. */
