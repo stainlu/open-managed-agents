@@ -66,6 +66,10 @@ Working today:
   events/state, R2 workspace, and Workflow-backed run kickoff.
 - Cloudflare/Flue Worker router, Workflow runner helper, and experimental
   `examples/cloudflare-flue` deployment scaffold.
+- The Cloudflare/Flue example includes an opt-in, token-gated Sandbox
+  shell/build smoke that verifies workspace fixture writes, sandbox execution,
+  generated artifacts, and deletion sync-back through the managed workspace
+  executor.
 - OMA-managed run ids are assigned when a turn is accepted and preserved
   through session queues, Workflow-backed re-entry, server responses, and Flue
   run/event mapping.
@@ -94,7 +98,7 @@ Not done yet:
   Workflow runner, DO SQLite metadata store, D1 stores, R2 workspace backend,
   and example Wrangler wiring exist, but live deployment promotion is still
   gated on replay, run cancellation, queued turns, Flue task runs, and
-  sandbox-backed shell/build work.
+  sandbox-backed shell/build work against a real deployment.
 - Full Hermes parity: arbitrary pre-tool approvals, MCP, compaction, subagents.
 - Full Codex parity: MCP, managed subagents, and per-tool deny policy.
 - Full Claude Agent SDK parity: managed subagents, manual compaction, and complete MCP

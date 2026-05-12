@@ -182,6 +182,12 @@ Done in OMA:
 - The Cloudflare example now exports the Sandbox Durable Object class, binds a
   Sandbox container, and injects the sandbox-backed executor into the OMA
   coordinator. This is still experimental until a live shell/build smoke passes.
+- The Cloudflare example smoke client can now require a deterministic
+  sandbox-backed shell/build check. The check writes fixtures through OMA's
+  public workspace API, calls a token-gated example-only smoke route that runs
+  through the Flue managed workspace command executor, and verifies generated
+  output plus deletions sync back to the managed R2 workspace. This is still a
+  verifier until it is run against a live Cloudflare deployment.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
 - Harness adapters now declare a runtime mode. Existing adapters remain
@@ -511,6 +517,8 @@ workspace ids into the public session identity.
    - [x] Add an example smoke client for local or deployed Worker URLs that
      proves health, harness catalog, Flue prompt run, event filtering, run-tree
      projection, and absence of public Cloudflare ids in OMA responses.
+   - [x] Add an opt-in example smoke check for sandbox-backed shell/build
+     execution and workspace sync-back.
    - [ ] Promote production `wrangler.toml` only after live Cloudflare smoke
      coverage.
    - [x] No Docker compatibility shims.

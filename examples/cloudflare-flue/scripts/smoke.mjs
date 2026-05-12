@@ -12,6 +12,7 @@ const timeoutMs = positiveInt(opts["timeout-ms"] ?? process.env.OMA_SMOKE_TIMEOU
 const pollMs = positiveInt(opts["poll-ms"] ?? process.env.OMA_SMOKE_POLL_MS, 1_000);
 const checkQueueAbort = boolOpt(opts["check-queue-abort"] ?? process.env.OMA_SMOKE_CHECK_QUEUE_ABORT);
 const checkActiveAbort = boolOpt(opts["check-active-abort"] ?? process.env.OMA_SMOKE_CHECK_ACTIVE_ABORT);
+const checkSandboxExec = boolOpt(opts["check-sandbox-exec"] ?? process.env.OMA_SMOKE_CHECK_SANDBOX_EXEC);
 const keep = boolOpt(opts.keep ?? process.env.OMA_SMOKE_KEEP);
 const smokeId = `oma-smoke-${Date.now().toString(36)}`;
 const createdAgentIds = new Set();
@@ -79,6 +80,12 @@ async function main() {
     assertNoPlatformIds(tree, "run tree response");
     console.log(`ok run tree includes managed run ${promptRun.run_id}`);
 
+    if (checkSandboxExec) {
+      await runSandboxExecSmoke(agent.agent_id, promptRun.session_id);
+    } else {
+      console.log("skip sandbox exec smoke; pass --check-sandbox-exec to require it");
+    }
+
     if (checkQueueAbort) {
       await runQueueAbortSmoke(agent.agent_id);
     } else {
@@ -144,6 +151,36 @@ async function runActiveAbortSmoke(agentId) {
     `active run abort left terminal status ${terminal.status}`,
   );
   console.log(`ok active run ${active.run_id} abort reached terminal status ${terminal.status}`);
+}
+
+async function runSandboxExecSmoke(agentId, sessionId) {
+  if (!token) {
+    throw new Error("sandbox exec smoke requires OMA_API_TOKEN because it can execute commands");
+  }
+  await putFile(agentId, sessionId, "src/input.txt", smokeId);
+  await putFile(agentId, sessionId, "obsolete.txt", "delete me");
+
+  const command = [
+    "sh",
+    "-lc",
+    "'mkdir -p dist && printf built: > dist/result.txt && cat src/input.txt >> dist/result.txt && rm obsolete.txt'",
+  ].join(" ");
+  const result = await request("POST", "/_oma/smoke/sandbox-exec", {
+    body: {
+      agent_id: agentId,
+      session_id: sessionId,
+      command,
+      cwd: ".",
+      timeout_seconds: 30,
+    },
+  });
+  assert(result.exit_code === 0, `sandbox exec exited ${result.exit_code}: ${result.stderr ?? ""}`);
+  assertNoPlatformIds(result, "sandbox exec smoke response");
+
+  const output = await getFileText(agentId, sessionId, "dist/result.txt");
+  assert(output === `built:${smokeId}`, `sandbox output mismatch: ${JSON.stringify(output)}`);
+  assert(!await fileExists(agentId, sessionId, "obsolete.txt"), "sandbox deletion did not sync back");
+  console.log("ok sandbox exec wrote dist/result.txt and synced deletion");
 }
 
 async function startRun(agentId, task) {
@@ -215,6 +252,67 @@ async function request(method, path, options = {}) {
     throw new Error(`${method} ${path} returned ${response.status}: ${JSON.stringify(body)}`);
   }
   return body;
+}
+
+async function putFile(agentId, sessionId, path, content) {
+  const response = await fetch(
+    `${baseUrl}/v1/agents/${encodeURIComponent(agentId)}/files/${encodePath(path)}?session_id=${encodeURIComponent(sessionId)}`,
+    {
+      method: "PUT",
+      headers: authHeaders({ "content-type": "application/octet-stream" }),
+      body: content,
+    },
+  );
+  const body = await parseResponseBody(response);
+  if (!response.ok) {
+    throw new Error(`PUT file ${path} returned ${response.status}: ${JSON.stringify(body)}`);
+  }
+  assertNoPlatformIds(body, `put file ${path} response`);
+}
+
+async function getFileText(agentId, sessionId, path) {
+  const response = await fetch(
+    `${baseUrl}/v1/agents/${encodeURIComponent(agentId)}/files/${encodePath(path)}?session_id=${encodeURIComponent(sessionId)}`,
+    { headers: authHeaders() },
+  );
+  if (!response.ok) {
+    const body = await parseResponseBody(response);
+    throw new Error(`GET file ${path} returned ${response.status}: ${JSON.stringify(body)}`);
+  }
+  return await response.text();
+}
+
+async function fileExists(agentId, sessionId, path) {
+  const response = await fetch(
+    `${baseUrl}/v1/agents/${encodeURIComponent(agentId)}/files/${encodePath(path)}?session_id=${encodeURIComponent(sessionId)}`,
+    { headers: authHeaders() },
+  );
+  if (response.status === 404) return false;
+  if (!response.ok) {
+    const body = await parseResponseBody(response);
+    throw new Error(`GET file ${path} returned ${response.status}: ${JSON.stringify(body)}`);
+  }
+  await response.arrayBuffer();
+  return true;
+}
+
+function authHeaders(extra = {}) {
+  const headers = { ...extra };
+  if (token) headers.authorization = `Bearer ${token}`;
+  return headers;
+}
+
+async function parseResponseBody(response) {
+  const text = await response.text();
+  try {
+    return text.length > 0 ? JSON.parse(text) : {};
+  } catch {
+    return { raw: text };
+  }
+}
+
+function encodePath(path) {
+  return String(path).split("/").map(encodeURIComponent).join("/");
 }
 
 function findRunNode(nodes, runId) {

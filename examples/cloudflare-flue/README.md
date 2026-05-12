@@ -177,6 +177,23 @@ The basic smoke proves:
 The smoke deletes the agent and sessions it creates. Set `OMA_SMOKE_KEEP=1` or
 pass `--keep` if you want to inspect the resources afterward.
 
+Sandbox shell/build smoke is separate because it intentionally executes a
+command inside Cloudflare Sandbox. It requires `OMA_API_TOKEN` to be configured
+on the Worker and supplied by the smoke client:
+
+```bash
+OMA_CLOUDFLARE_FLUE_BASE_URL=https://oma-cloudflare-flue.<account>.workers.dev \
+OMA_API_TOKEN=replace-with-worker-token \
+pnpm smoke:sandbox
+```
+
+That smoke writes source fixtures through OMA's public workspace API, calls the
+example-only `/_oma/smoke/sandbox-exec` route, runs a shell command through
+OMA's Flue managed workspace executor, and verifies that the generated
+`dist/result.txt` plus a deleted fixture sync back to the managed R2 workspace.
+The smoke route is token-gated and refuses to run when `OMA_API_TOKEN` is not
+configured.
+
 Promotion-only checks are stricter and intentionally separate because they
 require a prompt that remains active long enough to test queueing and aborts:
 
@@ -209,8 +226,9 @@ The `wrangler.toml` uses:
   preserved as nested managed run events, but first-class child sessions, MCP,
   and tool policy parity are intentionally not faked.
 - Sandbox-backed shell execution is wired through OMA's managed workspace
-  executor seam, but live deployment promotion still needs a deterministic
-  shell/build smoke that proves the path against real Cloudflare Sandboxes.
+  executor seam, and the example smoke client can now require a deterministic
+  shell/build check against real Cloudflare Sandboxes. This still needs to be
+  run against a live deployment before the backend is promoted.
 - Local Durable Object tests cover active and queued run abort through the
   public run API, but there is no live CI deployment test yet. Do not treat
   this as the default backend until the promotion checklist in
