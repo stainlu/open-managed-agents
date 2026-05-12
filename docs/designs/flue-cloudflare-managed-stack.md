@@ -96,6 +96,11 @@ Done in OMA:
   runner helper. It wraps coordinator re-entry in a retryable Workflow step
   while letting semantic run failures become managed session failures instead
   of blindly retrying user turns.
+- `ConfigurableCloudflareFlueDurableObject` now preserves the same
+  token-protected Workflow re-entry route as the conventional Durable Object.
+  Custom Flue composition roots can inject their own engine/app without losing
+  scheduled-run execution, and local coverage now proves a scheduled Flue prompt
+  run through that path.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
 - Harness adapters now declare a runtime mode. Existing adapters remain
@@ -380,6 +385,8 @@ workspace ids into the public session identity.
    - [x] Add a Workflow execution callback/runner that resumes the scheduled
      run through the coordinator Durable Object.
    - [x] Add token-gated internal coordinator re-entry for scheduled runs.
+   - [x] Keep Workflow re-entry available for configurable Cloudflare/Flue
+     Durable Object composition roots.
    - [x] Add R2-compatible workspace binding in the Cloudflare deployment
      example.
    - [x] Add experimental `wrangler.toml` deployment wiring.

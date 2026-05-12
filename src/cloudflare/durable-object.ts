@@ -87,24 +87,15 @@ export class CloudflareFlueDurableObject<
   }
 
   protected async executeInternalManagedRun(request: Request): Promise<Response> {
-    const expectedToken = this.env.OMA_WORKFLOW_INTERNAL_TOKEN;
-    const providedToken = request.headers.get(MANAGED_RUN_INTERNAL_TOKEN_HEADER);
-    if (!expectedToken || providedToken !== expectedToken) {
-      return jsonResponse({ error: "forbidden" }, 403);
-    }
+    return executeInternalManagedRunRequest(
+      request,
+      this.resolveWorkflowInternalToken(this.env),
+      () => this.getHandler(),
+    );
+  }
 
-    let payload: unknown;
-    try {
-      payload = await request.json();
-    } catch {
-      return jsonResponse({ error: "invalid_json" }, 400);
-    }
-    if (!isManagedRunRequest(payload)) {
-      return jsonResponse({ error: "invalid_managed_run_request" }, 400);
-    }
-
-    const result = await this.getHandler().stack.router.executeScheduledRun(payload);
-    return jsonResponse(result, 200);
+  protected resolveWorkflowInternalToken(env: Env): string | undefined {
+    return env.OMA_WORKFLOW_INTERNAL_TOKEN;
   }
 
   protected getHandler(): CloudflareFlueFetchHandler {
@@ -154,6 +145,30 @@ function jsonResponse(body: unknown, status: number): Response {
   });
 }
 
+async function executeInternalManagedRunRequest(
+  request: Request,
+  expectedToken: string | undefined,
+  getHandler: () => CloudflareFlueFetchHandler,
+): Promise<Response> {
+  const providedToken = request.headers.get(MANAGED_RUN_INTERNAL_TOKEN_HEADER);
+  if (!expectedToken || providedToken !== expectedToken) {
+    return jsonResponse({ error: "forbidden" }, 403);
+  }
+
+  let payload: unknown;
+  try {
+    payload = await request.json();
+  } catch {
+    return jsonResponse({ error: "invalid_json" }, 400);
+  }
+  if (!isManagedRunRequest(payload)) {
+    return jsonResponse({ error: "invalid_managed_run_request" }, 400);
+  }
+
+  const result = await getHandler().stack.router.executeScheduledRun(payload);
+  return jsonResponse(result, 200);
+}
+
 export abstract class ConfigurableCloudflareFlueDurableObject<
   Env extends object = Record<string, unknown>,
 > {
@@ -165,7 +180,19 @@ export abstract class ConfigurableCloudflareFlueDurableObject<
   ) {}
 
   fetch(request: Request): Response | Promise<Response> {
+    const url = new URL(request.url);
+    if (request.method === "POST" && url.pathname === MANAGED_RUN_INTERNAL_PATH) {
+      return this.executeInternalManagedRun(request);
+    }
     return this.getHandler().fetch(request, this.env, undefined);
+  }
+
+  protected async executeInternalManagedRun(request: Request): Promise<Response> {
+    return executeInternalManagedRunRequest(
+      request,
+      this.resolveWorkflowInternalToken(this.env),
+      () => this.getHandler(),
+    );
   }
 
   protected getHandler(): CloudflareFlueFetchHandler {
@@ -181,6 +208,10 @@ export abstract class ConfigurableCloudflareFlueDurableObject<
   protected abstract resolveOptions(
     env: Env,
   ): Omit<CloudflareFlueDurableObjectHandlerOptions, "state">;
+
+  protected resolveWorkflowInternalToken(_env: Env): string | undefined {
+    return undefined;
+  }
 }
 
 export function cloudflareStringEnv(

@@ -24,9 +24,12 @@ import type {
 } from "../workspace/r2.js";
 import {
   CloudflareFlueDurableObject,
+  ConfigurableCloudflareFlueDurableObject,
   createCloudflareFlueDurableObjectHandler,
+  type CloudflareFlueDurableObjectHandlerOptions,
 } from "./durable-object.js";
 import {
+  CloudflareWorkflowRunScheduler,
   MANAGED_RUN_INTERNAL_PATH,
   MANAGED_RUN_INTERNAL_TOKEN_HEADER,
   type CloudflareWorkflowBindingLike,
@@ -369,6 +372,137 @@ describe("CloudflareFlueDurableObject", () => {
   });
 });
 
+describe("ConfigurableCloudflareFlueDurableObject", () => {
+  it("keeps Workflow re-entry available for custom Flue composition", async () => {
+    const doBacking = new Database(join(tmpDir, "metadata.db"));
+    const doStorage = new FakeDurableObjectStorage(doBacking);
+    const { db, close } = sqliteD1();
+    const workflow = new FakeWorkflow();
+
+    try {
+      const object = new TestConfigurableFlueObject(
+        { storage: doStorage },
+        {
+          db,
+          workspace: new FakeR2Bucket(),
+          workflow,
+          internalToken: "secret",
+        },
+      );
+
+      const created = await object.fetch(new Request("https://oma.example/v1/agents", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          harnessId: "flue",
+          model: "test/model",
+          instructions: "be useful",
+        }),
+      }));
+      expect(created.status).toBe(200);
+      const agent = await created.json() as { agent_id: string };
+
+      const run = await object.fetch(new Request(
+        `https://oma.example/v1/agents/${agent.agent_id}/run`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ task: "custom flue run" }),
+        },
+      ));
+      expect(run.status).toBe(200);
+      const runBody = await run.json() as {
+        session_id: string;
+        status: string;
+        workflow_id?: string;
+      };
+
+      expect(runBody).toMatchObject({
+        status: "starting",
+      });
+      expect(runBody.workflow_id).toBeUndefined();
+      expect(workflow.created).toHaveLength(1);
+
+      const internal = await object.fetch(new Request(
+        `https://oma.example${MANAGED_RUN_INTERNAL_PATH}`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            [MANAGED_RUN_INTERNAL_TOKEN_HEADER]: "secret",
+          },
+          body: JSON.stringify(workflow.created[0]?.params),
+        },
+      ));
+
+      expect(internal.status).toBe(200);
+      await expect(internal.json()).resolves.toEqual({ status: "executed" });
+
+      const session = await object.fetch(new Request(
+        `https://oma.example/v1/sessions/${runBody.session_id}`,
+      ));
+      await expect(session.json()).resolves.toMatchObject({
+        session_id: runBody.session_id,
+        status: "idle",
+        turns: 1,
+      });
+
+      const events = await object.fetch(new Request(
+        `https://oma.example/v1/sessions/${runBody.session_id}/events`,
+      ));
+      await expect(events.json()).resolves.toMatchObject({
+        session_id: runBody.session_id,
+        count: 2,
+        events: [
+          { type: "user.message", content: "custom flue run" },
+          { type: "agent.message", content: "custom:custom flue run" },
+        ],
+      });
+    } finally {
+      close();
+      doBacking.close();
+    }
+  });
+
+  it("keeps the custom internal re-entry route token-protected", async () => {
+    const doBacking = new Database(join(tmpDir, "metadata.db"));
+    const doStorage = new FakeDurableObjectStorage(doBacking);
+    const { db, close } = sqliteD1();
+
+    try {
+      const object = new TestConfigurableFlueObject(
+        { storage: doStorage },
+        {
+          db,
+          workspace: new FakeR2Bucket(),
+          workflow: new FakeWorkflow(),
+          internalToken: "secret",
+        },
+      );
+
+      const response = await object.fetch(new Request(
+        `https://oma.example${MANAGED_RUN_INTERNAL_PATH}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            sessionId: "ses_missing",
+            agentId: "agt_missing",
+            content: "hello",
+            queued: false,
+          }),
+        },
+      ));
+
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toEqual({ error: "forbidden" });
+    } finally {
+      close();
+      doBacking.close();
+    }
+  });
+});
+
 async function waitForSessionToStopRunning(
   store: Store,
   sessionId: string,
@@ -531,5 +665,36 @@ class FakeWorkflow implements CloudflareWorkflowBindingLike {
   create(args: Parameters<CloudflareWorkflowBindingLike["create"]>[0]): { id: string } {
     this.created.push(args);
     return { id: args.id ?? `workflow-${this.created.length}` };
+  }
+}
+
+type TestConfigurableEnv = {
+  db: D1DatabaseLike;
+  workspace: R2BucketLike;
+  workflow: CloudflareWorkflowBindingLike;
+  internalToken: string;
+};
+
+class TestConfigurableFlueObject
+  extends ConfigurableCloudflareFlueDurableObject<TestConfigurableEnv> {
+  protected resolveOptions(
+    env: TestConfigurableEnv,
+  ): Omit<CloudflareFlueDurableObjectHandlerOptions, "state"> {
+    return {
+      db: env.db,
+      r2Bucket: env.workspace,
+      flueEngine: {
+        prompt: async (args) => ({
+          text: `custom:${args.content}`,
+          usage: { input: 3, output: 5 },
+          model: args.model ?? args.agent.model,
+        }),
+      },
+      runScheduler: new CloudflareWorkflowRunScheduler({ workflow: env.workflow }),
+    };
+  }
+
+  protected override resolveWorkflowInternalToken(env: TestConfigurableEnv): string | undefined {
+    return env.internalToken;
   }
 }
