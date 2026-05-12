@@ -89,8 +89,10 @@ Working today:
   configuration, including Cloudflare Workers AI binding registration for
   `cloudflare/<model>`. URL-based MCP servers are connected through Flue's
   MCP client, including OMA vault bearer injection, exact deny filtering, and
-  exact `always_ask` approval gates for Flue MCP tool names; stdio MCP,
-  approve-all policy, and built-in Flue tool policy are still rejected. The
+  exact `always_ask` approval gates for Flue MCP tool names. OMA also enforces
+  exact deny/approval policy for Flue's built-in `bash` tool at the
+  `SessionEnv.exec()` boundary; stdio MCP, approve-all policy, and other
+  built-in Flue tool policy are still rejected. The
   bridge prefers Flue's runtime package name `@flue/core` and falls back to
   legacy `@flue/sdk`.
 - Experimental Hermes adapter runtime via direct `AIAgent` integration.
@@ -102,7 +104,8 @@ Working today:
 Not done yet:
 
 - Full Flue parity: stdio MCP, approve-all policy, built-in Flue tool
-  deny/approval policy, and OMA first-class child sessions for Flue tasks.
+  deny/approval policy beyond `bash`, and OMA first-class child sessions for
+  Flue tasks.
 - Promoted production Cloudflare backend. The Durable Object, Worker router,
   Workflow runner, DO SQLite metadata store, D1 stores, R2 workspace backend,
   and example Wrangler wiring exist, but live deployment promotion is still

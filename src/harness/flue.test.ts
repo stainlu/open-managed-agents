@@ -502,6 +502,84 @@ describe("FlueHarnessAdapter", () => {
     });
   });
 
+  it("denies Flue built-in bash before calling the managed workspace executor", async () => {
+    const workspace = new InMemoryManagedWorkspace();
+    const commandExecutor: FlueManagedWorkspaceCommandExecutor = {
+      exec: vi.fn(async () => ({ stdout: "unexpected", stderr: "", exitCode: 0 })),
+    };
+    const env = await FlueManagedWorkspaceSessionEnv.create({
+      workspace,
+      agentId: "agt_flue",
+      sessionId: "ses_shell_denied",
+      cwd: "/workspace",
+      instructions: "",
+      commandExecutor,
+      permissionPolicy: { type: "deny", tools: ["bash"] },
+    });
+
+    await expect(env.exec("npm test")).rejects.toThrow(
+      "Flue bash execution is denied by OMA permission policy",
+    );
+    expect(commandExecutor.exec).not.toHaveBeenCalled();
+  });
+
+  it("pauses Flue built-in bash for exact always_ask approval", async () => {
+    const workspace = new InMemoryManagedWorkspace({
+      "package.json": "{}",
+    });
+    const commandExecutor: FlueManagedWorkspaceCommandExecutor = {
+      exec: vi.fn(async () => ({ stdout: "approved shell", stderr: "", exitCode: 0 })),
+    };
+    const adapter = new FlueHarnessAdapter({
+      workspace,
+      workspaceCommandExecutor: commandExecutor,
+    });
+    const approvals: HarnessApprovalRequest[] = [];
+    const unsubscribe = adapter.subscribeApprovalRequested(
+      undefined,
+      "ses_real_shell_approval",
+      (approval) => approvals.push(approval),
+    );
+
+    const shell = adapter.invokeShell({
+      agent: agent({
+        permissionPolicy: { type: "always_ask", tools: ["bash"] },
+      }),
+      sessionId: "ses_real_shell_approval",
+      runId: "run_shell_approval",
+      command: "npm test",
+      cwd: ".",
+      timeoutMs: 60_000,
+    });
+
+    await waitForCondition("Flue bash approval request", () => approvals.length === 1);
+    expect(commandExecutor.exec).not.toHaveBeenCalled();
+    expect(approvals[0]).toMatchObject({
+      sessionId: "ses_real_shell_approval",
+      toolName: "bash",
+      description: expect.stringContaining("npm test"),
+    });
+    await expect(adapter.listApprovals(undefined, "ses_real_shell_approval"))
+      .resolves.toHaveLength(1);
+
+    await adapter.resolveApproval(
+      undefined,
+      "ses_real_shell_approval",
+      approvals[0]!.approvalId,
+      "allow",
+    );
+
+    await expect(shell).resolves.toMatchObject({
+      stdout: "approved shell",
+      stderr: "",
+      exitCode: 0,
+    });
+    expect(commandExecutor.exec).toHaveBeenCalledTimes(1);
+    await expect(adapter.listApprovals(undefined, "ses_real_shell_approval"))
+      .resolves.toEqual([]);
+    unsubscribe();
+  });
+
   it("invokes Flue task operations and maps task lineage without promoting child sessions", async () => {
     const task = vi.fn<NonNullable<FlueEngine["task"]>>(async (args) => ({
       text: `task:${args.task}`,

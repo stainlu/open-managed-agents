@@ -176,6 +176,15 @@ export type FlueToolDef = {
   execute: (args: Record<string, unknown>, signal?: AbortSignal) => Promise<string>;
 };
 
+export type FlueToolApprovalRequester = {
+  request(args: {
+    sessionId: string;
+    toolName: string;
+    args: Record<string, unknown>;
+    signal?: AbortSignal;
+  }): Promise<"allow" | "deny">;
+};
+
 export type FlueMcpConnectOptions = {
   url: string | URL;
   transport?: FlueMcpTransport;
@@ -361,12 +370,12 @@ export class FlueHarnessAdapter implements HarnessAdapter {
     tool_approvals: {
       support: "partial",
       detail:
-        "Exact always_ask approvals are enforced for URL MCP tools connected by OMA; built-in Flue tools and approve-all policy are rejected.",
+        "Exact always_ask approvals are enforced for URL MCP tools connected by OMA and Flue's built-in bash tool at OMA's SessionEnv.exec boundary; approve-all policy is rejected.",
     },
     permission_deny: {
       support: "partial",
       detail:
-        "Exact deny policy is enforced for URL MCP tools connected by OMA; built-in Flue tools and non-MCP tool names are rejected.",
+        "Exact deny policy is enforced for URL MCP tools connected by OMA and Flue's built-in bash tool at OMA's SessionEnv.exec boundary; other built-in/non-MCP tool names are rejected.",
     },
     mcp: {
       support: "partial",
@@ -528,6 +537,10 @@ export class FlueHarnessAdapter implements HarnessAdapter {
   }
 
   async invokeShell(args: FlueShellInvocationArgs): Promise<FlueShellInvocationResult> {
+    const issue = validateFlueAgentConfig(args.agent);
+    if (issue) {
+      throw new HarnessInvocationError(issue.detail);
+    }
     const runId = args.runId ?? createFallbackRunId();
     const engine = await this.resolveEngine();
     if (!engine.shell) {
@@ -951,6 +964,7 @@ class OptionalSdkFlueEngine implements FlueEngine {
       };
     } finally {
       ctx.setEventCallback(undefined);
+      this.approvals?.clearSession(args.sessionId);
     }
   }
 
@@ -1011,8 +1025,14 @@ class OptionalSdkFlueEngine implements FlueEngine {
         cwd: this.workspaceCwd,
         instructions: args.agent.instructions,
         commandExecutor: this.workspaceCommandExecutor,
+        permissionPolicy: args.agent.permissionPolicy,
+        approvals: this.approvals,
       })
-      : new MemorySessionEnv(args.agent.instructions);
+      : new MemorySessionEnv(args.agent.instructions, {
+        sessionId: args.sessionId,
+        permissionPolicy: args.agent.permissionPolicy,
+        approvals: this.approvals,
+      });
     return internal.createFlueContext({
       id: args.agent.agentId,
       runId: args.runId ?? createFallbackRunId(),
@@ -1239,7 +1259,7 @@ type FluePendingApproval = {
   cleanup: () => void;
 };
 
-class FlueApprovalBroker {
+class FlueApprovalBroker implements FlueToolApprovalRequester {
   private readonly pending = new Map<string, FluePendingApproval>();
   private readonly requestedHandlers = new Map<
     string,
@@ -1507,17 +1527,20 @@ function validateFluePermissionPolicy(
   const tools = policy.type === "always_ask" ? (policy.tools ?? []) : policy.tools;
   const capability = policy.type === "always_ask" ? "tool_approvals" : "permission_deny";
   const action = policy.type === "always_ask" ? "approval" : "deny";
-  const unsupportedTools = tools.filter((tool) => !isFlueMcpToolName(tool));
+  const unsupportedTools = tools.filter((tool) => !isFluePolicyToolName(tool));
   if (unsupportedTools.length > 0) {
     return {
       capability,
       detail: [
         `Flue ${action} policy currently supports only exact URL MCP tool names such as`,
-        `mcp__server__tool; unsupported entries: ${unsupportedTools.join(", ")}`,
+        `mcp__server__tool plus the built-in bash tool; unsupported entries: ${unsupportedTools.join(", ")}`,
       ].join(" "),
     };
   }
-  if (Object.keys(mcpServers ?? {}).length === 0) {
+  if (
+    tools.some((tool) => isFlueMcpToolName(tool)) &&
+    Object.keys(mcpServers ?? {}).length === 0
+  ) {
     return {
       capability,
       detail:
@@ -1538,13 +1561,15 @@ function applyFlueToolPolicy(
 ): FlueToolDef[] {
   if (policy.type !== "deny" && policy.type !== "always_ask") return tools;
   const exposed = new Set(tools.map((tool) => tool.name));
-  const requested = policy.type === "always_ask" ? (policy.tools ?? []) : policy.tools;
+  const requested = (policy.type === "always_ask" ? (policy.tools ?? []) : policy.tools)
+    .filter((tool) => isFlueMcpToolName(tool));
   const missing = requested.filter((tool) => !exposed.has(tool));
   if (missing.length > 0) {
     throw new HarnessInvocationError(
       `Flue ${policy.type === "always_ask" ? "approval" : "deny"} policy targets MCP tools that were not exposed by connected URL MCP servers: ${missing.join(", ")}`,
     );
   }
+  if (requested.length === 0) return tools;
   if (policy.type === "always_ask") {
     if (!args.approvals) {
       throw new HarnessInvocationError("Flue approval policy requires an OMA approval broker");
@@ -1564,7 +1589,7 @@ function applyFlueToolPolicy(
             signal: approvalSignal,
           });
           if (decision !== "allow") {
-            throw new Error(`OMA denied Flue MCP tool ${tool.name}`);
+            throw new Error(`OMA denied ${flueToolLabel(tool.name)}`);
           }
           return await tool.execute(params, signal);
         },
@@ -1575,8 +1600,20 @@ function applyFlueToolPolicy(
   return tools.filter((tool) => !denied.has(tool.name));
 }
 
+const FLUE_BUILTIN_BASH_TOOL_NAME = "bash";
+
+function isFluePolicyToolName(name: string): boolean {
+  return isFlueMcpToolName(name) || name === FLUE_BUILTIN_BASH_TOOL_NAME;
+}
+
 function isFlueMcpToolName(name: string): boolean {
   return name.startsWith("mcp__");
+}
+
+function flueToolLabel(toolName: string): string {
+  return isFlueMcpToolName(toolName)
+    ? `Flue MCP tool ${toolName}`
+    : `Flue tool ${toolName}`;
 }
 
 function flueApprovalDescription(
@@ -1585,7 +1622,65 @@ function flueApprovalDescription(
 ): string {
   const serialized = JSON.stringify(args);
   const suffix = serialized && serialized !== "{}" ? ` with ${serialized}` : "";
-  return `Flue MCP tool ${toolName}${suffix}`;
+  return `${flueToolLabel(toolName)}${suffix}`;
+}
+
+async function enforceFlueBashPolicy(args: {
+  policy: AgentConfig["permissionPolicy"] | undefined;
+  approvals: FlueToolApprovalRequester | undefined;
+  sessionId: string;
+  command: string;
+  cwd?: string;
+  env?: Record<string, string>;
+  timeout?: number;
+  signal?: AbortSignal;
+}): Promise<void> {
+  const policy = args.policy;
+  if (
+    !policy ||
+    (policy.type !== "deny" && policy.type !== "always_ask") ||
+    !fluePolicyTargetsBash(policy)
+  ) {
+    return;
+  }
+  if (policy.type === "deny") {
+    throw new HarnessInvocationError(
+      "Flue bash execution is denied by OMA permission policy",
+    );
+  }
+  if (!args.approvals) {
+    throw new HarnessInvocationError("Flue bash approval policy requires an OMA approval broker");
+  }
+  const decision = await args.approvals.request({
+    sessionId: args.sessionId,
+    toolName: FLUE_BUILTIN_BASH_TOOL_NAME,
+    args: compactRecord({
+      command: args.command,
+      cwd: args.cwd,
+      env: args.env,
+      timeout: args.timeout,
+    }),
+    signal: args.signal,
+  });
+  if (decision !== "allow") {
+    throw new Error(`OMA denied ${flueToolLabel(FLUE_BUILTIN_BASH_TOOL_NAME)}`);
+  }
+}
+
+function fluePolicyTargetsBash(policy: AgentConfig["permissionPolicy"]): boolean {
+  if (policy.type === "deny") return policy.tools.includes(FLUE_BUILTIN_BASH_TOOL_NAME);
+  if (policy.type === "always_ask") return policy.tools?.includes(FLUE_BUILTIN_BASH_TOOL_NAME) === true;
+  return false;
+}
+
+function compactRecord(
+  record: Record<string, unknown | undefined>,
+): Record<string, unknown> {
+  const compacted: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (value !== undefined) compacted[key] = value;
+  }
+  return compacted;
 }
 
 function validateFlueMcpServerConfig(
@@ -1660,6 +1755,8 @@ export class FlueManagedWorkspaceSessionEnv {
     private readonly sessionId: string,
     cwd: string | undefined,
     private readonly commandExecutor: FlueManagedWorkspaceCommandExecutor | undefined,
+    private readonly permissionPolicy: AgentConfig["permissionPolicy"] | undefined,
+    private readonly approvals: FlueToolApprovalRequester | undefined,
   ) {
     this.cwd = normalizeWorkspaceCwd(cwd);
   }
@@ -1671,6 +1768,8 @@ export class FlueManagedWorkspaceSessionEnv {
     cwd?: string;
     instructions: string;
     commandExecutor?: FlueManagedWorkspaceCommandExecutor;
+    permissionPolicy?: AgentConfig["permissionPolicy"];
+    approvals?: FlueToolApprovalRequester;
   }): Promise<FlueManagedWorkspaceSessionEnv> {
     const env = new FlueManagedWorkspaceSessionEnv(
       args.workspace,
@@ -1678,6 +1777,8 @@ export class FlueManagedWorkspaceSessionEnv {
       args.sessionId,
       args.cwd,
       args.commandExecutor,
+      args.permissionPolicy,
+      args.approvals,
     );
     await env.seedInstructions(args.instructions);
     return env;
@@ -1690,6 +1791,16 @@ export class FlueManagedWorkspaceSessionEnv {
     signal?: AbortSignal;
   }): Promise<FlueShellResult> {
     if (options?.signal?.aborted) throw abortErrorFor(options.signal);
+    await enforceFlueBashPolicy({
+      policy: this.permissionPolicy,
+      approvals: this.approvals,
+      sessionId: this.sessionId,
+      command,
+      cwd: options?.cwd,
+      env: options?.env,
+      timeout: options?.timeout,
+      signal: options?.signal,
+    });
     if (this.commandExecutor) {
       const cwd = options?.cwd ? this.resolvePath(options.cwd) : this.cwd;
       const relCwd = this.toWorkspaceRelPath(cwd, { allowRoot: true });
@@ -1878,13 +1989,38 @@ class MemorySessionEnv {
   private readonly dirs = new Set<string>(["/", "/home", "/home/user", "/tmp"]);
   private readonly createdAt = new Date();
 
-  constructor(instructions: string) {
+  constructor(
+    instructions: string,
+    private readonly policy?: {
+      sessionId: string;
+      permissionPolicy?: AgentConfig["permissionPolicy"];
+      approvals?: FlueToolApprovalRequester;
+    },
+  ) {
     if (instructions.trim()) {
       this.writeFileSync("/home/user/AGENTS.md", instructions);
     }
   }
 
-  async exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  async exec(command: string, options?: {
+    cwd?: string;
+    env?: Record<string, string>;
+    timeout?: number;
+    signal?: AbortSignal;
+  }): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    if (options?.signal?.aborted) throw abortErrorFor(options.signal);
+    if (this.policy) {
+      await enforceFlueBashPolicy({
+        policy: this.policy.permissionPolicy,
+        approvals: this.policy.approvals,
+        sessionId: this.policy.sessionId,
+        command,
+        cwd: options?.cwd,
+        env: options?.env,
+        timeout: options?.timeout,
+        signal: options?.signal,
+      });
+    }
     return {
       stdout: "",
       stderr: `Shell execution is disabled in OMA's initial native Flue memory sandbox. Command was: ${command}`,
