@@ -44,4 +44,29 @@ describe("Sessions", () => {
       "http://o/v1/sessions/ses_1/events?stream=true&parent_run_id=run_parent",
     );
   });
+
+  it("reads the session run tree", async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(200, {
+      session_id: "ses_1",
+      count: 1,
+      runs: [
+        {
+          run_id: "run_parent",
+          event_count: 0,
+          source: { managed_run: true, event_log: false },
+          children: [],
+        },
+      ],
+    }));
+    const http = new HttpClient({ baseUrl: "http://o", timeoutMs: 1000, fetch: fetchFn });
+    const sessions = new Sessions(http);
+
+    const tree = await sessions.runTree("ses_1");
+
+    expect(fetchFn.mock.calls[0]?.[0]).toBe("http://o/v1/sessions/ses_1/run-tree");
+    expect(tree).toMatchObject({
+      session_id: "ses_1",
+      runs: [{ run_id: "run_parent" }],
+    });
+  });
 });

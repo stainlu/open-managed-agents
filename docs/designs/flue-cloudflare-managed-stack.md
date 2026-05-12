@@ -128,6 +128,10 @@ Done in OMA:
 - Session event reads now accept `run_id` and `parent_run_id` filters, so Flue
   nested task and operation telemetry can be inspected without scanning the
   whole managed event log.
+- `GET /v1/sessions/:id/run-tree` now derives an inspectable run tree from
+  managed run records plus normalized run lineage events. This gives Flue tasks
+  and operations a visible parent/child shape without pretending they are
+  independently controllable managed child sessions.
 - Local Cloudflare/Flue Durable Object coverage now proves the public run abort
   API against both active Flue prompt runs and queued Flue runs. Active abort
   reaches Flue's `AbortSignal`; queued abort removes only the queued run and
@@ -403,8 +407,9 @@ workspace ids into the public session identity.
    - Extend cancellation semantics beyond prompt calls.
    - [x] Preserve current Flue task/operation/tool/compaction telemetry as
      normalized OMA events.
-   - Decide how Flue task lineage maps from nested run events to OMA child
-     sessions.
+   - [x] Add a read-only run-tree projection over nested run events.
+   - Decide when Flue task lineage should graduate from an observable run tree
+     to OMA child sessions with real lifecycle control.
 
 6. [ ] Add Cloudflare runtime prototype.
    - [x] Add a router factory that wires D1 event/state stores, Flue, and a

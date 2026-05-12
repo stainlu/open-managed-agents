@@ -899,6 +899,116 @@ describe("session ownership in the HTTP API", () => {
     });
   });
 
+  it("exposes an event-derived run tree for nested harness work", async () => {
+    const { app, store, appendEvent } = makeApp();
+    const agent = createAgent(store);
+    const session = store.sessions.create({
+      agentId: agent.agentId,
+      userId: null,
+    });
+    store.runs.create({
+      runId: "run_parent",
+      sessionId: session.sessionId,
+      agentId: agent.agentId,
+      status: "succeeded",
+      queued: false,
+      model: "anthropic/claude-sonnet-4-6",
+      thinkingLevel: "medium",
+    });
+    store.runs.create({
+      runId: "run_queued",
+      sessionId: session.sessionId,
+      agentId: agent.agentId,
+      status: "queued",
+      queued: true,
+    });
+    appendEvent({
+      eventId: "evt_parent_start",
+      sessionId: session.sessionId,
+      type: "session.run_start",
+      content: "parent",
+      createdAt: 10,
+      runId: "run_parent",
+      runKind: "prompt",
+    });
+    appendEvent({
+      eventId: "evt_child_start",
+      sessionId: session.sessionId,
+      type: "session.run_start",
+      content: "child",
+      createdAt: 11,
+      runId: "task_child",
+      runKind: "task",
+      parentRunId: "run_parent",
+    });
+    appendEvent({
+      eventId: "evt_child_end",
+      sessionId: session.sessionId,
+      type: "session.run_end",
+      content: "child done",
+      createdAt: 12,
+      runId: "task_child",
+      runKind: "task",
+      runStatus: "completed",
+      parentRunId: "run_parent",
+      tokensIn: 3,
+      tokensOut: 4,
+      costUsd: 0.002,
+    });
+    appendEvent({
+      eventId: "evt_parent_end",
+      sessionId: session.sessionId,
+      type: "session.run_end",
+      content: "parent done",
+      createdAt: 13,
+      runId: "run_parent",
+      runKind: "prompt",
+      runStatus: "completed",
+    });
+
+    const tree = await req(app, `/v1/sessions/${session.sessionId}/run-tree`, {
+      token: "admin-secret",
+    });
+
+    expect(tree.status).toBe(200);
+    expect(tree.body).toMatchObject({
+      session_id: session.sessionId,
+      count: 3,
+      runs: [
+        {
+          run_id: "run_parent",
+          run_kind: "prompt",
+          status: "completed",
+          managed_status: "succeeded",
+          source: { managed_run: true, event_log: true },
+          event_count: 2,
+          children: [
+            {
+              run_id: "task_child",
+              parent_run_id: "run_parent",
+              run_kind: "task",
+              status: "completed",
+              source: { managed_run: false, event_log: true },
+              event_count: 2,
+              tokens: { input: 3, output: 4 },
+              cost_usd: 0.002,
+              children: [],
+            },
+          ],
+        },
+        {
+          run_id: "run_queued",
+          status: "queued",
+          managed_status: "queued",
+          queued: true,
+          source: { managed_run: true, event_log: false },
+          event_count: 0,
+          children: [],
+        },
+      ],
+    });
+  });
+
   it("binds legacy /run sessions to the authenticated user", async () => {
     const { app, store } = makeApp();
     const agent = createAgent(store);

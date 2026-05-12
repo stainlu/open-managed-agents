@@ -30,6 +30,7 @@ import type {
 import { portalHtml } from "./portal.js";
 import { portalV2Html } from "./portal-v2.js";
 import { AgentRouter, RouterError } from "./router.js";
+import { buildRunTree, type RunTreeNode } from "./run-tree.js";
 import {
   estimateZenMuxTurnCostFromCatalog,
   fetchZenMuxCatalogCached,
@@ -611,6 +612,46 @@ function runResponse(run: ManagedRun) {
   };
 }
 
+function runTreeNodeResponse(node: RunTreeNode): Record<string, unknown> {
+  const response: Record<string, unknown> = {
+    run_id: node.runId,
+    status: node.status,
+    managed_status: node.managedStatus,
+    queued: node.queued,
+    run_kind: node.runKind,
+    parent_run_id: node.parentRunId,
+    created_at: node.createdAt,
+    started_at: node.startedAt,
+    completed_at: node.completedAt,
+    first_event_at: node.firstEventAt,
+    last_event_at: node.lastEventAt,
+    event_count: node.eventCount,
+    model: node.model,
+    cost_usd: node.costUsd,
+    is_error: node.isError,
+    source: {
+      managed_run: node.source.managedRun,
+      event_log: node.source.eventLog,
+    },
+    children: node.children.map(runTreeNodeResponse),
+  };
+  if (node.tokensIn !== undefined || node.tokensOut !== undefined) {
+    response["tokens"] = {
+      input: node.tokensIn ?? 0,
+      output: node.tokensOut ?? 0,
+    };
+  }
+  return response;
+}
+
+function countRunTreeNodes(nodes: RunTreeNode[]): number {
+  let count = 0;
+  for (const node of nodes) {
+    count += 1 + countRunTreeNodes(node.children);
+  }
+  return count;
+}
+
 function handleRouterError(err: unknown, c: Context): Response {
   const reply = routerErrorReply(err);
   return c.json(reply.body, reply.status);
@@ -857,6 +898,7 @@ export function buildApp(deps: ServerDeps): Hono {
           stream_events: "GET /v1/sessions/:sessionId/events?stream=true",
           cancel: "POST /v1/sessions/:sessionId/cancel",
           list_runs: "GET /v1/sessions/:sessionId/runs",
+          run_tree: "GET /v1/sessions/:sessionId/run-tree",
           get_run: "GET /v1/sessions/:sessionId/runs/:runId",
           abort_run: "POST /v1/sessions/:sessionId/runs/:runId/abort",
           compact: "POST /v1/sessions/:sessionId/compact",
@@ -1686,6 +1728,26 @@ export function buildApp(deps: ServerDeps): Hono {
     try {
       return c.json({
         runs: deps.router.listRuns(sessionId).map(runResponse),
+      });
+    } catch (err) {
+      return handleRouterError(err, c);
+    }
+  });
+
+  app.get("/v1/sessions/:sessionId/run-tree", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const session = getScopedSession(c, sessionId);
+    if (!session) {
+      return c.json({ error: "session_not_found" }, 404);
+    }
+    try {
+      const events = await deps.events.listBySession(session.agentId, sessionId);
+      const runs = deps.router.listRuns(sessionId);
+      const tree = buildRunTree(events, runs);
+      return c.json({
+        session_id: sessionId,
+        count: countRunTreeNodes(tree),
+        runs: tree.map(runTreeNodeResponse),
       });
     } catch (err) {
       return handleRouterError(err, c);

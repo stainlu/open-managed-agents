@@ -152,6 +152,38 @@ export interface Event {
   event_index?: number | null;
 }
 
+export interface RunTreeSource {
+  managed_run: boolean;
+  event_log: boolean;
+}
+
+export interface RunTreeNode {
+  run_id: string;
+  parent_run_id?: string | null;
+  run_kind?: string | null;
+  status?: string | null;
+  managed_status?: string | null;
+  queued?: boolean | null;
+  created_at?: number | null;
+  started_at?: number | null;
+  completed_at?: number | null;
+  first_event_at?: number | null;
+  last_event_at?: number | null;
+  event_count: number;
+  tokens?: { input: number; output: number } | null;
+  cost_usd?: number | null;
+  model?: string | null;
+  is_error?: boolean | null;
+  source: RunTreeSource;
+  children: RunTreeNode[];
+}
+
+export interface RunTree {
+  session_id: string;
+  count: number;
+  runs: RunTreeNode[];
+}
+
 export interface SendEventResult {
   session_id: string;
   status: string;

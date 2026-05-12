@@ -107,7 +107,9 @@ Flue `text_delta` callbacks become OpenAI-compatible streaming chunks, and
 normalized OMA events are appended while the streamed turn is still running.
 Current Flue task and operation telemetry is preserved as nested
 `session.run_start` / `session.run_end` events, including parent run ids, but
-those nested runs are not first-class managed child sessions yet.
+those nested runs are not first-class managed child sessions yet. The session
+API exposes an event-derived run tree so clients can inspect that lineage
+without treating harness-native child work as a managed control-plane run.
 Active Flue prompt calls are cancelled through Flue's native
 `AbortSignal` path, without inventing a separate control protocol. Flue session
 data is persisted through an OMA harness-state boundary instead of the SDK's

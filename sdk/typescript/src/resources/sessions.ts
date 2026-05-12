@@ -4,6 +4,7 @@ import type {
   CancelResult,
   CompactResult,
   Event,
+  RunTree,
   SendEventResult,
   Session,
   ThinkingLevel,
@@ -111,6 +112,13 @@ export class Sessions {
       `/v1/sessions/${encodeURIComponent(sessionId)}/events${eventQuery(params)}`,
     );
     return resp.events;
+  }
+
+  runTree(sessionId: string): Promise<RunTree> {
+    return this.http.request<RunTree>(
+      "GET",
+      `/v1/sessions/${encodeURIComponent(sessionId)}/run-tree`,
+    );
   }
 
   /**
