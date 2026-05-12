@@ -829,6 +829,76 @@ describe("session ownership in the HTTP API", () => {
     });
   });
 
+  it("filters session events by run lineage", async () => {
+    const { app, store, appendEvent } = makeApp();
+    const agent = createAgent(store);
+    const session = store.sessions.create({
+      agentId: agent.agentId,
+      userId: null,
+    });
+    appendEvent({
+      eventId: "evt_parent_start",
+      sessionId: session.sessionId,
+      type: "session.run_start",
+      content: "parent",
+      createdAt: 1,
+      runId: "run_parent",
+      runKind: "prompt",
+    });
+    appendEvent({
+      eventId: "evt_child_start",
+      sessionId: session.sessionId,
+      type: "session.run_start",
+      content: "child",
+      createdAt: 2,
+      runId: "task_child",
+      runKind: "task",
+      parentRunId: "run_parent",
+    });
+    appendEvent({
+      eventId: "evt_other",
+      sessionId: session.sessionId,
+      type: "agent.message",
+      content: "other",
+      createdAt: 3,
+      runId: "run_other",
+    });
+
+    const childEvents = await req(
+      app,
+      `/v1/sessions/${session.sessionId}/events?run_id=task_child`,
+      { token: "admin-secret" },
+    );
+    expect(childEvents.status).toBe(200);
+    expect(childEvents.body).toMatchObject({
+      count: 1,
+      events: [
+        {
+          event_id: "evt_child_start",
+          run_id: "task_child",
+          parent_run_id: "run_parent",
+        },
+      ],
+    });
+
+    const childrenOfParent = await req(
+      app,
+      `/v1/sessions/${session.sessionId}/events?parent_run_id=run_parent`,
+      { token: "admin-secret" },
+    );
+    expect(childrenOfParent.status).toBe(200);
+    expect(childrenOfParent.body).toMatchObject({
+      count: 1,
+      events: [
+        {
+          event_id: "evt_child_start",
+          run_id: "task_child",
+          parent_run_id: "run_parent",
+        },
+      ],
+    });
+  });
+
   it("binds legacy /run sessions to the authenticated user", async () => {
     const { app, store } = makeApp();
     const agent = createAgent(store);

@@ -576,6 +576,25 @@ function eventResponse(event: Event) {
   };
 }
 
+type EventFilter = {
+  runId?: string;
+  parentRunId?: string;
+};
+
+function eventFilterFromQuery(runId?: string, parentRunId?: string): EventFilter | undefined {
+  const filter: EventFilter = {};
+  if (runId && runId.trim()) filter.runId = runId.trim();
+  if (parentRunId && parentRunId.trim()) filter.parentRunId = parentRunId.trim();
+  return filter.runId || filter.parentRunId ? filter : undefined;
+}
+
+function matchesEventFilter(event: Event, filter: EventFilter | undefined): boolean {
+  if (!filter) return true;
+  if (filter.runId && event.runId !== filter.runId) return false;
+  if (filter.parentRunId && event.parentRunId !== filter.parentRunId) return false;
+  return true;
+}
+
 function runResponse(run: ManagedRun) {
   return {
     run_id: run.runId,
@@ -1785,6 +1804,10 @@ export function buildApp(deps: ServerDeps): Hono {
     if (!session) {
       return c.json({ error: "session_not_found" }, 404);
     }
+    const eventFilter = eventFilterFromQuery(
+      c.req.query("run_id"),
+      c.req.query("parent_run_id"),
+    );
 
     // Two modes on the same URL: snapshot or live stream.
     //   ?stream=true  — SSE, catch up on existing events then tail-follow
@@ -1962,6 +1985,8 @@ export function buildApp(deps: ServerDeps): Hono {
             await emitContainerEventIfChanged();
             await emitPendingApprovals();
 
+            if (!matchesEventFilter(event, eventFilter)) continue;
+
             await sse.writeSSE({
               event: event.type,
               id: event.eventId,
@@ -1987,7 +2012,9 @@ export function buildApp(deps: ServerDeps): Hono {
     const events = (await deps.events.listBySession(
       session.agentId,
       session.sessionId,
-    )).map(eventResponse);
+    ))
+      .filter((event) => matchesEventFilter(event, eventFilter))
+      .map(eventResponse);
     return c.json({ session_id: sessionId, events, count: events.length });
   });
 

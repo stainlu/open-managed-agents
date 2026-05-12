@@ -783,6 +783,10 @@ Event types in the stream: all JSONL-derived types (including
 `session.container_detached`, and 15 s heartbeat events.
 ```
 
+Both snapshot and streamed event reads accept `run_id` and `parent_run_id`
+query filters. The filter applies to managed log events; synthetic session
+status and container frames remain session-level stream metadata.
+
 ## Token and cost accounting
 
 **Tokens** come from the active harness adapter's turn result. OpenClaw reads

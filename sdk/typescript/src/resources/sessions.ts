@@ -27,6 +27,11 @@ export interface ConfirmToolParams {
   denyMessage?: string;
 }
 
+export interface EventQueryParams {
+  runId?: string;
+  parentRunId?: string;
+}
+
 export class Sessions {
   constructor(private readonly http: HttpClient) {}
 
@@ -100,10 +105,10 @@ export class Sessions {
     );
   }
 
-  async events(sessionId: string): Promise<Event[]> {
+  async events(sessionId: string, params: EventQueryParams = {}): Promise<Event[]> {
     const resp = await this.http.request<{ events: Event[] }>(
       "GET",
-      `/v1/sessions/${encodeURIComponent(sessionId)}/events`,
+      `/v1/sessions/${encodeURIComponent(sessionId)}/events${eventQuery(params)}`,
     );
     return resp.events;
   }
@@ -120,9 +125,9 @@ export class Sessions {
    * }
    * ```
    */
-  async *stream(sessionId: string): AsyncGenerator<Event> {
+  async *stream(sessionId: string, params: EventQueryParams = {}): AsyncGenerator<Event> {
     const resp = await this.http.streamRequest(
-      `/v1/sessions/${encodeURIComponent(sessionId)}/events?stream=true`,
+      `/v1/sessions/${encodeURIComponent(sessionId)}/events${eventQuery(params, true)}`,
     );
     for await (const sse of parseSse(resp)) {
       if (sse.event === "heartbeat") continue;
@@ -136,4 +141,13 @@ export class Sessions {
       yield parsed as Event;
     }
   }
+}
+
+function eventQuery(params: EventQueryParams, stream = false): string {
+  const query = new URLSearchParams();
+  if (stream) query.set("stream", "true");
+  if (params.runId !== undefined) query.set("run_id", params.runId);
+  if (params.parentRunId !== undefined) query.set("parent_run_id", params.parentRunId);
+  const encoded = query.toString();
+  return encoded ? `?${encoded}` : "";
 }

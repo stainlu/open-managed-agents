@@ -125,6 +125,9 @@ Done in OMA:
   timestamps, and the HTTP API exposes session-scoped run list/get/abort routes.
   This makes the run id a real control-plane handle rather than just a
   correlation id.
+- Session event reads now accept `run_id` and `parent_run_id` filters, so Flue
+  nested task and operation telemetry can be inspected without scanning the
+  whole managed event log.
 - Local Cloudflare/Flue Durable Object coverage now proves the public run abort
   API against both active Flue prompt runs and queued Flue runs. Active abort
   reaches Flue's `AbortSignal`; queued abort removes only the queued run and

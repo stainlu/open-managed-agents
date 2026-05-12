@@ -129,6 +129,10 @@ Rules:
 - Queued runs remain addressable before they become active.
 - `GET /v1/sessions/:id/runs` lists the runs for a session.
 - `GET /v1/sessions/:id/runs/:runId` reads one run.
+- `GET /v1/sessions/:id/events?run_id=:runId` reads the events attached to a
+  specific managed or harness-native run id.
+- `GET /v1/sessions/:id/events?parent_run_id=:runId` reads direct child-run
+  events, for harnesses that expose nested run lineage.
 - `POST /v1/sessions/:id/runs/:runId/abort` cancels a queued run without
   stopping the active session. For the currently active run, it maps to the
   harness/runtime cancellation path and marks non-terminal work cancelled.
