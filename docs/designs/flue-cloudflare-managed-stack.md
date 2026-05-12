@@ -125,6 +125,10 @@ Done in OMA:
   timestamps, and the HTTP API exposes session-scoped run list/get/abort routes.
   This makes the run id a real control-plane handle rather than just a
   correlation id.
+- Local Cloudflare/Flue Durable Object coverage now proves the public run abort
+  API against both active Flue prompt runs and queued Flue runs. Active abort
+  reaches Flue's `AbortSignal`; queued abort removes only the queued run and
+  leaves the active prompt running.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
 - Harness adapters now declare a runtime mode. Existing adapters remain
@@ -160,7 +164,7 @@ Still open:
   first-class OMA child sessions for Flue tasks are not wired yet.
 - Cloudflare deployment wiring exists as an experimental example in
   `examples/cloudflare-flue`, but it is not promoted: there is no live
-  Workflow deployment test, active run abort smoke, Flue task run,
+  Workflow deployment test, live active/queued run abort smoke, Flue task run,
   sandbox-backed shell/build task, or replay-after-hibernation proof yet.
 
 ## Non-Decision
@@ -413,6 +417,8 @@ workspace ids into the public session identity.
      Durable Object composition roots.
    - [x] Add durable managed run records plus session-scoped run list/get/abort
      routes.
+   - [x] Add local Durable Object coverage for active and queued Flue run abort
+     through the public run API.
    - [x] Add R2-compatible workspace binding in the Cloudflare deployment
      example.
    - [x] Add experimental `wrangler.toml` deployment wiring.
@@ -422,8 +428,8 @@ workspace ids into the public session identity.
 
 7. [ ] Promote Cloudflare runtime only after it proves:
    - durable event replay after restart/hibernation;
-   - active run cancellation path;
-   - queued run cancellation path;
+   - live active run cancellation path;
+   - live queued run cancellation path;
    - queued turns;
    - one Flue prompt run;
    - one Flue task run;

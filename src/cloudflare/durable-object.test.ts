@@ -9,6 +9,7 @@ import type {
   D1PreparedStatementLike,
   D1Result,
 } from "../events/d1.js";
+import type { FlueEngine } from "../harness/flue.js";
 import {
   DurableObjectSqlStore,
   type DurableObjectSqlCursorLike,
@@ -376,6 +377,209 @@ describe("CloudflareFlueDurableObject", () => {
 });
 
 describe("ConfigurableCloudflareFlueDurableObject", () => {
+  it("aborts an active Flue prompt run through the managed run API", async () => {
+    const doBacking = new Database(join(tmpDir, "metadata.db"));
+    const doStorage = new FakeDurableObjectStorage(doBacking);
+    const { db, close } = sqliteD1();
+    const promptStarted = deferred<void>();
+    let promptSignal: AbortSignal | undefined;
+
+    try {
+      const object = new TestConfigurableFlueObject(
+        { storage: doStorage },
+        {
+          db,
+          workspace: new FakeR2Bucket(),
+          internalToken: "secret",
+          prompt: (args) => {
+            promptSignal = args.signal;
+            promptStarted.resolve();
+            return new Promise<Awaited<ReturnType<FlueEngine["prompt"]>>>((_resolve, reject) => {
+              args.signal?.addEventListener("abort", () => reject(args.signal?.reason), {
+                once: true,
+              });
+              if (args.signal?.aborted) {
+                reject(args.signal.reason);
+                return;
+              }
+              // Keep the prompt active until the managed abort path fires.
+            });
+          },
+        },
+      );
+
+      const created = await object.fetch(new Request("https://oma.example/v1/agents", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          harnessId: "flue",
+          model: "test/model",
+          instructions: "be useful",
+        }),
+      }));
+      expect(created.status).toBe(200);
+      const agent = await created.json() as { agent_id: string };
+
+      const run = await object.fetch(new Request(
+        `https://oma.example/v1/agents/${agent.agent_id}/run`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ task: "keep working" }),
+        },
+      ));
+      expect(run.status).toBe(200);
+      const runBody = await run.json() as {
+        session_id: string;
+        run_id: string;
+        status: string;
+      };
+      expect(runBody.status).toBe("starting");
+
+      await promptStarted.promise;
+      const aborted = await object.fetch(new Request(
+        `https://oma.example/v1/sessions/${runBody.session_id}/runs/${runBody.run_id}/abort`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ reason: "stop active prompt" }),
+        },
+      ));
+
+      expect(aborted.status).toBe(200);
+      await expect(aborted.json()).resolves.toMatchObject({
+        session_id: runBody.session_id,
+        session_status: "idle",
+        aborted: true,
+        removed_queued: false,
+        run: {
+          run_id: runBody.run_id,
+          status: "cancelled",
+          error: "stop active prompt",
+        },
+      });
+      expect(promptSignal?.aborted).toBe(true);
+
+      const readRun = await object.fetch(new Request(
+        `https://oma.example/v1/sessions/${runBody.session_id}/runs/${runBody.run_id}`,
+      ));
+      await expect(readRun.json()).resolves.toMatchObject({
+        run_id: runBody.run_id,
+        status: "cancelled",
+        error: "stop active prompt",
+      });
+    } finally {
+      close();
+      doBacking.close();
+    }
+  });
+
+  it("aborts a queued Flue run without cancelling the active prompt", async () => {
+    const doBacking = new Database(join(tmpDir, "metadata.db"));
+    const doStorage = new FakeDurableObjectStorage(doBacking);
+    const { db, close } = sqliteD1();
+    const promptStarted = deferred<void>();
+    const finishActivePrompt = deferred<Awaited<ReturnType<FlueEngine["prompt"]>>>();
+    let promptSignal: AbortSignal | undefined;
+    let promptCalls = 0;
+
+    try {
+      const object = new TestConfigurableFlueObject(
+        { storage: doStorage },
+        {
+          db,
+          workspace: new FakeR2Bucket(),
+          internalToken: "secret",
+          prompt: (args) => {
+            promptCalls += 1;
+            promptSignal = args.signal;
+            promptStarted.resolve();
+            return finishActivePrompt.promise;
+          },
+        },
+      );
+
+      const created = await object.fetch(new Request("https://oma.example/v1/agents", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          harnessId: "flue",
+          model: "test/model",
+          instructions: "be useful",
+        }),
+      }));
+      expect(created.status).toBe(200);
+      const agent = await created.json() as { agent_id: string };
+
+      const run = await object.fetch(new Request(
+        `https://oma.example/v1/agents/${agent.agent_id}/run`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ task: "active work" }),
+        },
+      ));
+      expect(run.status).toBe(200);
+      const active = await run.json() as { session_id: string; run_id: string };
+      await promptStarted.promise;
+
+      const queued = await object.fetch(new Request(
+        `https://oma.example/v1/sessions/${active.session_id}/events`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ type: "user.message", content: "queued work" }),
+        },
+      ));
+      expect(queued.status).toBe(200);
+      const queuedBody = await queued.json() as { run_id: string; queued: boolean };
+      expect(queuedBody.queued).toBe(true);
+
+      const aborted = await object.fetch(new Request(
+        `https://oma.example/v1/sessions/${active.session_id}/runs/${queuedBody.run_id}/abort`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ reason: "drop queued work" }),
+        },
+      ));
+
+      expect(aborted.status).toBe(200);
+      await expect(aborted.json()).resolves.toMatchObject({
+        session_id: active.session_id,
+        aborted: true,
+        removed_queued: true,
+        run: {
+          run_id: queuedBody.run_id,
+          status: "cancelled",
+          error: "drop queued work",
+        },
+      });
+      expect(promptSignal?.aborted).toBe(false);
+
+      finishActivePrompt.resolve({
+        text: "active done",
+        usage: { input: 2, output: 3 },
+        model: "test/model",
+      });
+      await waitForSessionHttpToStopRunning(object, active.session_id);
+
+      const runs = await object.fetch(new Request(
+        `https://oma.example/v1/sessions/${active.session_id}/runs`,
+      ));
+      await expect(runs.json()).resolves.toMatchObject({
+        runs: [
+          { run_id: active.run_id, status: "succeeded" },
+          { run_id: queuedBody.run_id, status: "cancelled" },
+        ],
+      });
+      expect(promptCalls).toBe(1);
+    } finally {
+      close();
+      doBacking.close();
+    }
+  });
+
   it("keeps Workflow re-entry available for custom Flue composition", async () => {
     const doBacking = new Database(join(tmpDir, "metadata.db"));
     const doStorage = new FakeDurableObjectStorage(doBacking);
@@ -518,6 +722,36 @@ async function waitForSessionToStopRunning(
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error(`session ${sessionId} stayed inflight`);
+}
+
+async function waitForSessionHttpToStopRunning(
+  object: { fetch(request: Request): Response | Promise<Response> },
+  sessionId: string,
+): Promise<void> {
+  const deadline = Date.now() + 500;
+  while (Date.now() < deadline) {
+    const response = await object.fetch(new Request(
+      `https://oma.example/v1/sessions/${sessionId}`,
+    ));
+    const body = await response.json() as { status?: string };
+    if (body.status !== "starting" && body.status !== "running") return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`session ${sessionId} stayed inflight`);
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 function sqliteD1(): { db: D1DatabaseLike; close: () => void } {
@@ -675,8 +909,9 @@ class FakeWorkflow implements CloudflareWorkflowBindingLike {
 type TestConfigurableEnv = {
   db: D1DatabaseLike;
   workspace: R2BucketLike;
-  workflow: CloudflareWorkflowBindingLike;
+  workflow?: CloudflareWorkflowBindingLike;
   internalToken: string;
+  prompt?: FlueEngine["prompt"];
 };
 
 class TestConfigurableFlueObject
@@ -688,13 +923,15 @@ class TestConfigurableFlueObject
       db: env.db,
       r2Bucket: env.workspace,
       flueEngine: {
-        prompt: async (args) => ({
+        prompt: env.prompt ?? (async (args) => ({
           text: `custom:${args.content}`,
           usage: { input: 3, output: 5 },
           model: args.model ?? args.agent.model,
-        }),
+        })),
       },
-      runScheduler: new CloudflareWorkflowRunScheduler({ workflow: env.workflow }),
+      runScheduler: env.workflow
+        ? new CloudflareWorkflowRunScheduler({ workflow: env.workflow })
+        : undefined,
     };
   }
 

@@ -16,8 +16,8 @@ It wires:
 
 This is still an experimental smoke target. It proves the shape of the
 Cloudflare composition, but it is not the promoted production backend until we
-have live deployment coverage for replay, cancellation, queued turns, Flue
-tasks, and sandbox-backed shell/build work.
+have live deployment coverage for replay, active/queued run cancellation,
+queued turns, Flue tasks, and sandbox-backed shell/build work.
 
 ## Prerequisites
 
@@ -155,6 +155,7 @@ The `wrangler.toml` uses:
 - The default Flue engine path still uses Flue's SDK bridge and memory sandbox
   behavior. A production coding-agent stack still needs explicit sandbox
   connector capability gates.
-- There is no live CI deployment test yet. Do not treat this as the default
-  backend until the promotion checklist in
+- Local Durable Object tests cover active and queued run abort through the
+  public run API, but there is no live CI deployment test yet. Do not treat
+  this as the default backend until the promotion checklist in
   `docs/designs/flue-cloudflare-managed-stack.md` is complete.
