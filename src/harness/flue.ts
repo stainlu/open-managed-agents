@@ -147,15 +147,29 @@ type FlueRuntimeEvent = {
   delta?: string;
   content?: string;
   prompt?: string;
+  message?: string;
+  level?: string;
   toolName?: string;
   toolCallId?: string;
   args?: unknown;
   result?: unknown;
+  error?: unknown;
   isError?: boolean;
+  taskId?: string;
   workId?: string;
   workKind?: string;
+  operationId?: string;
+  operationKind?: string;
+  role?: string;
+  cwd?: string;
   sessionId?: string;
+  parentSession?: string;
   durationMs?: number;
+  messagesBefore?: number;
+  messagesAfter?: number;
+  estimatedTokens?: number;
+  reason?: string;
+  stopReason?: string;
   usage?: FlueEngineUsage;
   model?: string | { id?: string };
 };
@@ -1194,6 +1208,8 @@ function mapFlueEvent(
         type: "agent.thinking",
         content: event.content ?? "",
         createdAt,
+        runId,
+        eventIndex: finiteEventIndex(event.eventIndex),
       };
     case "tool_start":
       return {
@@ -1205,38 +1221,69 @@ function mapFlueEvent(
         toolName: event.toolName,
         toolCallId: event.toolCallId,
         toolArguments: objectRecord(event.args),
+        runId,
+        eventIndex: finiteEventIndex(event.eventIndex),
       };
     case "tool_end":
+    case "tool_call":
       return {
         eventId,
         sessionId,
         type: "agent.tool_result",
-        content: stringifyContent(event.result),
+        content: stringifyContent(event.result ?? event.error),
         createdAt,
         toolName: event.toolName,
         toolCallId: event.toolCallId,
         isError: Boolean(event.isError),
+        runId,
+        eventIndex: finiteEventIndex(event.eventIndex),
       };
     case "task_start":
-      return {
+      return mapNestedRunStart({
+        event,
         eventId,
         sessionId,
-        type: "session.runtime_notice",
-        content: `Flue task started${event.workId ? `: ${event.workId}` : ""}${
-          event.prompt ? `\n${event.prompt}` : ""
-        }`,
+        fallbackRunId,
         createdAt,
-      };
+        childRunId: event.taskId ?? event.workId,
+        runKind: event.workKind ?? "task",
+        label: "task",
+        prompt: event.prompt,
+      });
+    case "task":
     case "task_end":
-      return {
+      return mapNestedRunEnd({
+        event,
         eventId,
         sessionId,
-        type: "session.runtime_notice",
-        content: `Flue task ended${event.isError ? " with error" : ""}${
-          event.workId ? `: ${event.workId}` : ""
-        }`,
+        fallbackRunId,
         createdAt,
-      };
+        childRunId: event.taskId ?? event.workId,
+        runKind: event.workKind ?? "task",
+        label: "task",
+      });
+    case "operation_start":
+      return mapNestedRunStart({
+        event,
+        eventId,
+        sessionId,
+        fallbackRunId,
+        createdAt,
+        childRunId: event.operationId,
+        runKind: event.operationKind ?? "operation",
+        label: "operation",
+      });
+    case "operation":
+      return mapNestedRunEnd({
+        event,
+        eventId,
+        sessionId,
+        fallbackRunId,
+        createdAt,
+        childRunId: event.operationId,
+        runKind: event.operationKind ?? "operation",
+        label: "operation",
+      });
     case "compaction_start":
       return {
         eventId,
@@ -1244,6 +1291,8 @@ function mapFlueEvent(
         type: "session.compaction",
         content: `Flue compaction started${event.content ? `: ${event.content}` : ""}`,
         createdAt,
+        runId,
+        eventIndex: finiteEventIndex(event.eventIndex),
       };
     case "compaction_end":
       return {
@@ -1252,10 +1301,120 @@ function mapFlueEvent(
         type: "session.compaction",
         content: "Flue compaction ended",
         createdAt,
+        runId,
+        eventIndex: finiteEventIndex(event.eventIndex),
+      };
+    case "compaction":
+      return {
+        eventId,
+        sessionId,
+        type: "session.compaction",
+        content: compactionContent(event),
+        createdAt,
+        runId,
+        eventIndex: finiteEventIndex(event.eventIndex),
       };
     default:
       return undefined;
   }
+}
+
+function mapNestedRunStart(args: {
+  event: FlueRuntimeEvent;
+  eventId: string;
+  sessionId: string;
+  fallbackRunId: string | undefined;
+  createdAt: number;
+  childRunId: string | undefined;
+  runKind: string;
+  label: string;
+  prompt?: string;
+}): Event {
+  const runId = args.childRunId ?? args.event.runId ?? args.fallbackRunId;
+  return {
+    eventId: args.eventId,
+    sessionId: args.sessionId,
+    type: "session.run_start",
+    content: nestedRunContent("started", args.label, args.event, runId, args.prompt),
+    createdAt: args.createdAt,
+    runId,
+    runKind: args.runKind,
+    parentRunId: nestedParentRunId(args.event, args.fallbackRunId, runId),
+    eventIndex: finiteEventIndex(args.event.eventIndex),
+  };
+}
+
+function mapNestedRunEnd(args: {
+  event: FlueRuntimeEvent;
+  eventId: string;
+  sessionId: string;
+  fallbackRunId: string | undefined;
+  createdAt: number;
+  childRunId: string | undefined;
+  runKind: string;
+  label: string;
+}): Event {
+  const runId = args.childRunId ?? args.event.runId ?? args.fallbackRunId;
+  const usage = args.event.usage;
+  const mapped: Event = {
+    eventId: args.eventId,
+    sessionId: args.sessionId,
+    type: "session.run_end",
+    content: nestedRunContent("ended", args.label, args.event, runId),
+    createdAt: args.createdAt,
+    runId,
+    runKind: args.runKind,
+    runStatus: args.event.status ?? (args.event.isError ? "failed" : "completed"),
+    parentRunId: nestedParentRunId(args.event, args.fallbackRunId, runId),
+    eventIndex: finiteEventIndex(args.event.eventIndex),
+    isError: Boolean(args.event.isError),
+  };
+  if (usage?.input !== undefined) mapped.tokensIn = finiteTokenCount(usage.input);
+  if (usage?.output !== undefined) mapped.tokensOut = finiteTokenCount(usage.output);
+  const costUsd = finiteNumber(usage?.cost?.total);
+  if (costUsd !== undefined) mapped.costUsd = costUsd;
+  return mapped;
+}
+
+function nestedParentRunId(
+  event: FlueRuntimeEvent,
+  fallbackRunId: string | undefined,
+  childRunId: string | undefined,
+): string | undefined {
+  const parent = event.parentRunId ?? event.runId ?? fallbackRunId;
+  return parent && parent !== childRunId ? parent : undefined;
+}
+
+function nestedRunContent(
+  action: "started" | "ended",
+  label: string,
+  event: FlueRuntimeEvent,
+  runId: string | undefined,
+  prompt?: string,
+): string {
+  const parts = [`Flue ${label} ${action}`];
+  if (runId) parts.push(runId);
+  const details = [
+    event.operationKind ? `kind=${event.operationKind}` : undefined,
+    event.workKind ? `kind=${event.workKind}` : undefined,
+    event.role ? `role=${event.role}` : undefined,
+    event.cwd ? `cwd=${event.cwd}` : undefined,
+    finiteNumber(event.durationMs) !== undefined ? `durationMs=${event.durationMs}` : undefined,
+  ].filter(Boolean);
+  if (details.length > 0) parts.push(`(${details.join(", ")})`);
+  const body = prompt ?? event.prompt ?? event.message ?? stringifyContent(event.result ?? event.error);
+  return body ? `${parts.join(" ")}\n${body}` : parts.join(" ");
+}
+
+function compactionContent(event: FlueRuntimeEvent): string {
+  const details = [
+    typeof event.messagesBefore === "number" ? `before=${event.messagesBefore}` : undefined,
+    typeof event.messagesAfter === "number" ? `after=${event.messagesAfter}` : undefined,
+    finiteNumber(event.durationMs) !== undefined ? `durationMs=${event.durationMs}` : undefined,
+  ].filter(Boolean);
+  return details.length > 0
+    ? `Flue compaction ended (${details.join(", ")})`
+    : "Flue compaction ended";
 }
 
 function runLifecycleContent(
@@ -1282,6 +1441,7 @@ function finiteEventIndex(value: unknown): number | undefined {
 
 function stringifyContent(value: unknown): string {
   if (typeof value === "string") return value;
+  if (value instanceof Error) return value.message;
   if (value === undefined) return "";
   try {
     return JSON.stringify(value);

@@ -140,12 +140,13 @@ Done in OMA:
 - `FlueHarnessAdapter` now exists as an opt-in native prompt driver. It runs
   blocking and streamed Flue prompt turns through an SDK bridge, emits managed
   `user.message` / `agent.message` boundary events, maps selected Flue thinking
-  and tool runtime events, preserves Flue `run_start` / `run_end` lifecycle
-  events as OMA `session.run_start` / `session.run_end`, streams Flue text
-  deltas as OpenAI-compatible chat chunks, appends normalized managed events
-  while streamed turns are still running, cancels active prompt calls with
-  Flue's native `AbortSignal` path, persists Flue session data through
-  OMA-managed harness state, and fails loudly for unsupported OMA tool mapping.
+  and tool runtime events, preserves Flue `run_start` / `run_end`,
+  `task_start` / `task`, and `operation_start` / `operation` lifecycle events
+  as OMA `session.run_start` / `session.run_end`, streams Flue text deltas as
+  OpenAI-compatible chat chunks, appends normalized managed events while
+  streamed turns are still running, cancels active prompt calls with Flue's
+  native `AbortSignal` path, persists Flue session data through OMA-managed
+  harness state, and fails loudly for unsupported OMA tool mapping.
   Local and D1-compatible stores both exist for the same harness-state contract;
   the Cloudflare stack uses the D1-compatible placement.
 
@@ -161,7 +162,9 @@ Still open:
   escape hatch.
 - The Flue harness driver is prompt-only: task/shell cancellation, MCP, tool
   approvals/deny policy, Cloudflare-backed Flue session persistence, and
-  first-class OMA child sessions for Flue tasks are not wired yet.
+  first-class OMA child sessions for Flue tasks are not wired yet. Current
+  Flue task and operation telemetry is preserved as structured nested run
+  events, but it is not promoted to managed child sessions yet.
 - Cloudflare deployment wiring exists as an experimental example in
   `examples/cloudflare-flue`, but it is not promoted: there is no live
   Workflow deployment test, live active/queued run abort smoke, Flue task run,
@@ -395,7 +398,10 @@ workspace ids into the public session identity.
 5. [ ] Deepen Flue driver parity.
    - Wire Flue session persistence to Cloudflare runtime bindings.
    - Extend cancellation semantics beyond prompt calls.
-   - Decide how Flue task lineage maps to OMA child sessions.
+   - [x] Preserve current Flue task/operation/tool/compaction telemetry as
+     normalized OMA events.
+   - Decide how Flue task lineage maps from nested run events to OMA child
+     sessions.
 
 6. [ ] Add Cloudflare runtime prototype.
    - [x] Add a router factory that wires D1 event/state stores, Flue, and a

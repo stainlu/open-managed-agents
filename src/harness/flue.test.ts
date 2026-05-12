@@ -270,6 +270,125 @@ describe("FlueHarnessAdapter", () => {
     });
   });
 
+  it("maps current Flue task, operation, tool, and compaction events", async () => {
+    const adapter = new FlueHarnessAdapter({
+      engine: {
+        prompt: vi.fn(async () => ({
+          text: "done",
+          model: "anthropic/claude-sonnet-4-6",
+          events: [
+            {
+              type: "tool_call",
+              toolName: "readFile",
+              toolCallId: "tool_1",
+              result: { ok: true },
+              isError: false,
+              eventIndex: 0,
+            },
+            {
+              type: "task_start",
+              runId: "run_parent",
+              taskId: "task_1",
+              prompt: "inspect the repo",
+              role: "reviewer",
+              cwd: "/workspace",
+              eventIndex: 1,
+            },
+            {
+              type: "task",
+              runId: "run_parent",
+              taskId: "task_1",
+              result: "repo looks sane",
+              durationMs: 42,
+              isError: false,
+              eventIndex: 2,
+            },
+            {
+              type: "operation_start",
+              runId: "run_parent",
+              operationId: "op_shell_1",
+              operationKind: "shell",
+              eventIndex: 3,
+            },
+            {
+              type: "operation",
+              runId: "run_parent",
+              operationId: "op_shell_1",
+              operationKind: "shell",
+              durationMs: 12,
+              usage: { input: 5, output: 7, cost: { total: 0.002 } },
+              isError: false,
+              eventIndex: 4,
+            },
+            {
+              type: "compaction",
+              messagesBefore: 14,
+              messagesAfter: 6,
+              durationMs: 9,
+              eventIndex: 5,
+            },
+          ],
+        })),
+      },
+    });
+
+    const result = await adapter.invokeTurn({
+      content: "go",
+      sessionId: "ses_flue",
+      runId: "run_parent",
+      timeoutMs: 60_000,
+      agent: agent(),
+    });
+
+    expect(result.events?.map((event) => event.type)).toEqual([
+      "user.message",
+      "agent.tool_result",
+      "session.run_start",
+      "session.run_end",
+      "session.run_start",
+      "session.run_end",
+      "session.compaction",
+      "agent.message",
+    ]);
+    expect(result.events?.find((event) => event.toolCallId === "tool_1")).toMatchObject({
+      type: "agent.tool_result",
+      content: JSON.stringify({ ok: true }),
+      isError: false,
+      runId: "run_parent",
+      eventIndex: 0,
+    });
+    expect(result.events?.find((event) => event.runId === "task_1" && event.type === "session.run_start"))
+      .toMatchObject({
+        runKind: "task",
+        parentRunId: "run_parent",
+        eventIndex: 1,
+        content: expect.stringContaining("inspect the repo"),
+      });
+    expect(result.events?.find((event) => event.runId === "task_1" && event.type === "session.run_end"))
+      .toMatchObject({
+        runKind: "task",
+        runStatus: "completed",
+        parentRunId: "run_parent",
+        eventIndex: 2,
+        isError: false,
+        content: expect.stringContaining("repo looks sane"),
+      });
+    expect(result.events?.find((event) => event.runId === "op_shell_1" && event.type === "session.run_end"))
+      .toMatchObject({
+        runKind: "shell",
+        runStatus: "completed",
+        parentRunId: "run_parent",
+        eventIndex: 4,
+        tokensIn: 5,
+        tokensOut: 7,
+        costUsd: 0.002,
+      });
+    expect(result.events?.find((event) => event.type === "session.compaction")).toMatchObject({
+      content: "Flue compaction ended (before=14, after=6, durationMs=9)",
+      eventIndex: 5,
+    });
+  });
+
   it("fails loudly instead of silently ignoring OMA agent.tools", async () => {
     const adapter = new FlueHarnessAdapter({
       engine: {

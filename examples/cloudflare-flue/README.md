@@ -150,7 +150,8 @@ The `wrangler.toml` uses:
 
 - The example imports OMA from the repo source via `file:../..`; package imports
   can replace this after the Cloudflare backend is published.
-- The current Flue adapter is prompt-first. Flue task lineage, shell
+- The current Flue adapter is prompt-first. Flue task/operation telemetry is
+  preserved as nested managed run events, but first-class child sessions, shell
   cancellation, MCP, and tool policy parity are intentionally not faked.
 - The default Flue engine path still uses Flue's SDK bridge and memory sandbox
   behavior. A production coding-agent stack still needs explicit sandbox
