@@ -12,9 +12,11 @@ import { WorkspaceError } from "../workspace/types.js";
 import {
   deriveFlueProviderConfigFromEnv,
   FlueHarnessAdapter,
+  FlueManagedWorkspaceSessionEnv,
   FlueManagedSessionStore,
   mergeFlueProviderConfig,
   type FlueEngine,
+  type FlueManagedWorkspaceCommandExecutor,
 } from "./flue.js";
 
 function agent(patch: Partial<AgentConfig> = {}): AgentConfig {
@@ -329,6 +331,98 @@ describe("FlueHarnessAdapter", () => {
     expect(requestPayload).toContain("OMA managed instructions.");
     await expect(workspace.readFile("agt_flue", "ses_seeded_workspace", "AGENTS.md"))
       .resolves.toEqual(Buffer.from("OMA managed instructions."));
+  });
+
+  it("routes managed Flue shell execution through the workspace command executor", async () => {
+    const workspace = new InMemoryManagedWorkspace({
+      "package.json": "{}",
+    });
+    const calls: Parameters<FlueManagedWorkspaceCommandExecutor["exec"]>[0][] = [];
+    const commandExecutor: FlueManagedWorkspaceCommandExecutor = {
+      async exec(args) {
+        calls.push(args);
+        await args.workspace.writeFile(
+          args.agentId,
+          args.sessionId,
+          args.relCwd ? `${args.relCwd}/shell.txt` : "shell.txt",
+          Buffer.from(`ran:${args.command}`),
+        );
+        return { stdout: "ok", stderr: "", exitCode: 0 };
+      },
+    };
+    const env = await FlueManagedWorkspaceSessionEnv.create({
+      workspace,
+      agentId: "agt_flue",
+      sessionId: "ses_shell",
+      cwd: "/workspace",
+      instructions: "",
+      commandExecutor,
+    });
+
+    const result = await env.exec("npm test", {
+      cwd: ".",
+      env: { FOO: "bar" },
+      timeout: 7,
+    });
+
+    expect(result).toEqual({ stdout: "ok", stderr: "", exitCode: 0 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      agentId: "agt_flue",
+      sessionId: "ses_shell",
+      command: "npm test",
+      cwd: "/workspace",
+      relCwd: "",
+      env: { FOO: "bar" },
+      timeoutSeconds: 7,
+    });
+    expect(calls[0]?.workspace).toBe(workspace);
+    await expect(workspace.readFile("agt_flue", "ses_shell", "shell.txt"))
+      .resolves.toEqual(Buffer.from("ran:npm test"));
+  });
+
+  it("rejects managed Flue shell cwd outside the mounted workspace", async () => {
+    const workspace = new InMemoryManagedWorkspace();
+    const commandExecutor: FlueManagedWorkspaceCommandExecutor = {
+      exec: vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 })),
+    };
+    const env = await FlueManagedWorkspaceSessionEnv.create({
+      workspace,
+      agentId: "agt_flue",
+      sessionId: "ses_shell",
+      cwd: "/workspace/project",
+      instructions: "",
+      commandExecutor,
+    });
+
+    await expect(env.exec("pwd", { cwd: "/tmp" })).rejects.toMatchObject({
+      code: "invalid_path",
+    });
+    expect(commandExecutor.exec).not.toHaveBeenCalled();
+  });
+
+  it("honors abort signals even when a workspace command executor ignores them", async () => {
+    const workspace = new InMemoryManagedWorkspace();
+    const controller = new AbortController();
+    const commandExecutor: FlueManagedWorkspaceCommandExecutor = {
+      async exec() {
+        controller.abort("stop");
+        return { stdout: "late", stderr: "", exitCode: 0 };
+      },
+    };
+    const env = await FlueManagedWorkspaceSessionEnv.create({
+      workspace,
+      agentId: "agt_flue",
+      sessionId: "ses_shell",
+      cwd: "/workspace",
+      instructions: "",
+      commandExecutor,
+    });
+
+    await expect(env.exec("sleep 10", { signal: controller.signal })).rejects.toMatchObject({
+      name: "AbortError",
+      cause: "stop",
+    });
   });
 
   it("runs prompt turns through an injected native Flue engine", async () => {

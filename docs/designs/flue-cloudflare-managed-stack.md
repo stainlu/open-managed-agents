@@ -167,6 +167,10 @@ Done in OMA:
   and Flue SDK context share that filesystem: files written through
   `/v1/agents/:agentId/files/*` are visible to a real Flue prompt's model
   payload via AGENTS.md discovery, skill discovery, and directory listing.
+- The managed Flue `SessionEnv` now has an explicit workspace command executor
+  seam. Without an executor, shell remains disabled; with one, Flue shell calls
+  run against a validated cwd inside the same `ManagedWorkspace` contract and
+  the executor must make command-side file mutations visible before it returns.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
 - Harness adapters now declare a runtime mode. Existing adapters remain
@@ -450,6 +454,10 @@ workspace ids into the public session identity.
    - [x] Add local Cloudflare Durable Object coverage proving public workspace
      writes are visible to a real Flue SDK prompt through that mounted
      filesystem.
+   - [x] Add an explicit command-executor seam for managed Flue workspaces so a
+     future Cloudflare Sandbox/Dynamic Worker backend can supply real shell
+     execution without replacing the Flue adapter or weakening the filesystem
+     boundary.
    - Decide when Flue task lineage should graduate from an observable run tree
      to OMA child sessions with real lifecycle control.
 

@@ -52,6 +52,41 @@ export type FlueEngine = {
   stream?(args: FlueEnginePromptArgs): Promise<HarnessStreamingTurn>;
 };
 
+export type FlueShellResult = {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+};
+
+export type FlueManagedWorkspaceCommandInvocation = {
+  workspace: ManagedWorkspace;
+  agentId: string;
+  sessionId: string;
+  command: string;
+  /**
+   * Absolute cwd inside the Flue sandbox view. OMA validates that this path is
+   * within the mounted managed workspace before calling the executor.
+   */
+  cwd: string;
+  /**
+   * Cwd relative to the managed workspace root. Empty string means workspace
+   * root.
+   */
+  relCwd: string;
+  env?: Record<string, string>;
+  timeoutSeconds?: number;
+  signal?: AbortSignal;
+};
+
+export type FlueManagedWorkspaceCommandExecutor = {
+  /**
+   * Execute against the same managed workspace exposed through Flue fs calls.
+   * Implementations that use a remote sandbox must make command-side file
+   * mutations visible through the supplied ManagedWorkspace before resolving.
+   */
+  exec(args: FlueManagedWorkspaceCommandInvocation): Promise<FlueShellResult>;
+};
+
 export type FlueProviderSettings = {
   apiKey?: string;
   baseUrl?: string;
@@ -79,6 +114,7 @@ export type FlueHarnessAdapterConfig = {
   cloudflareAiProviderPrefix?: string;
   workspace?: ManagedWorkspace;
   workspaceCwd?: string;
+  workspaceCommandExecutor?: FlueManagedWorkspaceCommandExecutor;
   sessionStateStore?: ManagedHarnessStateStore;
   engine?: FlueEngine;
   loadEngine?: () => Promise<FlueEngine>;
@@ -446,6 +482,7 @@ export class FlueHarnessAdapter implements HarnessAdapter {
             : undefined,
           this.cfg.workspace,
           this.cfg.workspaceCwd,
+          this.cfg.workspaceCommandExecutor,
           this.cfg.sessionStateStore,
         ));
     }
@@ -495,6 +532,7 @@ class OptionalSdkFlueEngine implements FlueEngine {
     private readonly cloudflareAi: FlueCloudflareAIBindingConfig | undefined,
     private readonly workspace: ManagedWorkspace | undefined,
     private readonly workspaceCwd: string | undefined,
+    private readonly workspaceCommandExecutor: FlueManagedWorkspaceCommandExecutor | undefined,
     private readonly sessionStateStore: ManagedHarnessStateStore | undefined,
   ) {}
 
@@ -642,12 +680,13 @@ class OptionalSdkFlueEngine implements FlueEngine {
     const internal = await this.loadInternal();
     const store = await this.loadStore(internal, args);
     const env = this.workspace
-      ? await ManagedWorkspaceSessionEnv.create({
+      ? await FlueManagedWorkspaceSessionEnv.create({
         workspace: this.workspace,
         agentId: args.agent.agentId,
         sessionId: args.sessionId,
         cwd: this.workspaceCwd,
         instructions: args.agent.instructions,
+        commandExecutor: this.workspaceCommandExecutor,
       })
       : new MemorySessionEnv(args.agent.instructions);
     return internal.createFlueContext({
@@ -887,7 +926,7 @@ function validateFlueCloudflareModule(mod: unknown): FlueCloudflareModule {
   return candidate as FlueCloudflareModule;
 }
 
-class ManagedWorkspaceSessionEnv {
+export class FlueManagedWorkspaceSessionEnv {
   readonly cwd: string;
 
   private constructor(
@@ -895,6 +934,7 @@ class ManagedWorkspaceSessionEnv {
     private readonly agentId: string,
     private readonly sessionId: string,
     cwd: string | undefined,
+    private readonly commandExecutor: FlueManagedWorkspaceCommandExecutor | undefined,
   ) {
     this.cwd = normalizeWorkspaceCwd(cwd);
   }
@@ -905,18 +945,43 @@ class ManagedWorkspaceSessionEnv {
     sessionId: string;
     cwd?: string;
     instructions: string;
-  }): Promise<ManagedWorkspaceSessionEnv> {
-    const env = new ManagedWorkspaceSessionEnv(
+    commandExecutor?: FlueManagedWorkspaceCommandExecutor;
+  }): Promise<FlueManagedWorkspaceSessionEnv> {
+    const env = new FlueManagedWorkspaceSessionEnv(
       args.workspace,
       args.agentId,
       args.sessionId,
       args.cwd,
+      args.commandExecutor,
     );
     await env.seedInstructions(args.instructions);
     return env;
   }
 
-  async exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  async exec(command: string, options?: {
+    cwd?: string;
+    env?: Record<string, string>;
+    timeout?: number;
+    signal?: AbortSignal;
+  }): Promise<FlueShellResult> {
+    if (options?.signal?.aborted) throw abortErrorFor(options.signal);
+    if (this.commandExecutor) {
+      const cwd = options?.cwd ? this.resolvePath(options.cwd) : this.cwd;
+      const relCwd = this.toWorkspaceRelPath(cwd, { allowRoot: true });
+      const result = await this.commandExecutor.exec({
+        workspace: this.workspace,
+        agentId: this.agentId,
+        sessionId: this.sessionId,
+        command,
+        cwd,
+        relCwd,
+        env: options?.env,
+        timeoutSeconds: options?.timeout,
+        signal: options?.signal,
+      });
+      if (options?.signal?.aborted) throw abortErrorFor(options.signal);
+      return result;
+    }
     return {
       stdout: "",
       stderr: `Shell execution is disabled in OMA's managed Flue workspace. Command was: ${command}`,
@@ -1709,6 +1774,14 @@ function isWorkspaceNotFound(err: unknown): boolean {
 
 function isInvalidWorkspacePath(err: unknown): boolean {
   return err instanceof WorkspaceError && err.code === "invalid_path";
+}
+
+function abortErrorFor(signal: AbortSignal): DOMException {
+  const err = new DOMException("This operation was aborted", "AbortError") as DOMException & {
+    cause?: unknown;
+  };
+  err.cause = signal.reason;
+  return err;
 }
 
 function latestWorkspaceMtime(entries: WorkspaceEntry[]): number {
