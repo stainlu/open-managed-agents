@@ -88,8 +88,9 @@ Working today:
   persistence, and OMA-managed provider secret mapping into Flue provider
   configuration, including Cloudflare Workers AI binding registration for
   `cloudflare/<model>`. URL-based MCP servers are connected through Flue's
-  MCP client, including OMA vault bearer injection; stdio MCP and OMA tool
-  policy are still rejected. The bridge prefers Flue's runtime package name
+  MCP client, including OMA vault bearer injection and exact deny filtering
+  for Flue MCP tool names; stdio MCP, built-in Flue tool policy, and OMA tool
+  approvals are still rejected. The bridge prefers Flue's runtime package name
   `@flue/core` and falls back to legacy `@flue/sdk`.
 - Experimental Hermes adapter runtime via direct `AIAgent` integration.
 - Experimental Codex adapter runtime via `codex app-server`.
@@ -99,8 +100,8 @@ Working today:
 
 Not done yet:
 
-- Full Flue parity: stdio MCP, tool policy, and OMA first-class child sessions
-  for Flue tasks.
+- Full Flue parity: stdio MCP, OMA tool approvals, built-in Flue tool deny
+  policy, and OMA first-class child sessions for Flue tasks.
 - Promoted production Cloudflare backend. The Durable Object, Worker router,
   Workflow runner, DO SQLite metadata store, D1 stores, R2 workspace backend,
   and example Wrangler wiring exist, but live deployment promotion is still

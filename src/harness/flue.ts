@@ -363,12 +363,14 @@ export class FlueHarnessAdapter implements HarnessAdapter {
       detail: "Flue tool approvals are not mapped into OMA confirmations yet.",
     },
     permission_deny: {
-      support: "unsupported",
-      detail: "OMA per-tool deny policy is not mapped to Flue tools yet.",
+      support: "partial",
+      detail:
+        "Exact deny policy is enforced for URL MCP tools connected by OMA; built-in Flue tools and non-MCP tool names are rejected.",
     },
     mcp: {
       support: "partial",
-      detail: "URL-based MCP servers are connected through Flue's MCP client; stdio MCP servers and OMA tool approvals/deny policy are rejected.",
+      detail:
+        "URL-based MCP servers are connected through Flue's MCP client with OMA vault injection and exact MCP-tool deny filtering; stdio MCP servers and tool approvals are rejected.",
     },
     managed_event_log: {
       support: "partial",
@@ -1119,7 +1121,12 @@ class OptionalSdkFlueEngine implements FlueEngine {
       throw new HarnessInvocationError(message);
     }
     const entries = Object.entries(servers ?? {});
-    if (entries.length === 0) return emptyFlueMcpScope();
+    if (entries.length === 0) {
+      return {
+        tools: applyFlueToolPolicy([], args.agent.permissionPolicy),
+        close: async () => {},
+      };
+    }
     if (args.signal?.aborted) throw abortErrorFor(args.signal);
 
     const connector = await this.resolveMcpConnector();
@@ -1135,10 +1142,18 @@ class OptionalSdkFlueEngine implements FlueEngine {
       await closeFlueMcpConnections(connections);
       throw err;
     }
-    return {
-      tools: connections.flatMap((connection) => connection.tools),
-      close: () => closeFlueMcpConnections(connections),
-    };
+    try {
+      return {
+        tools: applyFlueToolPolicy(
+          connections.flatMap((connection) => connection.tools),
+          args.agent.permissionPolicy,
+        ),
+        close: () => closeFlueMcpConnections(connections),
+      };
+    } catch (err) {
+      await closeFlueMcpConnections(connections);
+      throw err;
+    }
   }
 
   private async resolveMcpConnector(): Promise<FlueMcpConnector> {
@@ -1331,12 +1346,11 @@ function validateFlueAgentConfig(
         "Flue harness does not map OMA agent.tools yet; use an agent with an empty tools list or wire Flue-native tools in a Flue app",
     };
   }
-  if (agent.permissionPolicy.type === "deny") {
-    return {
-      capability: "permission_deny",
-      detail: "Flue harness does not map OMA deny policy to Flue tools yet",
-    };
-  }
+  const permissionIssue = validateFluePermissionPolicy(
+    agent.permissionPolicy,
+    agent.mcpServers,
+  );
+  if (permissionIssue) return permissionIssue;
   if (agent.permissionPolicy.type === "always_ask") {
     return {
       capability: "tool_approvals",
@@ -1348,6 +1362,51 @@ function validateFlueAgentConfig(
     if (detail) return { capability: "mcp", detail };
   }
   return undefined;
+}
+
+function validateFluePermissionPolicy(
+  policy: HarnessAgentConfigValidationInput["permissionPolicy"],
+  mcpServers: HarnessAgentConfigValidationInput["mcpServers"],
+): HarnessAgentConfigValidationIssue | undefined {
+  if (policy.type !== "deny") return undefined;
+  const unsupportedTools = policy.tools.filter((tool) => !isFlueMcpToolName(tool));
+  if (unsupportedTools.length > 0) {
+    return {
+      capability: "permission_deny",
+      detail: [
+        "Flue deny policy currently supports only exact URL MCP tool names such as",
+        `mcp__server__tool; unsupported entries: ${unsupportedTools.join(", ")}`,
+      ].join(" "),
+    };
+  }
+  if (Object.keys(mcpServers ?? {}).length === 0) {
+    return {
+      capability: "permission_deny",
+      detail:
+        "Flue deny policy for MCP tools requires URL MCP servers on the agent; no MCP servers are configured",
+    };
+  }
+  return undefined;
+}
+
+function applyFlueToolPolicy(
+  tools: FlueToolDef[],
+  policy: AgentConfig["permissionPolicy"],
+): FlueToolDef[] {
+  if (policy.type !== "deny") return tools;
+  const exposed = new Set(tools.map((tool) => tool.name));
+  const missing = policy.tools.filter((tool) => !exposed.has(tool));
+  if (missing.length > 0) {
+    throw new HarnessInvocationError(
+      `Flue deny policy targets MCP tools that were not exposed by connected URL MCP servers: ${missing.join(", ")}`,
+    );
+  }
+  const denied = new Set(policy.tools);
+  return tools.filter((tool) => !denied.has(tool.name));
+}
+
+function isFlueMcpToolName(name: string): boolean {
+  return name.startsWith("mcp__");
 }
 
 function validateFlueMcpServerConfig(

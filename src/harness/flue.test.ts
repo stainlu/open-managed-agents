@@ -853,7 +853,7 @@ describe("FlueHarnessAdapter", () => {
     ).rejects.toThrow(HarnessInvocationError);
   });
 
-  it("fails loudly instead of silently ignoring OMA Flue tool policy", async () => {
+  it("fails loudly instead of silently ignoring unsupported OMA Flue tool policy", async () => {
     const adapter = new FlueHarnessAdapter({
       engine: {
         prompt: vi.fn(async () => ({ text: "unused" })),
@@ -867,7 +867,16 @@ describe("FlueHarnessAdapter", () => {
         timeoutMs: 60_000,
         agent: agent({ permissionPolicy: { type: "deny", tools: ["docs_search"] } }),
       }),
-    ).rejects.toThrow("Flue harness does not map OMA deny policy");
+    ).rejects.toThrow("Flue deny policy currently supports only exact URL MCP tool names");
+
+    await expect(
+      adapter.invokeTurn({
+        content: "hello",
+        sessionId: "ses_flue",
+        timeoutMs: 60_000,
+        agent: agent({ permissionPolicy: { type: "deny", tools: ["mcp__docs__write"] } }),
+      }),
+    ).rejects.toThrow("Flue deny policy for MCP tools requires URL MCP servers");
 
     await expect(
       adapter.invokeTurn({
@@ -952,6 +961,99 @@ describe("FlueHarnessAdapter", () => {
       clientName: "open-managed-agents",
       clientVersion: "0.1.0",
     });
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies exact deny policy to Flue URL MCP tools", async () => {
+    const close = vi.fn(async () => {});
+    const mcpConnector = vi.fn<FlueMcpConnector>(async (name) => ({
+      name,
+      tools: [
+        {
+          name: "mcp__docs__search",
+          description: "Search docs",
+          parameters: { type: "object", properties: {} },
+          execute: async () => "search",
+        },
+        {
+          name: "mcp__docs__write",
+          description: "Write docs",
+          parameters: { type: "object", properties: {} },
+          execute: async () => "write",
+        },
+      ],
+      close,
+    }));
+    let requestPayload = "";
+    const run = vi.fn(async (_model, payload) => {
+      requestPayload = JSON.stringify(payload);
+      return cloudflareTextResponse("ok");
+    });
+    const adapter = new FlueHarnessAdapter({
+      cloudflareAiBinding: { run },
+      cloudflareAiProviderPrefix: "cloudflare-mcp-deny-test",
+      mcpConnector,
+    });
+
+    const result = await adapter.invokeTurn({
+      content: "search docs",
+      sessionId: "ses_flue_mcp_deny",
+      timeoutMs: 60_000,
+      agent: agent({
+        model: "cloudflare-mcp-deny-test/@cf/openai/gpt-oss-20b",
+        mcpServers: {
+          docs: { url: "https://mcp.example.com/v2" },
+        },
+        permissionPolicy: {
+          type: "deny",
+          tools: ["mcp__docs__write"],
+        },
+      }),
+    });
+
+    expect(result.output).toBe("ok");
+    expect(requestPayload).toContain("mcp__docs__search");
+    expect(requestPayload).not.toContain("mcp__docs__write");
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when a Flue URL MCP deny target is not exposed", async () => {
+    const close = vi.fn(async () => {});
+    const mcpConnector = vi.fn<FlueMcpConnector>(async (name) => ({
+      name,
+      tools: [
+        {
+          name: "mcp__docs__search",
+          description: "Search docs",
+          parameters: { type: "object", properties: {} },
+          execute: async () => "search",
+        },
+      ],
+      close,
+    }));
+    const adapter = new FlueHarnessAdapter({
+      cloudflareAiBinding: { run: vi.fn(async () => cloudflareTextResponse("unused")) },
+      cloudflareAiProviderPrefix: "cloudflare-mcp-deny-missing-test",
+      mcpConnector,
+    });
+
+    await expect(
+      adapter.invokeTurn({
+        content: "search docs",
+        sessionId: "ses_flue_mcp_deny_missing",
+        timeoutMs: 60_000,
+        agent: agent({
+          model: "cloudflare-mcp-deny-missing-test/@cf/openai/gpt-oss-20b",
+          mcpServers: {
+            docs: { url: "https://mcp.example.com/v2" },
+          },
+          permissionPolicy: {
+            type: "deny",
+            tools: ["mcp__docs__write"],
+          },
+        }),
+      }),
+    ).rejects.toThrow("Flue deny policy targets MCP tools that were not exposed");
     expect(close).toHaveBeenCalledTimes(1);
   });
 
@@ -1232,6 +1334,7 @@ describe("FlueHarnessAdapter", () => {
 
     expect(adapter.capabilities.streaming.support).toBe("partial");
     expect(adapter.capabilities.cancellation.support).toBe("partial");
+    expect(adapter.capabilities.permission_deny.support).toBe("partial");
     const stream = await adapter.invokeStreamingTurn({
       content: "hello",
       sessionId: "ses_flue",
