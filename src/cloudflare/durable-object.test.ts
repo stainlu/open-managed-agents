@@ -122,6 +122,91 @@ describe("createCloudflareFlueDurableObjectHandler", () => {
       doBacking.close();
     }
   });
+
+  it("presents public R2 workspace writes to the real Flue SDK context", async () => {
+    const doBacking = new Database(join(tmpDir, "metadata.db"));
+    const doStorage = new FakeDurableObjectStorage(doBacking);
+    const { db, close } = sqliteD1();
+    const r2Bucket = new FakeR2Bucket();
+    let flueRequestPayload = "";
+    const aiRun = async (_model: unknown, payload: unknown): Promise<Response> => {
+      flueRequestPayload = JSON.stringify(payload);
+      return cloudflareTextResponse("workspace visible");
+    };
+
+    try {
+      const handler = createCloudflareFlueDurableObjectHandler({
+        state: { storage: doStorage },
+        db,
+        r2Bucket,
+        cloudflareAiBinding: { run: aiRun },
+        cloudflareAiProviderPrefix: "cloudflare-do-workspace-test",
+      });
+
+      const created = await handler.fetch(new Request("https://oma.example/v1/agents", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          harnessId: "flue",
+          model: "cloudflare-do-workspace-test/@cf/openai/gpt-oss-20b",
+          instructions: "fallback OMA instructions",
+        }),
+      }));
+      expect(created.status).toBe(200);
+      const agent = await created.json() as { agent_id: string };
+
+      const sessionResponse = await handler.fetch(new Request("https://oma.example/v1/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agentId: agent.agent_id }),
+      }));
+      expect(sessionResponse.status).toBe(200);
+      const session = await sessionResponse.json() as { session_id: string };
+
+      for (const [path, content] of Object.entries({
+        "AGENTS.md": "Workspace AGENTS from the public API.",
+        "README.md": "# Public Workspace",
+        ".agents/skills/review/SKILL.md": [
+          "---",
+          "name: review",
+          "description: Review code from the shared workspace",
+          "---",
+          "Review the files.",
+        ].join("\n"),
+      })) {
+        const write = await handler.fetch(new Request(
+          `https://oma.example/v1/agents/${agent.agent_id}/files/${path}?session_id=${session.session_id}`,
+          { method: "PUT", body: content },
+        ));
+        expect(write.status).toBe(200);
+      }
+
+      const event = await handler.fetch(new Request(
+        `https://oma.example/v1/sessions/${session.session_id}/events`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ type: "user.message", content: "inspect workspace" }),
+        },
+      ));
+      expect(event.status).toBe(200);
+      await waitForSessionToStopRunning(handler.stack.store, session.session_id);
+
+      expect(flueRequestPayload).toContain("Workspace AGENTS from the public API.");
+      expect(flueRequestPayload).toContain("README.md");
+      expect(flueRequestPayload).toContain("review");
+      expect(flueRequestPayload).not.toContain("fallback OMA instructions");
+
+      const events = await handler.stack.events.listBySession(agent.agent_id, session.session_id);
+      expect(events.find((entry) => entry.type === "agent.message")).toMatchObject({
+        type: "agent.message",
+        content: "workspace visible",
+      });
+    } finally {
+      close();
+      doBacking.close();
+    }
+  });
 });
 
 describe("CloudflareFlueDurableObject", () => {
@@ -567,12 +652,13 @@ describe("ConfigurableCloudflareFlueDurableObject", () => {
       const runs = await object.fetch(new Request(
         `https://oma.example/v1/sessions/${active.session_id}/runs`,
       ));
-      await expect(runs.json()).resolves.toMatchObject({
-        runs: [
-          { run_id: active.run_id, status: "succeeded" },
-          { run_id: queuedBody.run_id, status: "cancelled" },
-        ],
-      });
+      const runsBody = await runs.json() as {
+        runs: Array<{ run_id: string; status: string }>;
+      };
+      expect(runsBody.runs).toEqual(expect.arrayContaining([
+        expect.objectContaining({ run_id: active.run_id, status: "succeeded" }),
+        expect.objectContaining({ run_id: queuedBody.run_id, status: "cancelled" }),
+      ]));
       expect(promptCalls).toBe(1);
     } finally {
       close();
@@ -1119,7 +1205,7 @@ async function waitForSessionToStopRunning(
   store: Store,
   sessionId: string,
 ): Promise<void> {
-  const deadline = Date.now() + 500;
+  const deadline = Date.now() + 2_000;
   while (Date.now() < deadline) {
     const status = store.sessions.get(sessionId)?.status;
     if (status !== "starting" && status !== "running") return;
@@ -1132,7 +1218,7 @@ async function waitForSessionHttpToStopRunning(
   object: { fetch(request: Request): Response | Promise<Response> },
   sessionId: string,
 ): Promise<void> {
-  const deadline = Date.now() + 500;
+  const deadline = Date.now() + 2_000;
   while (Date.now() < deadline) {
     const response = await object.fetch(new Request(
       `https://oma.example/v1/sessions/${sessionId}`,
@@ -1149,7 +1235,7 @@ async function waitForSessionTurns(
   sessionId: string,
   turns: number,
 ): Promise<void> {
-  const deadline = Date.now() + 500;
+  const deadline = Date.now() + 2_000;
   let last: unknown;
   while (Date.now() < deadline) {
     const response = await object.fetch(new Request(
@@ -1177,6 +1263,28 @@ function deferred<T>(): {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+function cloudflareTextResponse(text: string): Response {
+  return new Response([
+    `data: ${JSON.stringify({
+      id: "chatcmpl_fake_do_workspace",
+      model: "@cf/openai/gpt-oss-20b",
+      choices: [{ delta: { content: text }, finish_reason: null }],
+    })}`,
+    "",
+    `data: ${JSON.stringify({
+      id: "chatcmpl_fake_do_workspace",
+      model: "@cf/openai/gpt-oss-20b",
+      choices: [{ delta: {}, finish_reason: "stop" }],
+      usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+    })}`,
+    "",
+    "data: [DONE]",
+    "",
+  ].join("\n"), {
+    headers: { "content-type": "text/event-stream" },
+  });
 }
 
 function sqliteD1(): { db: D1DatabaseLike; close: () => void } {

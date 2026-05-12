@@ -163,6 +163,10 @@ Done in OMA:
   existing `AGENTS.md`, `.agents/skills/`, and project files are visible to
   Flue, and OMA instructions seed `AGENTS.md` only when the workspace does not
   already provide one.
+- Local Cloudflare Durable Object coverage now proves the public workspace API
+  and Flue SDK context share that filesystem: files written through
+  `/v1/agents/:agentId/files/*` are visible to a real Flue prompt's model
+  payload via AGENTS.md discovery, skill discovery, and directory listing.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
 - Harness adapters now declare a runtime mode. Existing adapters remain
@@ -443,6 +447,9 @@ workspace ids into the public session identity.
    - [x] Mount OMA's managed workspace into the real Flue SDK context so
      Cloudflare/R2 workspace files, `AGENTS.md`, and skills are the harness
      filesystem seen by Flue.
+   - [x] Add local Cloudflare Durable Object coverage proving public workspace
+     writes are visible to a real Flue SDK prompt through that mounted
+     filesystem.
    - Decide when Flue task lineage should graduate from an observable run tree
      to OMA child sessions with real lifecycle control.
 
