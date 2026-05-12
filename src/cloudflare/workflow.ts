@@ -66,7 +66,7 @@ export class CloudflareWorkflowRunScheduler implements ManagedRunScheduler {
 
   async schedule(args: ScheduleManagedRunArgs): Promise<void> {
     await this.opts.workflow.create({
-      id: this.opts.idFactory?.(args.request),
+      id: this.opts.idFactory?.(args.request) ?? args.request.runId,
       params: args.request,
     });
   }

@@ -1,4 +1,9 @@
+import { customAlphabet } from "nanoid";
+
+const runId = customAlphabet("0123456789abcdefghijklmnopqrstuvwxyz", 16);
+
 export type ManagedRunRequest = {
+  runId: string;
   sessionId: string;
   agentId: string;
   content: string;
@@ -29,6 +34,10 @@ export interface ManagedRunScheduler {
   schedule(args: ScheduleManagedRunArgs): void | Promise<void>;
 }
 
+export function createManagedRunId(): string {
+  return `run_${runId()}`;
+}
+
 export class InlineRunScheduler implements ManagedRunScheduler {
   schedule(args: ScheduleManagedRunArgs): void {
     void args.run().catch(args.onFailure);
@@ -38,6 +47,9 @@ export class InlineRunScheduler implements ManagedRunScheduler {
 export function isManagedRunRequest(value: unknown): value is ManagedRunRequest {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<ManagedRunRequest>;
+  if (typeof candidate.runId !== "string" || candidate.runId.length === 0) {
+    return false;
+  }
   if (typeof candidate.sessionId !== "string" || candidate.sessionId.length === 0) {
     return false;
   }

@@ -196,11 +196,12 @@ describe("CloudflareFlueDurableObject", () => {
         },
       ));
       expect(run.status).toBe(200);
-      const body = await run.json() as { session_id: string; status: string };
+      const body = await run.json() as { session_id: string; run_id: string; status: string };
 
       expect(body.status).toBe("starting");
       expect(workflow.created).toHaveLength(1);
       expect(workflow.created[0]?.params).toMatchObject({
+        runId: body.run_id,
         sessionId: body.session_id,
         agentId: agent.agent_id,
         content: "hello workflow",
@@ -236,6 +237,7 @@ describe("CloudflareFlueDurableObject", () => {
             [MANAGED_RUN_INTERNAL_TOKEN_HEADER]: "secret",
           },
           body: JSON.stringify({
+            runId: "run_missing",
             sessionId: "ses_missing",
             agentId: "agt_missing",
             content: "hello",
@@ -276,6 +278,7 @@ describe("CloudflareFlueDurableObject", () => {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
+            runId: "run_missing",
             sessionId: "ses_missing",
             agentId: "agt_missing",
             content: "hello",
@@ -486,6 +489,7 @@ describe("ConfigurableCloudflareFlueDurableObject", () => {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
+            runId: "run_missing",
             sessionId: "ses_missing",
             agentId: "agt_missing",
             content: "hello",

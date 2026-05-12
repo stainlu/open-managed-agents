@@ -116,6 +116,11 @@ Done in OMA:
   Flue's native `cloudflare/<model>` provider prefix. The example declares
   `[ai] binding = "AI"` and passes the binding through OMA instead of relying
   on Flue's generated entrypoint.
+- OMA now assigns a stable managed run id at turn admission and preserves it
+  through queued turns, Workflow-backed re-entry, HTTP responses, Flue
+  `createFlueContext()`, streamed events, and normalized Flue lifecycle event
+  mapping. This gives the managed layer a durable control-plane handle before
+  run-level abort/status APIs are added.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
 - Harness adapters now declare a runtime mode. Existing adapters remain

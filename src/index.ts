@@ -735,6 +735,7 @@ async function main(): Promise<void> {
     try {
       await router.runEvent({
         sessionId,
+        runId: head.runId,
         content: head.content,
         model: head.model,
         thinkingLevel: head.thinkingLevel,

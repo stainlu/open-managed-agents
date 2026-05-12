@@ -457,6 +457,8 @@ export interface QueueStore {
  * The router shapes it; the store persists it verbatim.
  */
 export type QueuedEvent = {
+  /** Stable managed run id assigned when the event was accepted. */
+  runId: string;
   content: string;
   /** Optional per-event model override. */
   model?: string;

@@ -27,6 +27,8 @@ export type HarnessTurnInvocationArgs = {
   token?: string;
   content: string;
   sessionId: string;
+  /** Stable OMA-managed run id for this turn, when the managed layer minted one. */
+  runId?: string;
   timeoutMs: number;
   agent?: AgentConfig;
   session?: Session;

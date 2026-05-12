@@ -206,6 +206,7 @@ describe("FlueHarnessAdapter", () => {
     const result = await adapter.invokeTurn({
       content: "hello",
       sessionId: ses.sessionId,
+      runId: "run_managed_1",
       timeoutMs: 60_000,
       agent: cfg,
       session: ses,
@@ -217,6 +218,7 @@ describe("FlueHarnessAdapter", () => {
     expect(prompt).toHaveBeenCalledWith({
       content: "hello",
       sessionId: ses.sessionId,
+      runId: "run_managed_1",
       timeoutMs: 60_000,
       signal: expect.any(AbortSignal),
       agent: cfg,
@@ -232,7 +234,7 @@ describe("FlueHarnessAdapter", () => {
     });
     expect(result.native).toMatchObject({
       nativeSessionId: ses.sessionId,
-      nativeMetadata: { harness: "flue" },
+      nativeMetadata: { harness: "flue", runId: "run_managed_1" },
     });
     expect(result.events?.map((event) => event.type)).toEqual([
       "user.message",
@@ -260,6 +262,7 @@ describe("FlueHarnessAdapter", () => {
     expect(result.events?.at(-1)).toMatchObject({
       type: "agent.message",
       content: "echo: hello",
+      runId: "run_managed_1",
       tokensIn: 11,
       tokensOut: 7,
       costUsd: 0.012,

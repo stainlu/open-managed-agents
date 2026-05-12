@@ -879,6 +879,7 @@ describe("AgentRouter.runEvent — decision tree", () => {
     expect(store.sessions.get(session.sessionId)?.status).toBe("starting");
     expect(runScheduler.requests()).toEqual([
       {
+        runId: result.runId,
         sessionId: session.sessionId,
         agentId: agent.agentId,
         content: "scheduled turn",
@@ -1033,6 +1034,7 @@ describe("AgentRouter native harness runtime", () => {
         token: undefined,
         content: "hi native",
         sessionId: session.sessionId,
+        runId: expect.stringMatching(/^run_/),
         agent: expect.objectContaining({ harnessId: "native-test" }),
       }),
     );
@@ -1093,6 +1095,7 @@ describe("AgentRouter native harness runtime", () => {
     store.sessions.bumpTurns(session.sessionId);
 
     const result = await router.executeScheduledRun({
+      runId: "run_scheduled",
       sessionId: session.sessionId,
       agentId: agent.agentId,
       content: "scheduled",
@@ -1127,6 +1130,7 @@ describe("AgentRouter native harness runtime", () => {
     const session = router.createSession(agent.agentId);
 
     await expect(router.executeScheduledRun({
+      runId: "run_duplicate",
       sessionId: session.sessionId,
       agentId: agent.agentId,
       content: "duplicate",
@@ -1160,6 +1164,7 @@ describe("AgentRouter native harness runtime", () => {
     store.sessions.bumpTurns(session.sessionId);
 
     await expect(router.executeScheduledRun({
+      runId: "run_failed",
       sessionId: session.sessionId,
       agentId: agent.agentId,
       content: "fail",
@@ -1321,6 +1326,7 @@ describe("AgentRouter native harness runtime", () => {
         token: undefined,
         content: "stream",
         sessionId: session.sessionId,
+        runId: handle.runId,
       }),
     );
     const finished = store.sessions.get(session.sessionId);
@@ -2381,6 +2387,7 @@ describe("AgentRouter.cancel — pre-abort checks", () => {
     const session = router.createSession(agent.agentId);
     store.sessions.beginRun(session.sessionId);
     queue.enqueue(session.sessionId, {
+      runId: "run_pending",
       content: "pending work",
       enqueuedAt: Date.now(),
     });

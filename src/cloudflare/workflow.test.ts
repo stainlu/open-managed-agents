@@ -21,7 +21,7 @@ describe("CloudflareWorkflowRunScheduler", () => {
 
     await scheduler.schedule({ request, run, onFailure });
 
-    expect(workflow.created).toEqual([{ params: request }]);
+    expect(workflow.created).toEqual([{ id: request.runId, params: request }]);
     expect(run).not.toHaveBeenCalled();
     expect(onFailure).not.toHaveBeenCalled();
   });
@@ -30,18 +30,18 @@ describe("CloudflareWorkflowRunScheduler", () => {
     const workflow = new FakeWorkflow();
     const scheduler = new CloudflareWorkflowRunScheduler({
       workflow,
-      idFactory: (request) => `run-${request.sessionId}`,
+      idFactory: (request) => `workflow-${request.runId}`,
     });
 
     await scheduler.schedule({
-      request: runRequest({ sessionId: "ses_custom" }),
+      request: runRequest({ runId: "run_custom", sessionId: "ses_custom" }),
       run: async () => {},
       onFailure: () => {},
     });
 
     expect(workflow.created[0]).toMatchObject({
-      id: "run-ses_custom",
-      params: { sessionId: "ses_custom" },
+      id: "workflow-run_custom",
+      params: { runId: "run_custom", sessionId: "ses_custom" },
     });
   });
 
@@ -108,6 +108,7 @@ describe("Cloudflare managed run Workflow runner", () => {
 
 function runRequest(patch: Partial<ManagedRunRequest> = {}): ManagedRunRequest {
   return {
+    runId: patch.runId ?? "run_1",
     sessionId: patch.sessionId ?? "ses_1",
     agentId: patch.agentId ?? "agt_1",
     content: patch.content ?? "hello",

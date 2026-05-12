@@ -22,6 +22,7 @@ import type {
 } from "../runtime/container.js";
 import { PoolCapacityError } from "../runtime/pool.js";
 import {
+  createManagedRunId,
   errorMessage,
   InlineRunScheduler,
   type ManagedRunExecutionResult,
@@ -71,6 +72,8 @@ export type RouterConfig = {
 export type RunEventArgs = {
   sessionId: string;
   content: string;
+  /** Internal managed run id. Public callers leave this unset. */
+  runId?: string;
   /**
    * Optional model override to apply to the session before this event.
    * Maps to a WS sessions.patch({ model }) call. Pi's setModel is
@@ -94,6 +97,8 @@ export type RunEventArgs = {
 
 export type RunEventResult = {
   session: Session;
+  /** Stable managed run id assigned to this accepted event. */
+  runId: string;
   /** True when the event was queued instead of triggering a run immediately. */
   queued: boolean;
 };
@@ -111,6 +116,8 @@ export type StreamOutcome = { ok: true } | { ok: false; error: string };
  */
 export type StreamingRunHandle = {
   session: Session;
+  /** Stable managed run id assigned to this streamed turn. */
+  runId: string;
   /**
    * Async iterator of raw SSE `data:` payload strings from the
    * container's `/v1/chat/completions` response. Each yielded string is
@@ -621,14 +628,16 @@ export class AgentRouter {
         model: args.model,
         thinkingLevel: args.thinkingLevel,
       });
+      const runId = args.runId ?? createManagedRunId();
       this.queue.enqueue(args.sessionId, {
+        runId,
         content: args.content,
         model: args.model,
         thinkingLevel: args.thinkingLevel,
         enqueuedAt: Date.now(),
       });
       this.sessions.bumpTurns(args.sessionId);
-      return { session, queued: true };
+      return { session, runId, queued: true };
     }
 
     this.assertDynamicPatchIfNeeded(harness, session.turns === 0, {
@@ -639,8 +648,10 @@ export class AgentRouter {
     const runningSession = this.sessions.beginRun(args.sessionId) ?? session;
     this.sessions.bumpTurns(args.sessionId);
     addContext({ sessionId: args.sessionId, agentId: agent.agentId });
+    const runId = args.runId ?? createManagedRunId();
 
     this.scheduleBackgroundRun({
+      runId,
       sessionId: args.sessionId,
       agent,
       content: args.content,
@@ -649,7 +660,7 @@ export class AgentRouter {
       queued: false,
     });
 
-    return { session: runningSession, queued: false };
+    return { session: runningSession, runId, queued: false };
   }
 
   /**
@@ -683,6 +694,7 @@ export class AgentRouter {
     addContext({ sessionId: request.sessionId, agentId: request.agentId });
     try {
       await this.executeInBackground(
+        request.runId,
         request.sessionId,
         agent,
         request.content,
@@ -743,6 +755,7 @@ export class AgentRouter {
     const running = this.sessions.beginRun(args.sessionId) ?? session;
     const bumped = this.sessions.bumpTurns(args.sessionId) ?? running;
     addContext({ sessionId: args.sessionId, agentId: agent.agentId });
+    const runId = args.runId ?? createManagedRunId();
 
     try {
       // Refresh any OAuth credentials bound to this session that are
@@ -811,6 +824,7 @@ export class AgentRouter {
           token: endpoint?.token,
           content: args.content,
           sessionId: args.sessionId,
+          runId,
           timeoutMs: this.cfg.runTimeoutMs,
           agent,
           session: bumped,
@@ -903,7 +917,7 @@ export class AgentRouter {
         router.sessions.endRunFailure(args.sessionId, outcome.error);
       };
 
-      return { session: bumped, chunks, abort: stream.abort, finalize };
+      return { session: bumped, runId, chunks, abort: stream.abort, finalize };
     } catch (err) {
       // Failure BEFORE we handed the stream to the caller — unwind the
       // beginRun transition ourselves. Evict the container because the
@@ -1339,6 +1353,7 @@ export class AgentRouter {
   }
 
   private scheduleBackgroundRun(args: {
+    runId: string;
     sessionId: string;
     agent: AgentConfig;
     content: string;
@@ -1350,6 +1365,7 @@ export class AgentRouter {
     // out-of-band schedulers preserve the same logging scope when they run.
     const runInBackground = withCapturedContext(() =>
       this.executeInBackground(
+        args.runId,
         args.sessionId,
         args.agent,
         args.content,
@@ -1363,6 +1379,7 @@ export class AgentRouter {
     try {
       const scheduled = this.runScheduler.schedule({
         request: {
+          runId: args.runId,
           sessionId: args.sessionId,
           agentId: args.agent.agentId,
           content: args.content,
@@ -1380,6 +1397,7 @@ export class AgentRouter {
   }
 
   private async executeInBackground(
+    runId: string,
     sessionId: string,
     agent: AgentConfig,
     content: string,
@@ -1469,6 +1487,7 @@ export class AgentRouter {
       token: endpoint?.token,
       content,
       sessionKey: sessionId,
+      runId,
       agent,
       session: currentSession,
       environment: currentSession?.environmentId
@@ -1529,6 +1548,7 @@ export class AgentRouter {
     if (next) {
       this.sessions.addUsage(sessionId, usage);
       this.scheduleBackgroundRun({
+        runId: next.runId,
         sessionId,
         agent,
         content: next.content,
@@ -1964,6 +1984,7 @@ export class AgentRouter {
     token?: string;
     content: string;
     sessionKey: string;
+    runId: string;
     agent: AgentConfig;
     session?: Session;
     environment?: EnvironmentConfig;
@@ -1976,6 +1997,7 @@ export class AgentRouter {
         token: args.token,
         content: args.content,
         sessionId: args.sessionKey,
+        runId: args.runId,
         timeoutMs: this.cfg.runTimeoutMs,
         agent: args.agent,
         session: args.session,

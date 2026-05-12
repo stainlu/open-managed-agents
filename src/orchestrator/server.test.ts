@@ -170,7 +170,7 @@ function makeApp(opts: {
       if (!session) {
         throw new RouterError("session_not_found", `session ${args.sessionId} disappeared`);
       }
-      return { session, queued: false };
+      return { session, runId: "run_test", queued: false };
     },
     async streamEvent() {
       throw new Error("streamEvent not implemented in tests");
@@ -319,7 +319,7 @@ async function req(
     body?: unknown;
     headers?: Record<string, string>;
   } = {},
-): Promise<{ status: number; body: unknown }> {
+): Promise<{ status: number; body: unknown; headers: Headers }> {
   const headers: Record<string, string> = { ...(opts.headers ?? {}) };
   if (opts.token) headers.authorization = `Bearer ${opts.token}`;
   if (opts.body !== undefined) headers["content-type"] = "application/json";
@@ -335,7 +335,7 @@ async function req(
   } catch {
     // keep raw text
   }
-  return { status: res.status, body };
+  return { status: res.status, body, headers: res.headers };
 }
 
 describe("model catalog API", () => {
@@ -617,7 +617,7 @@ describe("session ownership in the HTTP API", () => {
           if (!session) {
             throw new RouterError("session_not_found", `session ${args.sessionId} does not exist`);
           }
-          return { session, queued: false };
+          return { session, runId: "run_test", queued: false };
         },
       } as Partial<ServerDeps["router"]>,
     });
@@ -892,6 +892,7 @@ describe("session ownership in the HTTP API", () => {
       },
     });
     expect(first.status).toBe(200);
+    expect(first.headers.get("x-oma-run-id")).toBe("run_test");
 
     const second = await req(app, "/v1/chat/completions", {
       method: "POST",
@@ -1022,6 +1023,7 @@ describe("session ownership in the HTTP API", () => {
       },
     });
     expect(second.status).toBe(200);
+    expect(second.headers.get("x-oma-run-id")).toBe("run_test");
     expect(second.body).toMatchObject({
       model: "test-model",
       choices: [{ message: { role: "assistant", content: "reply:deploy it" } }],
@@ -1040,6 +1042,48 @@ describe("session ownership in the HTTP API", () => {
       "user.message",
       "agent.message",
     ]);
+  });
+
+  it("exposes the managed run id on streaming chat-completions responses", async () => {
+    const { app, store } = makeApp({
+      routerOverrides: {
+        async streamEvent(args: { sessionId: string }) {
+          const session = store.sessions.get(args.sessionId);
+          if (!session) {
+            throw new RouterError("session_not_found", `session ${args.sessionId} does not exist`);
+          }
+          return {
+            session,
+            runId: "run_stream",
+            chunks: (async function* () {
+              yield JSON.stringify({
+                id: "chatcmpl-test",
+                object: "chat.completion.chunk",
+                choices: [{ index: 0, delta: { content: "hello" } }],
+              });
+              yield "[DONE]";
+            })(),
+            abort: async () => {},
+            finalize: async () => {},
+          };
+        },
+      } as Partial<ServerDeps["router"]>,
+    });
+    const agent = createAgent(store);
+
+    const res = await req(app, "/v1/chat/completions", {
+      method: "POST",
+      token: "admin-secret",
+      headers: { "x-openclaw-agent-id": agent.agentId },
+      body: {
+        model: agent.agentId,
+        stream: true,
+        messages: [{ role: "user", content: "hello" }],
+      },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-oma-run-id")).toBe("run_stream");
   });
 
   it("accepts a tool-only chat-completions turn without a final agent.message", async () => {
@@ -1076,7 +1120,7 @@ describe("session ownership in the HTTP API", () => {
           if (!session) {
             throw new RouterError("session_not_found", `session ${args.sessionId} disappeared`);
           }
-          return { session, queued: false };
+          return { session, runId: "run_test", queued: false };
         },
       } as Partial<ServerDeps["router"]>,
     });

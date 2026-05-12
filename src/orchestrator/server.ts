@@ -103,6 +103,7 @@ const SESSION_KEY_RE = /^[a-zA-Z0-9_-]{1,128}$/;
 // occasional 429 retry cascades, short enough to bound client timeouts.
 const CHAT_COMPLETION_TIMEOUT_MS = 10 * 60_000;
 const CHAT_COMPLETION_POLL_MS = 500;
+const OMA_RUN_ID_HEADER = "x-oma-run-id";
 
 export type ServerDeps = {
   agents: AgentStore;
@@ -1558,6 +1559,7 @@ export function buildApp(deps: ServerDeps): Hono {
           status: 200,
           body: {
             session_id: result.session.sessionId,
+            run_id: result.runId,
             session_status: result.session.status,
             queued: result.queued,
           },
@@ -2103,6 +2105,7 @@ export function buildApp(deps: ServerDeps): Hono {
           sessionId: session.sessionId,
           content: lastUserContent,
         });
+        c.header(OMA_RUN_ID_HEADER, handle.runId);
       } catch (err) {
         await cleanupEphemeralOnError();
         if (err instanceof RouterError) {
@@ -2188,11 +2191,12 @@ export function buildApp(deps: ServerDeps): Hono {
     const beforeEventId = beforeOutcome?.eventId;
 
     try {
-      await deps.router.runEvent({
+      const result = await deps.router.runEvent({
         sessionId: session.sessionId,
         content: lastUserContent,
         rejectIfBusy: true,
       });
+      c.header(OMA_RUN_ID_HEADER, result.runId);
     } catch (err) {
       await cleanupEphemeralOnError();
       if (err instanceof RouterError) {
@@ -2393,6 +2397,7 @@ export function buildApp(deps: ServerDeps): Hono {
       });
       return c.json({
         session_id: session.sessionId,
+        run_id: result.runId,
         agent_id: agentId,
         status: result.session.status,
         started_at: result.session.lastEventAt ?? result.session.createdAt,

@@ -66,6 +66,9 @@ Working today:
   events/state, R2 workspace, and Workflow-backed run kickoff.
 - Cloudflare/Flue Worker router, Workflow runner helper, and experimental
   `examples/cloudflare-flue` deployment scaffold.
+- OMA-managed run ids are assigned when a turn is accepted and preserved
+  through session queues, Workflow-backed re-entry, server responses, and Flue
+  run/event mapping.
 - Experimental Flue native harness driver for prompt turns, opt-in via
   `OMA_ENABLE_FLUE_HARNESS=1`, including AbortSignal cancellation for active
   prompt calls, OpenAI-compatible prompt streaming, live managed-event append,

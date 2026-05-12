@@ -20,34 +20,34 @@ function sharedQueueSuite(label: string, build: () => QueueStore) {
 
     it("enqueues and shifts in FIFO order", () => {
       const q = build();
-      q.enqueue("ses_x", { content: "a", enqueuedAt: 1 });
-      q.enqueue("ses_x", { content: "b", enqueuedAt: 2 });
-      q.enqueue("ses_x", { content: "c", enqueuedAt: 3 });
+      q.enqueue("ses_x", { runId: "run_a", content: "a", enqueuedAt: 1 });
+      q.enqueue("ses_x", { runId: "run_b", content: "b", enqueuedAt: 2 });
+      q.enqueue("ses_x", { runId: "run_c", content: "c", enqueuedAt: 3 });
       expect(q.size("ses_x")).toBe(3);
-      expect(q.shift("ses_x")?.content).toBe("a");
-      expect(q.shift("ses_x")?.content).toBe("b");
-      expect(q.shift("ses_x")?.content).toBe("c");
+      expect(q.shift("ses_x")).toMatchObject({ runId: "run_a", content: "a" });
+      expect(q.shift("ses_x")).toMatchObject({ runId: "run_b", content: "b" });
+      expect(q.shift("ses_x")).toMatchObject({ runId: "run_c", content: "c" });
       expect(q.shift("ses_x")).toBeUndefined();
       expect(q.size("ses_x")).toBe(0);
     });
 
     it("isolates queues across sessions", () => {
       const q = build();
-      q.enqueue("ses_a", { content: "alpha", enqueuedAt: 1 });
-      q.enqueue("ses_b", { content: "bravo", enqueuedAt: 2 });
-      q.enqueue("ses_a", { content: "alpha-2", enqueuedAt: 3 });
+      q.enqueue("ses_a", { runId: "run_alpha", content: "alpha", enqueuedAt: 1 });
+      q.enqueue("ses_b", { runId: "run_bravo", content: "bravo", enqueuedAt: 2 });
+      q.enqueue("ses_a", { runId: "run_alpha_2", content: "alpha-2", enqueuedAt: 3 });
       expect(q.size("ses_a")).toBe(2);
       expect(q.size("ses_b")).toBe(1);
-      expect(q.shift("ses_a")?.content).toBe("alpha");
-      expect(q.shift("ses_b")?.content).toBe("bravo");
+      expect(q.shift("ses_a")).toMatchObject({ runId: "run_alpha", content: "alpha" });
+      expect(q.shift("ses_b")).toMatchObject({ runId: "run_bravo", content: "bravo" });
       expect(q.shift("ses_b")).toBeUndefined();
       expect(q.size("ses_a")).toBe(1);
     });
 
     it("clear returns the dropped count", () => {
       const q = build();
-      q.enqueue("ses_x", { content: "a", enqueuedAt: 1 });
-      q.enqueue("ses_x", { content: "b", enqueuedAt: 2 });
+      q.enqueue("ses_x", { runId: "run_clear_a", content: "a", enqueuedAt: 1 });
+      q.enqueue("ses_x", { runId: "run_clear_b", content: "b", enqueuedAt: 2 });
       expect(q.clear("ses_x")).toBe(2);
       expect(q.size("ses_x")).toBe(0);
     });
@@ -55,11 +55,13 @@ function sharedQueueSuite(label: string, build: () => QueueStore) {
     it("preserves the optional model override round-trip", () => {
       const q = build();
       q.enqueue("ses_x", {
+        runId: "run_model",
         content: "override-me",
         model: "anthropic/claude-sonnet-4-6",
         enqueuedAt: 42,
       });
       const out = q.shift("ses_x");
+      expect(out?.runId).toBe("run_model");
       expect(out?.content).toBe("override-me");
       expect(out?.model).toBe("anthropic/claude-sonnet-4-6");
       expect(out?.enqueuedAt).toBe(42);
@@ -68,30 +70,32 @@ function sharedQueueSuite(label: string, build: () => QueueStore) {
     it("preserves the optional thinking override round-trip", () => {
       const q = build();
       q.enqueue("ses_x", {
+        runId: "run_thinking",
         content: "think harder",
         thinkingLevel: "high",
         enqueuedAt: 43,
       });
       const out = q.shift("ses_x");
+      expect(out?.runId).toBe("run_thinking");
       expect(out?.content).toBe("think harder");
       expect(out?.thinkingLevel).toBe("high");
     });
 
     it("peeks without removing the head event", () => {
       const q = build();
-      q.enqueue("ses_x", { content: "a", enqueuedAt: 1 });
-      q.enqueue("ses_x", { content: "b", enqueuedAt: 2 });
-      expect(q.peek("ses_x")?.content).toBe("a");
-      expect(q.peek("ses_x")?.content).toBe("a");
+      q.enqueue("ses_x", { runId: "run_peek_a", content: "a", enqueuedAt: 1 });
+      q.enqueue("ses_x", { runId: "run_peek_b", content: "b", enqueuedAt: 2 });
+      expect(q.peek("ses_x")).toMatchObject({ runId: "run_peek_a", content: "a" });
+      expect(q.peek("ses_x")).toMatchObject({ runId: "run_peek_a", content: "a" });
       expect(q.size("ses_x")).toBe(2);
-      expect(q.shift("ses_x")?.content).toBe("a");
+      expect(q.shift("ses_x")).toMatchObject({ runId: "run_peek_a", content: "a" });
     });
 
     it("listSessionsWithQueued reports sessions with non-empty queues only", () => {
       const q = build();
       expect(q.listSessionsWithQueued()).toEqual([]);
-      q.enqueue("ses_a", { content: "x", enqueuedAt: 1 });
-      q.enqueue("ses_b", { content: "y", enqueuedAt: 2 });
+      q.enqueue("ses_a", { runId: "run_list_a", content: "x", enqueuedAt: 1 });
+      q.enqueue("ses_b", { runId: "run_list_b", content: "y", enqueuedAt: 2 });
       expect(q.listSessionsWithQueued().sort()).toEqual(["ses_a", "ses_b"]);
       q.shift("ses_a");
       expect(q.listSessionsWithQueued()).toEqual(["ses_b"]);
@@ -123,12 +127,13 @@ describe("SqliteQueueStore — durability", () => {
     const path = join(tmpDir, "durable.db");
     const first = new SqliteStore(path);
     first.queue.enqueue("ses_restart", {
+      runId: "run_first",
       content: "survive me",
       model: "moonshot/kimi-k2.5",
       thinkingLevel: "medium",
       enqueuedAt: 1234,
     });
-    first.queue.enqueue("ses_restart", { content: "me too", enqueuedAt: 1235 });
+    first.queue.enqueue("ses_restart", { runId: "run_second", content: "me too", enqueuedAt: 1235 });
     first.close();
 
     // This mirrors the real restart path: a fresh orchestrator process
@@ -140,12 +145,14 @@ describe("SqliteQueueStore — durability", () => {
     expect(second.queue.size("ses_restart")).toBe(2);
 
     const first_ = second.queue.shift("ses_restart");
+    expect(first_?.runId).toBe("run_first");
     expect(first_?.content).toBe("survive me");
     expect(first_?.model).toBe("moonshot/kimi-k2.5");
     expect(first_?.thinkingLevel).toBe("medium");
     expect(first_?.enqueuedAt).toBe(1234);
 
     const second_ = second.queue.shift("ses_restart");
+    expect(second_?.runId).toBe("run_second");
     expect(second_?.content).toBe("me too");
     expect(second_?.model).toBeUndefined();
 

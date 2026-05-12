@@ -17,6 +17,7 @@ import type { ManagedHarnessStateStore } from "./state-store.js";
 export type FlueEnginePromptArgs = {
   content: string;
   sessionId: string;
+  runId?: string;
   timeoutMs: number;
   signal?: AbortSignal;
   agent: AgentConfig;
@@ -238,6 +239,7 @@ export class FlueHarnessAdapter implements HarnessAdapter {
 
   async invokeTurn(args: HarnessTurnInvocationArgs): Promise<HarnessTurnResult> {
     this.assertPromptCallable(args);
+    const runId = args.runId ?? createFallbackRunId();
     const callController = this.startCall(args.sessionId);
     const engine = await this.resolveEngine();
     let result: FlueEnginePromptResult;
@@ -245,6 +247,7 @@ export class FlueHarnessAdapter implements HarnessAdapter {
       result = await engine.prompt({
         content: args.content,
         sessionId: args.sessionId,
+        runId,
         timeoutMs: args.timeoutMs,
         signal: AbortSignal.any([
           callController.signal,
@@ -267,6 +270,7 @@ export class FlueHarnessAdapter implements HarnessAdapter {
       content: args.content,
       output: result.text,
       sessionId: args.sessionId,
+      runId,
       model,
       tokensIn,
       tokensOut,
@@ -283,7 +287,7 @@ export class FlueHarnessAdapter implements HarnessAdapter {
       native: result.native ?? {
         nativeSessionId: args.sessionId,
         nativeThreadId: null,
-        nativeMetadata: { harness: "flue" },
+        nativeMetadata: { harness: "flue", runId },
       },
     };
   }
@@ -292,6 +296,7 @@ export class FlueHarnessAdapter implements HarnessAdapter {
     args: HarnessStreamingTurnInvocationArgs,
   ): Promise<HarnessStreamingTurn> {
     this.assertPromptCallable(args);
+    const runId = args.runId ?? createFallbackRunId();
     const engine = await this.resolveEngine();
     if (!engine.stream) {
       throw new HarnessInvocationError("Flue engine does not expose streaming prompt calls");
@@ -302,6 +307,7 @@ export class FlueHarnessAdapter implements HarnessAdapter {
       stream = await engine.stream({
         content: args.content,
         sessionId: args.sessionId,
+        runId,
         timeoutMs: args.timeoutMs,
         signal: AbortSignal.any([
           callController.signal,
@@ -468,7 +474,8 @@ class OptionalSdkFlueEngine implements FlueEngine {
   ) {}
 
   async prompt(args: FlueEnginePromptArgs): Promise<FlueEnginePromptResult> {
-    const ctx = await this.createContext(args);
+    const runId = args.runId ?? createFallbackRunId();
+    const ctx = await this.createContext({ ...args, runId });
     const events: FlueRuntimeEvent[] = [];
     ctx.setEventCallback((event: FlueRuntimeEvent) => {
       events.push(event);
@@ -494,8 +501,9 @@ class OptionalSdkFlueEngine implements FlueEngine {
   }
 
   async stream(args: FlueEnginePromptArgs): Promise<HarnessStreamingTurn> {
-    const ctx = await this.createContext(args);
-    const turnId = `${Date.now()}_${randomUUID()}`;
+    const runId = args.runId ?? createFallbackRunId();
+    const ctx = await this.createContext({ ...args, runId });
+    const turnId = runId;
     const createdAt = Date.now();
     let eventIndex = 0;
     let output = "";
@@ -511,6 +519,7 @@ class OptionalSdkFlueEngine implements FlueEngine {
       type: "user.message",
       content: args.content,
       createdAt,
+      runId,
     });
 
     ctx.setEventCallback((event: FlueRuntimeEvent) => {
@@ -525,6 +534,7 @@ class OptionalSdkFlueEngine implements FlueEngine {
       const mapped = mapFlueEvent(
         event,
         args.sessionId,
+        runId,
         `evt_flue_${turnId}_runtime_${eventIndex}`,
         createdAt + eventIndex + 1,
       );
@@ -563,7 +573,7 @@ class OptionalSdkFlueEngine implements FlueEngine {
           native: {
             nativeSessionId: args.sessionId,
             nativeThreadId: null,
-            nativeMetadata: { harness: "flue" },
+            nativeMetadata: { harness: "flue", runId },
           },
         };
         liveEvents.push({
@@ -576,6 +586,7 @@ class OptionalSdkFlueEngine implements FlueEngine {
           tokensOut,
           costUsd,
           model,
+          runId,
         });
         chunks.push(openAiFinishChunk({ id: turnId, model }));
         chunks.push("[DONE]");
@@ -608,6 +619,7 @@ class OptionalSdkFlueEngine implements FlueEngine {
     const env = new MemorySessionEnv(args.agent.instructions);
     return internal.createFlueContext({
       id: args.agent.agentId,
+      runId: args.runId ?? createFallbackRunId(),
       payload: { content: args.content, managedSessionId: args.sessionId },
       env: this.passthroughEnv,
       req: undefined,
@@ -987,13 +999,14 @@ function buildManagedEvents(args: {
   content: string;
   output: string;
   sessionId: string;
+  runId?: string;
   model: string;
   tokensIn: number;
   tokensOut: number;
   costUsd: number | undefined;
   flueEvents: FlueRuntimeEvent[];
 }): Event[] {
-  const turnId = `${Date.now()}_${randomUUID()}`;
+  const turnId = args.runId ?? createFallbackRunId();
   const createdAt = Date.now();
   const events: Event[] = [
     {
@@ -1002,11 +1015,13 @@ function buildManagedEvents(args: {
       type: "user.message",
       content: args.content,
       createdAt,
+      runId: args.runId,
     },
   ];
   const runtimeEvents = mapFlueEvents(
     args.flueEvents,
     args.sessionId,
+    args.runId,
     turnId,
     createdAt + 1,
   );
@@ -1021,6 +1036,7 @@ function buildManagedEvents(args: {
     tokensOut: args.tokensOut,
     costUsd: args.costUsd,
     model: args.model,
+    runId: args.runId,
   });
   return events;
 }
@@ -1116,6 +1132,7 @@ function openAiFinishChunk(args: { id: string; model: string }): string {
 function mapFlueEvents(
   flueEvents: FlueRuntimeEvent[],
   sessionId: string,
+  fallbackRunId: string | undefined,
   turnId: string,
   baseTime: number,
 ): Event[] {
@@ -1125,6 +1142,7 @@ function mapFlueEvents(
     const mapped = mapFlueEvent(
       event,
       sessionId,
+      fallbackRunId,
       `evt_flue_${turnId}_runtime_${index}`,
       baseTime + index,
     );
@@ -1137,18 +1155,20 @@ function mapFlueEvents(
 function mapFlueEvent(
   event: FlueRuntimeEvent,
   sessionId: string,
+  fallbackRunId: string | undefined,
   eventId: string,
   createdAt: number,
 ): Event | undefined {
+  const runId = event.runId ?? fallbackRunId;
   switch (event.type) {
     case "run_start":
       return {
         eventId,
         sessionId,
         type: "session.run_start",
-        content: runLifecycleContent("started", event),
+        content: runLifecycleContent("started", event, runId),
         createdAt,
-        runId: event.runId,
+        runId,
         runKind: event.kind,
         parentRunId: event.parentRunId,
         eventIndex: finiteEventIndex(event.eventIndex),
@@ -1158,9 +1178,9 @@ function mapFlueEvent(
         eventId,
         sessionId,
         type: "session.run_end",
-        content: runLifecycleContent("ended", event),
+        content: runLifecycleContent("ended", event, runId),
         createdAt,
-        runId: event.runId,
+        runId,
         runKind: event.kind,
         runStatus: event.status,
         parentRunId: event.parentRunId,
@@ -1238,9 +1258,13 @@ function mapFlueEvent(
   }
 }
 
-function runLifecycleContent(action: "started" | "ended", event: FlueRuntimeEvent): string {
+function runLifecycleContent(
+  action: "started" | "ended",
+  event: FlueRuntimeEvent,
+  runId: string | undefined = event.runId,
+): string {
   const parts = [`Flue run ${action}`];
-  if (event.runId) parts.push(event.runId);
+  if (runId) parts.push(runId);
   const details = [
     event.kind ? `kind=${event.kind}` : undefined,
     event.status ? `status=${event.status}` : undefined,
@@ -1273,6 +1297,10 @@ function objectRecord(value: unknown): Record<string, unknown> | undefined {
 
 function nonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function createFallbackRunId(): string {
+  return `run_${randomUUID().replace(/-/g, "")}`;
 }
 
 function modelId(model: string | { id?: string } | undefined): string | undefined {

@@ -68,6 +68,10 @@ function parseQueuedThinkingLevel(value: string | null): ThinkingLevel | undefin
   return THINKING_LEVELS.has(value) ? (value as ThinkingLevel) : undefined;
 }
 
+function legacyQueuedRunId(rowId: number): string {
+  return `run_legacy_${rowId}`;
+}
+
 // ---------- Row shapes ----------
 
 type AgentRow = {
@@ -354,6 +358,7 @@ CREATE TABLE IF NOT EXISTS kv_secrets (
 -- head. No explicit per-session seq column needed.
 CREATE TABLE IF NOT EXISTS queued_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
   session_id TEXT NOT NULL,
   content TEXT NOT NULL,
   model TEXT,
@@ -1378,8 +1383,8 @@ class SqliteQueueStore implements QueueStore {
 
   constructor(db: SyncSqlDatabaseLike) {
     this.insertStmt = db.prepare(
-      `INSERT INTO queued_events (session_id, content, model, thinking_level, enqueued_at)
-       VALUES (@session_id, @content, @model, @thinking_level, @enqueued_at)`,
+      `INSERT INTO queued_events (run_id, session_id, content, model, thinking_level, enqueued_at)
+       VALUES (@run_id, @session_id, @content, @model, @thinking_level, @enqueued_at)`,
     );
     // Head-of-queue is the lowest id for a session. Peek-then-delete is a
     // two-statement shift; both run inside the same sync better-sqlite3
@@ -1387,7 +1392,7 @@ class SqliteQueueStore implements QueueStore {
     // are naturally serialized. Cross-process contention is out of scope
     // (the orchestrator is still single-process by design).
     this.peekStmt = db.prepare(
-      `SELECT id, content, model, thinking_level, enqueued_at
+      `SELECT id, run_id, content, model, thinking_level, enqueued_at
        FROM queued_events WHERE session_id = ?
        ORDER BY id ASC LIMIT 1`,
     );
@@ -1403,6 +1408,7 @@ class SqliteQueueStore implements QueueStore {
 
   enqueue(sessionId: string, event: QueuedEvent): void {
     this.insertStmt.run({
+      run_id: event.runId,
       session_id: sessionId,
       content: event.content,
       model: event.model ?? null,
@@ -1415,6 +1421,7 @@ class SqliteQueueStore implements QueueStore {
     const row = this.peekStmt.get(sessionId) as
       | {
           id: number;
+          run_id: string | null;
           content: string;
           model: string | null;
           thinking_level: string | null;
@@ -1423,6 +1430,7 @@ class SqliteQueueStore implements QueueStore {
       | undefined;
     if (!row) return undefined;
     return {
+      runId: row.run_id ?? legacyQueuedRunId(row.id),
       content: row.content,
       model: row.model ?? undefined,
       thinkingLevel: parseQueuedThinkingLevel(row.thinking_level),
@@ -1434,6 +1442,7 @@ class SqliteQueueStore implements QueueStore {
     const row = this.peekStmt.get(sessionId) as
       | {
           id: number;
+          run_id: string | null;
           content: string;
           model: string | null;
           thinking_level: string | null;
@@ -1443,6 +1452,7 @@ class SqliteQueueStore implements QueueStore {
     if (!row) return undefined;
     this.deleteByIdStmt.run(row.id);
     return {
+      runId: row.run_id ?? legacyQueuedRunId(row.id),
       content: row.content,
       model: row.model ?? undefined,
       thinkingLevel: parseQueuedThinkingLevel(row.thinking_level),
@@ -2025,6 +2035,10 @@ export class SqliteStore implements Store {
     }>;
     if (queueCols.length > 0 && !queueCols.some((c) => c.name === "thinking_level")) {
       this.db.exec("ALTER TABLE queued_events ADD COLUMN thinking_level TEXT");
+    }
+    if (queueCols.length > 0 && !queueCols.some((c) => c.name === "run_id")) {
+      this.db.exec("ALTER TABLE queued_events ADD COLUMN run_id TEXT");
+      this.db.exec("UPDATE queued_events SET run_id = 'run_legacy_' || id WHERE run_id IS NULL");
     }
     this.migrateSessionStatusConstraint();
 

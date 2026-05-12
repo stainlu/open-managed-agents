@@ -48,7 +48,7 @@ describe("DurableObjectSqlStore", () => {
       tokensOut: 5,
       costUsd: 0.0002,
     });
-    store.queue.enqueue(session.sessionId, { content: "next", enqueuedAt: 1234 });
+    store.queue.enqueue(session.sessionId, { runId: "run_next", content: "next", enqueuedAt: 1234 });
     store.secrets.set("parent", Buffer.from("secret"));
 
     expect(store.agents.get(agent.agentId)?.model).toBe("anthropic/claude-haiku-4-5");
@@ -61,6 +61,7 @@ describe("DurableObjectSqlStore", () => {
       costUsd: 0.0002,
     });
     expect(store.queue.shift(session.sessionId)).toEqual({
+      runId: "run_next",
       content: "next",
       enqueuedAt: 1234,
     });
