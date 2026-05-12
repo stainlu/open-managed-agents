@@ -115,6 +115,11 @@ Done in OMA:
   loads Flue runtime helpers from `@flue/core` when available and falls back to
   legacy `@flue/sdk`, matching Flue's package split direction without forcing
   OMA users onto an unreleased package.
+- The Flue SDK bridge now has real persistence coverage against Flue itself:
+  a prompt turn stores Flue `SessionData` through OMA's
+  `ManagedHarnessStateStore`, and a fresh adapter instance reloads the same
+  managed session before appending another turn. This proves the bridge is not
+  only wrapping the store API; the real Flue session path uses it.
 - The Cloudflare Flue stack can now register the Workers AI binding with
   Flue's native `cloudflare/<model>` provider prefix. The example declares
   `[ai] binding = "AI"` and passes the binding through OMA instead of relying
@@ -407,6 +412,8 @@ workspace ids into the public session identity.
    - Route OMA prompt cancellation into Flue's native `AbortSignal` path.
    - Persist Flue session data through OMA-managed local harness state instead
      of process memory.
+   - Prove the real Flue SDK bridge saves and reloads session data through
+     OMA-managed harness state across fresh adapter instances.
    - Stream Flue prompt text deltas as OpenAI-compatible chat chunks and append
      live OMA events during streamed turns.
    - Add a D1-compatible managed harness-state backend for cloud placement.

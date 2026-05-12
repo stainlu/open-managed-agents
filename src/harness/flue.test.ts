@@ -161,6 +161,99 @@ describe("FlueHarnessAdapter", () => {
     );
   });
 
+  it("persists real Flue SDK session state through the OMA harness store", async () => {
+    const saved = new Map<string, unknown>();
+    const loads: Array<Parameters<ManagedHarnessStateStore["load"]>[0]> = [];
+    const saves: Array<Parameters<ManagedHarnessStateStore["save"]>[0]> = [];
+    const stateStore: ManagedHarnessStateStore = {
+      async save(args) {
+        saves.push(args);
+        saved.set(JSON.stringify({
+          harnessId: args.harnessId,
+          agentId: args.agentId,
+          sessionId: args.sessionId,
+          key: args.key,
+        }), args.value);
+      },
+      async load(args) {
+        loads.push(args);
+        return saved.get(JSON.stringify(args)) ?? null;
+      },
+      async delete(args) {
+        saved.delete(JSON.stringify(args));
+      },
+      async deleteBySession() {},
+    };
+    let responseIndex = 0;
+    const run = vi.fn(async () => {
+      const index = responseIndex++;
+      return new Response([
+        `data: ${JSON.stringify({
+          id: `chatcmpl_fake_${index}`,
+          model: "@cf/openai/gpt-oss-20b",
+          choices: [{ delta: { content: `hi ${index}` }, finish_reason: null }],
+        })}`,
+        "",
+        `data: ${JSON.stringify({
+          id: `chatcmpl_fake_${index}`,
+          model: "@cf/openai/gpt-oss-20b",
+          choices: [{ delta: {}, finish_reason: "stop" }],
+          usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+        })}`,
+        "",
+        "data: [DONE]",
+        "",
+      ].join("\n"), {
+        headers: { "content-type": "text/event-stream" },
+      });
+    });
+    const cfg = agent({ model: "cloudflare-state-test/@cf/openai/gpt-oss-20b" });
+
+    const firstAdapter = new FlueHarnessAdapter({
+      cloudflareAiBinding: { run },
+      cloudflareAiProviderPrefix: "cloudflare-state-test",
+      sessionStateStore: stateStore,
+    });
+    const first = await firstAdapter.invokeTurn({
+      content: "first",
+      sessionId: "ses_flue_state",
+      timeoutMs: 60_000,
+      agent: cfg,
+    });
+    expect(first.output).toBe("hi 0");
+    const firstPersisted = saves.at(-1)?.value;
+    expect(sessionEntryCount(firstPersisted)).toBeGreaterThanOrEqual(2);
+
+    const secondAdapter = new FlueHarnessAdapter({
+      cloudflareAiBinding: { run },
+      cloudflareAiProviderPrefix: "cloudflare-state-test",
+      sessionStateStore: stateStore,
+    });
+    const second = await secondAdapter.invokeTurn({
+      content: "second",
+      sessionId: "ses_flue_state",
+      timeoutMs: 60_000,
+      agent: cfg,
+    });
+
+    expect(second.output).toBe("hi 1");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(loads).toContainEqual(expect.objectContaining({
+      harnessId: "flue",
+      agentId: "agt_flue",
+      sessionId: "ses_flue_state",
+    }));
+    expect(saves).toContainEqual(expect.objectContaining({
+      harnessId: "flue",
+      agentId: "agt_flue",
+      sessionId: "ses_flue_state",
+      key: expect.stringContaining("ses_flue_state"),
+    }));
+    expect(sessionEntryCount(saves.at(-1)?.value)).toBeGreaterThan(
+      sessionEntryCount(firstPersisted),
+    );
+  });
+
   it("runs prompt turns through an injected native Flue engine", async () => {
     const prompt = vi.fn<FlueEngine["prompt"]>(async (args) => ({
       text: `echo: ${args.content}`,
@@ -577,3 +670,9 @@ describe("FlueManagedSessionStore", () => {
     await expect(store.load("agent:agt_1:task:ses_1:t1")).resolves.toBeNull();
   });
 });
+
+function sessionEntryCount(value: unknown): number {
+  if (!value || typeof value !== "object") return 0;
+  const entries = (value as { entries?: unknown }).entries;
+  return Array.isArray(entries) ? entries.length : 0;
+}
