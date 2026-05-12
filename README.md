@@ -77,7 +77,8 @@ Working today:
   prompt calls, OpenAI-compatible prompt streaming, live managed-event append,
   OMA-managed local Flue session persistence, and OMA-managed provider secret
   mapping into Flue provider configuration, including Cloudflare Workers AI
-  binding registration for `cloudflare/<model>`.
+  binding registration for `cloudflare/<model>`. The bridge prefers Flue's
+  runtime package name `@flue/core` and falls back to legacy `@flue/sdk`.
 - Experimental Hermes adapter runtime via direct `AIAgent` integration.
 - Experimental Codex adapter runtime via `codex app-server`.
 - Experimental Claude Agent SDK adapter runtime via `@anthropic-ai/claude-agent-sdk`.

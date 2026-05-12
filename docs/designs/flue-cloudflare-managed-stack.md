@@ -111,7 +111,10 @@ Done in OMA:
   Cloudflare secrets such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and
   `MOONSHOT_API_KEY` are treated as managed harness configuration rather than
   relying on ambient `process.env`. Deployments can also pass
-  `OMA_FLUE_PROVIDER_CONFIG_JSON` for gateway/base URL overrides.
+  `OMA_FLUE_PROVIDER_CONFIG_JSON` for gateway/base URL overrides. The bridge
+  loads Flue runtime helpers from `@flue/core` when available and falls back to
+  legacy `@flue/sdk`, matching Flue's package split direction without forcing
+  OMA users onto an unreleased package.
 - The Cloudflare Flue stack can now register the Workers AI binding with
   Flue's native `cloudflare/<model>` provider prefix. The example declares
   `[ai] binding = "AI"` and passes the binding through OMA instead of relying

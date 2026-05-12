@@ -653,14 +653,11 @@ class OptionalSdkFlueEngine implements FlueEngine {
 
   private async loadInternal(): Promise<FlueInternalModule> {
     if (!this.internalPromise) {
-      this.internalPromise = import("@flue/sdk/internal")
-        .then((mod) => validateFlueInternalModule(mod))
-        .catch((err) => {
-          const message = err instanceof Error ? err.message : String(err);
-          throw new HarnessInvocationError(
-            `Flue harness requires @flue/sdk to be installed and resolvable at runtime: ${message}`,
-          );
-        });
+      this.internalPromise = importFlueModule(
+        "internal",
+        validateFlueInternalModule,
+        "runtime helpers",
+      );
     }
     return this.internalPromise;
   }
@@ -700,28 +697,22 @@ class OptionalSdkFlueEngine implements FlueEngine {
 
   private async loadApp(): Promise<FlueAppModule> {
     if (!this.appPromise) {
-      this.appPromise = import("@flue/sdk/app")
-        .then((mod) => validateFlueAppModule(mod))
-        .catch((err) => {
-          const message = err instanceof Error ? err.message : String(err);
-          throw new HarnessInvocationError(
-            `Flue harness requires @flue/sdk/app to configure model providers at runtime: ${message}`,
-          );
-        });
+      this.appPromise = importFlueModule(
+        "app",
+        validateFlueAppModule,
+        "provider configuration helpers",
+      );
     }
     return this.appPromise;
   }
 
   private async loadCloudflare(): Promise<FlueCloudflareModule> {
     if (!this.cloudflarePromise) {
-      this.cloudflarePromise = import("@flue/sdk/cloudflare")
-        .then((mod) => validateFlueCloudflareModule(mod))
-        .catch((err) => {
-          const message = err instanceof Error ? err.message : String(err);
-          throw new HarnessInvocationError(
-            `Flue harness requires @flue/sdk/cloudflare to register Cloudflare AI bindings: ${message}`,
-          );
-        });
+      this.cloudflarePromise = importFlueModule(
+        "cloudflare",
+        validateFlueCloudflareModule,
+        "Cloudflare AI binding helpers",
+      );
     }
     return this.cloudflarePromise;
   }
@@ -823,6 +814,26 @@ type FlueCallHandle = PromiseLike<FluePromptResponseLike> & {
   signal?: AbortSignal;
   abort?: (reason?: unknown) => void;
 };
+
+async function importFlueModule<T>(
+  subpath: "app" | "cloudflare" | "internal",
+  validate: (mod: unknown) => T,
+  purpose: string,
+): Promise<T> {
+  const specifiers = [`@flue/core/${subpath}`, `@flue/sdk/${subpath}`];
+  const failures: string[] = [];
+  for (const specifier of specifiers) {
+    try {
+      return validate(await import(specifier));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      failures.push(`${specifier}: ${message}`);
+    }
+  }
+  throw new HarnessInvocationError(
+    `Flue harness requires @flue/core/${subpath} or legacy @flue/sdk/${subpath} for ${purpose}: ${failures.join("; ")}`,
+  );
+}
 
 function validateFlueInternalModule(mod: unknown): FlueInternalModule {
   const candidate = mod as Partial<FlueInternalModule>;
