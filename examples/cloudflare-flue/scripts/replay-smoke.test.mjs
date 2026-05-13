@@ -66,6 +66,8 @@ describe("replay-smoke", () => {
       statePath,
       "--report",
       reportPath,
+      "--restart-evidence",
+      "test process restart boundary",
     ]);
 
     expect(verify.stdout).toContain("PASS replay verify");
@@ -80,6 +82,7 @@ describe("replay-smoke", () => {
       phase: "verify",
       target: "https://fake-oma.example",
       status: "passed",
+      restart_evidence: "test process restart boundary",
       resources: {
         agent_id: "agt_replay",
         session_id: "ses_replay",

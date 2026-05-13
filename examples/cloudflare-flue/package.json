@@ -16,6 +16,7 @@
     "smoke:replay:seed": "node scripts/replay-smoke.mjs --phase seed",
     "smoke:replay:verify": "node scripts/replay-smoke.mjs --phase verify",
     "smoke:verify-report": "node scripts/verify-promotion-report.mjs",
+    "smoke:verify-replay-report": "node scripts/verify-replay-report.mjs",
     "types": "wrangler types"
   },
   "dependencies": {

@@ -52,7 +52,8 @@ Implemented:
   workspace files.
 - Two-phase replay smoke that can seed deployed OMA state before a real
   operator/CI restart or Durable Object hibernation, then verify that same
-  state afterward.
+  state afterward. The replay report verifier requires the restart/hibernation
+  action to be recorded before the report can count as evidence.
 
 Not yet promoted:
 
@@ -148,12 +149,16 @@ real deployed Worker URL:
    ```bash
    OMA_CLOUDFLARE_FLUE_BASE_URL=https://oma-cloudflare-flue.<account>.workers.dev \
    OMA_API_TOKEN=replace-with-worker-token \
-   pnpm smoke:replay:verify -- --state ./replay-state.json --report ./replay-report.json
+   pnpm smoke:replay:verify -- --state ./replay-state.json --report ./replay-report.json \
+     --restart-evidence "wrangler deploy completed at 2026-05-14T00:00:00Z"
+   pnpm smoke:verify-replay-report -- ./replay-report.json
    ```
 
    The seed state and verify report are promotion evidence only if the operator
    or CI records the actual restart/hibernation action between those commands.
-   Running seed and verify back-to-back is only a rehearsal.
+   The replay report verifier requires that recorded action as
+   `restart_evidence`. Running seed and verify back-to-back is only a
+   rehearsal.
 
    Local fake-Durable-Object tests do not count for this gate.
 

@@ -15,6 +15,7 @@ const pollMs = positiveInt(opts["poll-ms"] ?? process.env.OMA_REPLAY_POLL_MS, 1_
 const allowLocalReplay = boolOpt(opts["allow-local-replay"] ?? process.env.OMA_REPLAY_ALLOW_LOCAL);
 const keep = boolOpt(opts.keep ?? process.env.OMA_REPLAY_KEEP);
 const reportPath = opts.report ?? process.env.OMA_REPLAY_REPORT_PATH;
+const restartEvidence = opts["restart-evidence"] ?? process.env.OMA_REPLAY_RESTART_EVIDENCE;
 const startedAt = new Date().toISOString();
 const checks = [];
 const cleanup = [];
@@ -372,6 +373,7 @@ async function writeReport(status, err) {
     started_at: startedAt,
     finished_at: new Date().toISOString(),
     status,
+    restart_evidence: phase === "verify" ? restartEvidence : undefined,
     checks,
     resources: {
       agent_id: state?.agent_id,

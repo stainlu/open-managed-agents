@@ -98,7 +98,9 @@ Working today:
   projection, workspace listings, and workspace file content.
 - The Cloudflare/Flue example includes a two-phase live replay smoke so a real
   deployment can seed OMA state before an operator/CI-triggered restart or
-  Durable Object hibernation, then verify the same public state afterward.
+  Durable Object hibernation, then verify the same public state afterward. A
+  replay-report verifier requires the real restart/hibernation action to be
+  recorded before the report can count as promotion evidence.
 - OMA-managed run ids are assigned when a turn is accepted and preserved
   through session queues, Workflow-backed re-entry, server responses, and Flue
   run/event mapping.
