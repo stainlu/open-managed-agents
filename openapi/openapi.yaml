@@ -866,7 +866,7 @@ components:
     HarnessId:
       type: string
       pattern: "^[a-z0-9][a-z0-9._-]*$"
-      examples: [openclaw, hermes, codex, claude-agent-sdk]
+      examples: [openclaw, hermes, codex, claude-agent-sdk, flue]
     HarnessCapability:
       type: object
       required: [support, detail]
