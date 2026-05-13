@@ -49,6 +49,18 @@ pnpm wrangler r2 bucket create oma-cloudflare-flue-workspace-preview
 
 Copy the returned D1 `database_id` into `wrangler.toml`.
 
+For CI promotion runs that should redeploy the Worker, keep the checked-in
+`wrangler.toml` portable and patch the deployment copy from secrets:
+
+```bash
+OMA_CLOUDFLARE_FLUE_D1_DATABASE_ID=<database-id> pnpm configure:bindings
+```
+
+Optional overrides are available for teams that do not use the example
+resource names: `OMA_CLOUDFLARE_FLUE_D1_DATABASE_NAME`,
+`OMA_CLOUDFLARE_FLUE_R2_BUCKET_NAME`, and
+`OMA_CLOUDFLARE_FLUE_R2_PREVIEW_BUCKET_NAME`.
+
 Run the local preflight before dry-run/deploy:
 
 ```bash
@@ -292,7 +304,11 @@ The same evidence path is available as the manual GitHub Actions workflow
 `cloudflare promotion`. It targets an already deployed Worker URL, runs the
 promotion smoke, uploads the JSON reports, and can optionally run `wrangler
 deploy` between replay seed and verify to prove replay across a real deployment
-boundary.
+boundary. For that redeploy path, set `OMA_CLOUDFLARE_FLUE_D1_DATABASE_ID` as
+a repository secret. If your deployment uses non-example resource names, also
+set `OMA_CLOUDFLARE_FLUE_D1_DATABASE_NAME`,
+`OMA_CLOUDFLARE_FLUE_R2_BUCKET_NAME`, and
+`OMA_CLOUDFLARE_FLUE_R2_PREVIEW_BUCKET_NAME`.
 
 The verify phase rereads the seeded session metadata, managed run record, event
 history, run-tree projection, workspace listing, and workspace file content

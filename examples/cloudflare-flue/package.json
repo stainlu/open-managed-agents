@@ -6,6 +6,7 @@
     "deploy": "wrangler deploy",
     "dry-run": "wrangler deploy --dry-run",
     "dev": "wrangler dev",
+    "configure:bindings": "node scripts/configure-bindings.mjs",
     "preflight": "node scripts/preflight.mjs",
     "preflight:secrets": "node scripts/preflight.mjs --require-secrets",
     "smoke": "node scripts/smoke.mjs",

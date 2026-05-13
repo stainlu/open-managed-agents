@@ -174,6 +174,12 @@ real deployed Worker URL:
    - `OMA_CLOUDFLARE_FLUE_API_TOKEN` as the deployed Worker's `OMA_API_TOKEN`.
    - `CLOUDFLARE_API_TOKEN` and, when your Wrangler account setup requires it,
      `CLOUDFLARE_ACCOUNT_ID` if `redeploy_for_replay=true`.
+   - `OMA_CLOUDFLARE_FLUE_D1_DATABASE_ID` if `redeploy_for_replay=true`, so
+     the workflow can patch the checked-in example `wrangler.toml` before
+     dry-run/deploy. Optional resource-name overrides are
+     `OMA_CLOUDFLARE_FLUE_D1_DATABASE_NAME`,
+     `OMA_CLOUDFLARE_FLUE_R2_BUCKET_NAME`, and
+     `OMA_CLOUDFLARE_FLUE_R2_PREVIEW_BUCKET_NAME`.
    - `target_url` as the deployed Worker URL.
 
    If `redeploy_for_replay=false`, provide `restart_evidence` describing the

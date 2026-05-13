@@ -43,6 +43,10 @@ jobs:
       OMA_REPLAY_MODEL: ${{ inputs.model }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      OMA_CLOUDFLARE_FLUE_D1_DATABASE_ID: ${{ secrets.OMA_CLOUDFLARE_FLUE_D1_DATABASE_ID }}
+      OMA_CLOUDFLARE_FLUE_D1_DATABASE_NAME: ${{ secrets.OMA_CLOUDFLARE_FLUE_D1_DATABASE_NAME }}
+      OMA_CLOUDFLARE_FLUE_R2_BUCKET_NAME: ${{ secrets.OMA_CLOUDFLARE_FLUE_R2_BUCKET_NAME }}
+      OMA_CLOUDFLARE_FLUE_R2_PREVIEW_BUCKET_NAME: ${{ secrets.OMA_CLOUDFLARE_FLUE_R2_PREVIEW_BUCKET_NAME }}
 
     steps:
       - name: Checkout
@@ -103,6 +107,13 @@ jobs:
             echo "::error::Set CLOUDFLARE_API_TOKEN to use redeploy_for_replay."
             exit 1
           fi
+          if [ -z "$OMA_CLOUDFLARE_FLUE_D1_DATABASE_ID" ]; then
+            echo "::error::Set OMA_CLOUDFLARE_FLUE_D1_DATABASE_ID to use redeploy_for_replay."
+            exit 1
+          fi
+          pnpm configure:bindings
+          pnpm preflight -- --skip-secrets
+          pnpm dry-run
           pnpm deploy
           printf 'OMA_REPLAY_RESTART_EVIDENCE=github-actions wrangler deploy run %s attempt %s sha %s at %s\n' \
             "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_SHA" "$(date -u +%FT%TZ)" >> "$GITHUB_ENV"
