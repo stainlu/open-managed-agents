@@ -33,6 +33,7 @@
 #   OMA_FEATURE_REQUIRE=1 ./test/e2e-feature-matrix.sh
 #   OMA_FEATURE_TEST_CANCEL=1 ./test/e2e-feature-matrix.sh
 #   OMA_FEATURE_TEST_APPROVAL=1 ./test/e2e-feature-matrix.sh
+#   OMA_API_TOKEN=... ./test/e2e-feature-matrix.sh
 #
 # Without OMA_FEATURE_REQUIRE=1, harnesses whose provider key is not visible in
 # the local test shell are skipped. With OMA_FEATURE_REQUIRE=1, the script runs
@@ -51,6 +52,12 @@ REQUIRE="${OMA_FEATURE_REQUIRE:-0}"
 TEST_CANCEL="${OMA_FEATURE_TEST_CANCEL:-0}"
 CANCEL_DELAY_SEC="${OMA_FEATURE_CANCEL_DELAY_SEC:-1}"
 TEST_APPROVAL="${OMA_FEATURE_TEST_APPROVAL:-0}"
+API_TOKEN="${OPENCLAW_API_TOKEN:-${OMA_API_TOKEN:-}}"
+AUTH_HEADER_ARGS=()
+if [[ -n "${API_TOKEN}" ]]; then
+  AUTH_HEADER_ARGS=(-H "Authorization: Bearer ${API_TOKEN}")
+  echo "[e2e-feature-matrix] using Authorization header from OPENCLAW_API_TOKEN/OMA_API_TOKEN"
+fi
 
 CREATED_SESSIONS=()
 CREATED_AGENTS=()
@@ -83,33 +90,21 @@ trap cleanup EXIT
 
 delete_resource() {
   local path="$1"
-  if [[ -n "${OPENCLAW_API_TOKEN:-}" ]]; then
-    curl --silent -X DELETE \
-      -H "Authorization: Bearer ${OPENCLAW_API_TOKEN}" \
-      "${BASE_URL}${path}" >/dev/null 2>&1
-  else
-    curl --silent -X DELETE "${BASE_URL}${path}" >/dev/null 2>&1
-  fi
+  curl --silent -X DELETE \
+    "${AUTH_HEADER_ARGS[@]}" \
+    "${BASE_URL}${path}" >/dev/null 2>&1
 }
 
 curl_json() {
   local method="$1"
   local path="$2"
   shift 2
-  if [[ -n "${OPENCLAW_API_TOKEN:-}" ]]; then
-    curl --silent --show-error --fail \
-      -X "${method}" \
-      -H "Authorization: Bearer ${OPENCLAW_API_TOKEN}" \
-      -H "Content-Type: application/json" \
-      "${BASE_URL}${path}" \
-      "$@"
-  else
-    curl --silent --show-error --fail \
-      -X "${method}" \
-      -H "Content-Type: application/json" \
-      "${BASE_URL}${path}" \
-      "$@"
-  fi
+  curl --silent --show-error --fail \
+    -X "${method}" \
+    "${AUTH_HEADER_ARGS[@]}" \
+    -H "Content-Type: application/json" \
+    "${BASE_URL}${path}" \
+    "$@"
 }
 
 curl_json_status() {
@@ -117,24 +112,14 @@ curl_json_status() {
   local path="$2"
   local out="$3"
   shift 3
-  if [[ -n "${OPENCLAW_API_TOKEN:-}" ]]; then
-    curl --silent --show-error \
-      -o "${out}" \
-      -w "%{http_code}" \
-      -X "${method}" \
-      -H "Authorization: Bearer ${OPENCLAW_API_TOKEN}" \
-      -H "Content-Type: application/json" \
-      "${BASE_URL}${path}" \
-      "$@"
-  else
-    curl --silent --show-error \
-      -o "${out}" \
-      -w "%{http_code}" \
-      -X "${method}" \
-      -H "Content-Type: application/json" \
-      "${BASE_URL}${path}" \
-      "$@"
-  fi
+  curl --silent --show-error \
+    -o "${out}" \
+    -w "%{http_code}" \
+    -X "${method}" \
+    "${AUTH_HEADER_ARGS[@]}" \
+    -H "Content-Type: application/json" \
+    "${BASE_URL}${path}" \
+    "$@"
 }
 
 wait_for_health() {
@@ -187,6 +172,14 @@ cap_support() {
     '.harnesses[]? | select(.harness_id == $h) | .capabilities[$c].support // "missing"'
 }
 
+harness_runtime_mode() {
+  local catalog="$1"
+  local harness="$2"
+  echo "${catalog}" | jq -r \
+    --arg h "${harness}" \
+    '.harnesses[]? | select(.harness_id == $h) | .runtime_mode // "missing"'
+}
+
 assert_harness_registered() {
   local catalog="$1"
   local harness="$2"
@@ -204,6 +197,21 @@ expect_capability_present() {
   case "${support}" in
     supported|partial|unsupported) return 0 ;;
     *) die "${harness}: capability ${capability} missing from /v1/harnesses" ;;
+  esac
+}
+
+expect_runtime_mode_present() {
+  local catalog="$1"
+  local harness="$2"
+  local mode
+  mode="$(harness_runtime_mode "${catalog}" "${harness}")"
+  case "${mode}" in
+    container|native)
+      say "${harness}: runtime_mode=${mode}"
+      ;;
+    *)
+      die "${harness}: runtime_mode missing or invalid in /v1/harnesses: ${mode}"
+      ;;
   esac
 }
 
@@ -520,28 +528,16 @@ run_streaming_check() {
       }]
     }')"
 
-  if [[ -n "${OPENCLAW_API_TOKEN:-}" ]]; then
-    status="$(curl --silent --show-error \
-      -o "${out}" \
-      -w "%{http_code}" \
-      -X POST \
-      -H "Authorization: Bearer ${OPENCLAW_API_TOKEN}" \
-      -H "Content-Type: application/json" \
-      -H "x-openclaw-agent-id: ${agent_id}" \
-      -H "x-openclaw-session-key: ${session_key}" \
-      "${BASE_URL}/v1/chat/completions" \
-      -d "${body}")"
-  else
-    status="$(curl --silent --show-error \
-      -o "${out}" \
-      -w "%{http_code}" \
-      -X POST \
-      -H "Content-Type: application/json" \
-      -H "x-openclaw-agent-id: ${agent_id}" \
-      -H "x-openclaw-session-key: ${session_key}" \
-      "${BASE_URL}/v1/chat/completions" \
-      -d "${body}")"
-  fi
+  status="$(curl --silent --show-error \
+    -o "${out}" \
+    -w "%{http_code}" \
+    -X POST \
+    "${AUTH_HEADER_ARGS[@]}" \
+    -H "Content-Type: application/json" \
+    -H "x-openclaw-agent-id: ${agent_id}" \
+    -H "x-openclaw-session-key: ${session_key}" \
+    "${BASE_URL}/v1/chat/completions" \
+    -d "${body}")"
   CREATED_SESSIONS+=("${session_key}")
   [[ "${status}" == "200" ]] \
     || die "${harness}: stream=true returned HTTP ${status}: $(cat "${out}")"
@@ -566,28 +562,16 @@ chat_completion_status() {
       messages: [{role: "user", content: $content}]
     }')"
 
-  if [[ -n "${OPENCLAW_API_TOKEN:-}" ]]; then
-    curl --silent --show-error \
-      -o "${out}" \
-      -w "%{http_code}" \
-      -X POST \
-      -H "Authorization: Bearer ${OPENCLAW_API_TOKEN}" \
-      -H "Content-Type: application/json" \
-      -H "x-openclaw-agent-id: ${agent_id}" \
-      -H "x-openclaw-session-key: ${session_key}" \
-      "${BASE_URL}/v1/chat/completions" \
-      -d "${body}"
-  else
-    curl --silent --show-error \
-      -o "${out}" \
-      -w "%{http_code}" \
-      -X POST \
-      -H "Content-Type: application/json" \
-      -H "x-openclaw-agent-id: ${agent_id}" \
-      -H "x-openclaw-session-key: ${session_key}" \
-      "${BASE_URL}/v1/chat/completions" \
-      -d "${body}"
-  fi
+  curl --silent --show-error \
+    -o "${out}" \
+    -w "%{http_code}" \
+    -X POST \
+    "${AUTH_HEADER_ARGS[@]}" \
+    -H "Content-Type: application/json" \
+    -H "x-openclaw-agent-id: ${agent_id}" \
+    -H "x-openclaw-session-key: ${session_key}" \
+    "${BASE_URL}/v1/chat/completions" \
+    -d "${body}"
 }
 
 chat_completion_text() {
@@ -642,14 +626,9 @@ run_chat_resume_check() {
 start_event_stream() {
   local session_id="$1"
   local out="$2"
-  if [[ -n "${OPENCLAW_API_TOKEN:-}" ]]; then
-    curl --silent --no-buffer \
-      -H "Authorization: Bearer ${OPENCLAW_API_TOKEN}" \
-      "${BASE_URL}/v1/sessions/${session_id}/events?stream=true" >"${out}" 2>&1 &
-  else
-    curl --silent --no-buffer \
-      "${BASE_URL}/v1/sessions/${session_id}/events?stream=true" >"${out}" 2>&1 &
-  fi
+  curl --silent --no-buffer \
+    "${AUTH_HEADER_ARGS[@]}" \
+    "${BASE_URL}/v1/sessions/${session_id}/events?stream=true" >"${out}" 2>&1 &
   echo "$!"
 }
 
@@ -938,7 +917,8 @@ run_harness_matrix() {
   safe_harness="$(safe_harness_name "${harness}")"
   run_id="$(date +%s)"
 
-  say "${harness}: checking catalog capabilities"
+  say "${harness}: checking catalog runtime mode and capabilities"
+  expect_runtime_mode_present "${catalog}" "${harness}"
   for cap in \
     start_turn \
     streaming \
