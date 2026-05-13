@@ -73,8 +73,15 @@ async function main() {
   try {
     const health = await request("GET", "/healthz", { auth: false });
     assert(health.ok === true, "/healthz did not return ok=true");
-    recordCheck("health", { version: health.version ?? "unknown" });
-    console.log(`ok health version=${health.version ?? "unknown"}`);
+    assertNoPlatformIds(health, "health response");
+    if (promotion) assertCloudflareRuntimeReady(health.runtime);
+    recordCheck("health", {
+      version: health.version ?? "unknown",
+      runtime: runtimeEvidence(health.runtime),
+    });
+    console.log(
+      `ok health version=${health.version ?? "unknown"} runtime=${health.runtime?.stack ?? "unknown"}`,
+    );
 
     const harnesses = await request("GET", "/v1/harnesses");
     assert(
@@ -569,6 +576,30 @@ function findRunNode(nodes, runId) {
 function assertNoPlatformIds(value, label) {
   const bad = findPlatformIdKey(value);
   assert(!bad, `${label} leaks platform id key ${bad}`);
+}
+
+function assertCloudflareRuntimeReady(runtime) {
+  assert(runtime && typeof runtime === "object", "health runtime block is missing");
+  assert(runtime.platform === "cloudflare", `health runtime platform is ${runtime.platform}`);
+  assert(runtime.stack === "cloudflare-flue", `health runtime stack is ${runtime.stack}`);
+  assert(runtime.mode === "native", `health runtime mode is ${runtime.mode}`);
+  assert(runtime.default_harness === "flue", `health runtime default_harness is ${runtime.default_harness}`);
+  const bindings = runtime.bindings ?? {};
+  for (const name of ["metadata", "database", "workspace", "workflow", "workers_ai", "sandbox"]) {
+    assert(bindings[name] === true, `health runtime binding ${name} is not configured`);
+  }
+}
+
+function runtimeEvidence(runtime) {
+  if (!runtime || typeof runtime !== "object") return undefined;
+  return {
+    platform: runtime.platform,
+    stack: runtime.stack,
+    mode: runtime.mode,
+    default_harness: runtime.default_harness,
+    bindings: runtime.bindings,
+    features: runtime.features,
+  };
 }
 
 function findPlatformIdKey(value, path = "$") {

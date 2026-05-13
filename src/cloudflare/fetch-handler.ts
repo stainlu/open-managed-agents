@@ -1,4 +1,4 @@
-import { buildApp } from "../orchestrator/server.js";
+import { buildApp, type RuntimeHealth } from "../orchestrator/server.js";
 import { ParentTokenMinter } from "../runtime/parent-token.js";
 import type { Store } from "../store/types.js";
 import {
@@ -20,6 +20,7 @@ export type CloudflareFlueFetchHandlerOptions = CloudflareFlueStackOptions & {
   commitSha?: string;
   maxWarmContainers?: number;
   maxActiveContainers?: number;
+  runtimeHealth?: RuntimeHealth;
 };
 
 export type CloudflareFlueFetchHandler = {
@@ -66,11 +67,38 @@ export function createCloudflareFlueFetchHandler(
     maxWarmContainers: opts.maxWarmContainers ?? 0,
     maxActiveContainers: opts.maxActiveContainers ?? 0,
     passthroughEnv: opts.passthroughEnv,
+    runtimeHealth: opts.runtimeHealth ?? cloudflareFlueRuntimeHealth(opts),
   });
 
   return {
     stack,
     fetch: (request, env, ctx) => app.fetch(request, env, ctx as Parameters<typeof app.fetch>[2]),
+  };
+}
+
+function cloudflareFlueRuntimeHealth(opts: CloudflareFlueFetchHandlerOptions): RuntimeHealth {
+  const hasWorkspace = Boolean(opts.workspace ?? opts.r2Bucket);
+  const hasWorkflow = Boolean(opts.runScheduler);
+  const hasWorkersAi = Boolean(opts.cloudflareAiBinding);
+  const hasSandbox = Boolean(opts.workspaceCommandExecutor);
+  return {
+    platform: "cloudflare",
+    stack: "cloudflare-flue",
+    mode: "native",
+    default_harness: "flue",
+    bindings: {
+      metadata: true,
+      database: true,
+      workspace: hasWorkspace,
+      workflow: hasWorkflow,
+      workers_ai: hasWorkersAi,
+      sandbox: hasSandbox,
+    },
+    features: {
+      workflow_runs: hasWorkflow,
+      cloudflare_models: hasWorkersAi,
+      sandbox_shell: hasSandbox,
+    },
   };
 }
 

@@ -143,7 +143,24 @@ globalThis.fetch = async function fakeFetch(input, init = {}) {
   }
 
   if (method === "GET" && url.pathname === "/healthz") {
-    return json({ ok: true, version: "test" });
+    return json({
+      ok: true,
+      version: "test",
+      runtime: {
+        platform: "cloudflare",
+        stack: "cloudflare-flue",
+        mode: "native",
+        default_harness: "flue",
+        bindings: {
+          metadata: true,
+          database: true,
+          workspace: true,
+          workflow: true,
+          workers_ai: true,
+          sandbox: true,
+        },
+      },
+    });
   }
   if (method === "GET" && url.pathname === "/v1/harnesses") {
     return json({ harnesses: [{ harness_id: "flue", capabilities: {} }] });

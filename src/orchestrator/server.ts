@@ -189,6 +189,16 @@ export type ServerDeps = {
    */
   maxActiveContainers: number;
   passthroughEnv?: Record<string, string>;
+  runtimeHealth?: RuntimeHealth;
+};
+
+export type RuntimeHealth = {
+  platform: string;
+  stack?: string;
+  mode?: string;
+  default_harness?: string;
+  bindings?: Record<string, boolean>;
+  features?: Record<string, boolean>;
 };
 
 function agentResponse(agent: AgentConfig) {
@@ -947,7 +957,16 @@ export function buildApp(deps: ServerDeps): Hono {
 
   app.get("/healthz", (c) => {
     const now = Date.now();
-    return c.json({
+    const health: {
+      ok: true;
+      version: string;
+      commit: string;
+      start_ts: number;
+      uptime_ms: number;
+      max_warm: number;
+      max_active: number;
+      runtime?: RuntimeHealth;
+    } = {
       ok: true,
       version: deps.version,
       commit: deps.commitSha ?? "unknown",
@@ -959,7 +978,9 @@ export function buildApp(deps: ServerDeps): Hono {
       uptime_ms: now - deps.startTs,
       max_warm: deps.maxWarmContainers,
       max_active: deps.maxActiveContainers,
-    });
+    };
+    if (deps.runtimeHealth) health.runtime = deps.runtimeHealth;
+    return c.json(health);
   });
 
   app.get("/v1/harnesses", (c) => {

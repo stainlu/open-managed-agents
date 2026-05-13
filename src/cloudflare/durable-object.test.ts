@@ -336,6 +336,20 @@ describe("CloudflareFlueDurableObject", () => {
         ok: true,
         version: "cf-test",
         commit: "abc123",
+        runtime: {
+          platform: "cloudflare",
+          stack: "cloudflare-flue",
+          mode: "native",
+          default_harness: "flue",
+          bindings: {
+            metadata: true,
+            database: true,
+            workspace: true,
+            workflow: false,
+            workers_ai: false,
+            sandbox: false,
+          },
+        },
       });
 
       const store = new DurableObjectSqlStore(doStorage);

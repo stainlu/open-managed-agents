@@ -97,6 +97,10 @@ Working today:
 - The Cloudflare/Flue promotion smoke requires OMA state readback through the
   public API: session metadata, managed run records, event history, run-tree
   projection, workspace listings, and workspace file content.
+- Cloudflare/Flue health now exposes a sanitized runtime-readiness block, and
+  promotion/replay verifiers require the Cloudflare/Flue native stack plus
+  metadata, database, workspace, Workflow, Workers AI, and Sandbox bindings to
+  be configured without leaking platform ids.
 - The Cloudflare/Flue example includes a two-phase live replay smoke so a real
   deployment can seed OMA state before an operator/CI-triggered restart or
   Durable Object hibernation, then verify the same public state afterward. A

@@ -212,6 +212,11 @@ Done in OMA:
   Flue `session.task()` through OMA's Flue adapter and checks that task
   lifecycle events survive as normalized OMA run lineage. This is still a
   verifier until it is run against a live Cloudflare deployment.
+- The Cloudflare/Flue health path now emits sanitized runtime-readiness
+  evidence, and promotion/replay verifiers require the native
+  `cloudflare-flue` stack plus metadata, database, workspace, Workflow,
+  Workers AI, and Sandbox bindings without allowing platform ids into public
+  reports.
 - `ManagedEventLog.stateRoot` is now optional, so cloud event stores no longer
   need to fake a local filesystem path.
 - Harness adapters now declare a runtime mode. Existing adapters remain
@@ -590,6 +595,9 @@ workspace ids into the public session identity.
      execution and workspace sync-back.
    - [x] Add an opt-in example smoke check for real Flue task invocation and
      normalized task lineage.
+   - [x] Add sanitized runtime-readiness evidence to `/healthz` and make
+     promotion/replay verifiers require the Cloudflare/Flue native stack and
+     bindings without leaking platform ids.
    - [ ] Promote production `wrangler.toml` only after the live Cloudflare
      gates in `docs/cloudflare-backend-promotion.md` pass.
    - [x] No Docker compatibility shims.

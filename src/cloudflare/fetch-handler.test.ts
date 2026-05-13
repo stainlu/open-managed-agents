@@ -37,6 +37,20 @@ describe("createCloudflareFlueFetchHandler", () => {
       start_ts: 1000,
       max_warm: 0,
       max_active: 0,
+      runtime: {
+        platform: "cloudflare",
+        stack: "cloudflare-flue",
+        mode: "native",
+        default_harness: "flue",
+        bindings: {
+          metadata: true,
+          database: true,
+          workspace: true,
+          workflow: false,
+          workers_ai: false,
+          sandbox: false,
+        },
+      },
     });
 
     const created = await handler.fetch(new Request("https://oma.example/v1/agents", {

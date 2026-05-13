@@ -96,7 +96,11 @@ function passingReport() {
     finished_at: now,
     status: "passed",
     restart_evidence: "wrangler deploy completed at 2026-05-14T00:00:00.000Z",
-    checks: requiredChecks.map((name) => ({ name, status: "passed", at: now })),
+    checks: requiredChecks.map((name) =>
+      name === "health"
+        ? cloudflareHealthCheck(now)
+        : { name, status: "passed", at: now }
+    ),
     resources: {
       agent_id: "agt_test",
       session_id: "ses_test",
@@ -106,6 +110,28 @@ function passingReport() {
       { type: "session", id: "ses_test", status: "deleted" },
       { type: "agent", id: "agt_test", status: "deleted" },
     ],
+  };
+}
+
+function cloudflareHealthCheck(now) {
+  return {
+    name: "health",
+    status: "passed",
+    at: now,
+    runtime: {
+      platform: "cloudflare",
+      stack: "cloudflare-flue",
+      mode: "native",
+      default_harness: "flue",
+      bindings: {
+        metadata: true,
+        database: true,
+        workspace: true,
+        workflow: true,
+        workers_ai: true,
+        sandbox: true,
+      },
+    },
   };
 }
 

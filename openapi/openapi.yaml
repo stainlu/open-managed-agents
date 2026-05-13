@@ -18,6 +18,51 @@ paths:
       responses:
         "200":
           description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, version, commit, start_ts, uptime_ms, max_warm, max_active]
+                properties:
+                  ok:
+                    type: boolean
+                    const: true
+                  version:
+                    type: string
+                  commit:
+                    type: string
+                  start_ts:
+                    type: integer
+                  uptime_ms:
+                    type: integer
+                  max_warm:
+                    type: integer
+                  max_active:
+                    type: integer
+                  runtime:
+                    type: object
+                    description: Optional sanitized runtime substrate readiness. Never contains platform ids or secrets.
+                    additionalProperties: true
+                    properties:
+                      platform:
+                        type: string
+                        examples: [cloudflare]
+                      stack:
+                        type: string
+                        examples: [cloudflare-flue]
+                      mode:
+                        type: string
+                        examples: [native]
+                      default_harness:
+                        $ref: "#/components/schemas/HarnessId"
+                      bindings:
+                        type: object
+                        additionalProperties:
+                          type: boolean
+                      features:
+                        type: object
+                        additionalProperties:
+                          type: boolean
   /v1/models:
     get:
       summary: Curated model catalog

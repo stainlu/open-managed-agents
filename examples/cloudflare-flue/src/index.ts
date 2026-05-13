@@ -185,6 +185,9 @@ function requireSmokeRequest(request: Request, env: Env): Response | undefined {
 }
 
 function createExampleWorkspaceCommandExecutor(env: Env) {
+  if (!env.Sandbox) {
+    throw new Error("Cloudflare Flue example requires Sandbox binding for workspace command execution");
+  }
   return createCloudflareSandboxWorkspaceCommandExecutor({
     binding: env.Sandbox,
     getSandbox: resolveSandbox,

@@ -56,6 +56,7 @@ async function main() {
   for (const check of checks) {
     if (check?.status === "skipped") failures.push(`check ${check.name} was skipped`);
   }
+  requireCloudflareRuntimeEvidence(checksByName.get("health"), failures);
 
   const resources = report.resources ?? {};
   if (!Array.isArray(resources.agent_ids) || resources.agent_ids.length < 1) {
@@ -144,6 +145,34 @@ function isDeployedHttpsUrl(value) {
 
 function nonEmptyString(value) {
   return typeof value === "string" && value.length > 0;
+}
+
+function requireCloudflareRuntimeEvidence(healthCheck, failures) {
+  const runtime = healthCheck?.runtime;
+  if (!runtime || typeof runtime !== "object" || Array.isArray(runtime)) {
+    failures.push("health check must include runtime evidence");
+    return;
+  }
+  if (runtime.platform !== "cloudflare") {
+    failures.push(`health runtime platform must be cloudflare, got ${runtime.platform}`);
+  }
+  if (runtime.stack !== "cloudflare-flue") {
+    failures.push(`health runtime stack must be cloudflare-flue, got ${runtime.stack}`);
+  }
+  if (runtime.mode !== "native") {
+    failures.push(`health runtime mode must be native, got ${runtime.mode}`);
+  }
+  if (runtime.default_harness !== "flue") {
+    failures.push(`health runtime default_harness must be flue, got ${runtime.default_harness}`);
+  }
+  const bindings = runtime.bindings && typeof runtime.bindings === "object"
+    ? runtime.bindings
+    : {};
+  for (const name of ["metadata", "database", "workspace", "workflow", "workers_ai", "sandbox"]) {
+    if (bindings[name] !== true) {
+      failures.push(`health runtime binding ${name} must be configured`);
+    }
+  }
 }
 
 function findPlatformIdKey(value, path = "$") {

@@ -47,6 +47,10 @@ Implemented:
 - Local Durable Object tests for replay, queued turns, active/queued run abort,
   run-tree projection, task/shell lineage, R2 workspace visibility, and absence
   of public platform ids.
+- Sanitized `/healthz` runtime-readiness evidence for the Cloudflare/Flue
+  native stack. Promotion and replay report verifiers require metadata,
+  database, workspace, Workflow, Workers AI, and Sandbox bindings to be
+  configured without exposing Durable Object, Workflow, D1, R2, or Sandbox ids.
 - Smoke client for deployed or local Worker targets, including promotion-mode
   public OMA state readback across sessions, runs, events, run trees, and
   workspace files.
@@ -99,7 +103,9 @@ real deployed Worker URL:
 
    This proves health, harness catalog, Flue agent creation, prompt run,
    run-scoped event filtering, run-tree projection, cleanup, and no leaked
-   Cloudflare platform ids.
+   Cloudflare platform ids. In promotion mode, health must also prove the
+   native `cloudflare-flue` runtime and configured metadata, database,
+   workspace, Workflow, Workers AI, and Sandbox bindings.
 
 3. Full promotion smoke.
 
@@ -118,8 +124,8 @@ real deployed Worker URL:
    target, mode, model, smoke id, check names, resource ids, cleanup status,
    and failure message if any. It does not record the bearer token. The
    verifier rejects failed reports, localhost targets, skipped required checks,
-   incomplete cleanup, public Cloudflare platform-id keys, and
-   bearer-token-looking values.
+   missing Cloudflare runtime-readiness evidence, incomplete cleanup, public
+   Cloudflare platform-id keys, and bearer-token-looking values.
 
    The state-readback check rereads session metadata, managed run records,
    event history, run-tree projection, workspace listings, and workspace file

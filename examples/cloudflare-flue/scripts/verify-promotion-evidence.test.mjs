@@ -94,7 +94,11 @@ function promotionReport() {
     started_at: now,
     finished_at: now,
     status: "passed",
-    checks: promotionChecks.map((name) => ({ name, status: "passed", at: now })),
+    checks: promotionChecks.map((name) =>
+      name === "health"
+        ? cloudflareHealthCheck(now)
+        : { name, status: "passed", at: now }
+    ),
     resources: {
       agent_ids: ["agt_test"],
       session_ids: ["ses_test"],
@@ -121,7 +125,11 @@ function replayReport() {
     finished_at: now,
     status: "passed",
     restart_evidence: "wrangler deploy completed at 2026-05-14T00:00:00.000Z",
-    checks: replayChecks.map((name) => ({ name, status: "passed", at: now })),
+    checks: replayChecks.map((name) =>
+      name === "health"
+        ? cloudflareHealthCheck(now)
+        : { name, status: "passed", at: now }
+    ),
     resources: {
       agent_id: "agt_replay",
       session_id: "ses_replay",
@@ -131,5 +139,27 @@ function replayReport() {
       { type: "session", id: "ses_replay", status: "deleted" },
       { type: "agent", id: "agt_replay", status: "deleted" },
     ],
+  };
+}
+
+function cloudflareHealthCheck(now) {
+  return {
+    name: "health",
+    status: "passed",
+    at: now,
+    runtime: {
+      platform: "cloudflare",
+      stack: "cloudflare-flue",
+      mode: "native",
+      default_harness: "flue",
+      bindings: {
+        metadata: true,
+        database: true,
+        workspace: true,
+        workflow: true,
+        workers_ai: true,
+        sandbox: true,
+      },
+    },
   };
 }
