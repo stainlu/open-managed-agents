@@ -1,10 +1,12 @@
 import type { HttpClient } from "../http.js";
 import { parseSse } from "../sse.js";
 import type {
+  AbortRunResult,
   Approval,
   CancelResult,
   CompactResult,
   Event,
+  ManagedRun,
   ResolveApprovalResult,
   RunTree,
   SendEventResult,
@@ -32,6 +34,10 @@ export interface ConfirmToolParams {
 
 export interface ResolveApprovalParams {
   decision: "allow" | "deny";
+}
+
+export interface AbortRunParams {
+  reason?: string;
 }
 
 export interface EventQueryParams {
@@ -121,6 +127,35 @@ export class Sessions {
     return this.http.request<CompactResult>(
       "POST",
       `/v1/sessions/${encodeURIComponent(sessionId)}/compact`,
+    );
+  }
+
+  async runs(sessionId: string): Promise<ManagedRun[]> {
+    const resp = await this.http.request<{ runs: ManagedRun[] }>(
+      "GET",
+      `/v1/sessions/${encodeURIComponent(sessionId)}/runs`,
+    );
+    return resp.runs;
+  }
+
+  run(sessionId: string, runId: string): Promise<ManagedRun> {
+    return this.http.request<ManagedRun>(
+      "GET",
+      `/v1/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}`,
+    );
+  }
+
+  abortRun(
+    sessionId: string,
+    runId: string,
+    params: AbortRunParams = {},
+  ): Promise<AbortRunResult> {
+    const body: Record<string, unknown> = {};
+    if (params.reason !== undefined) body["reason"] = params.reason;
+    return this.http.request<AbortRunResult>(
+      "POST",
+      `/v1/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/abort`,
+      body,
     );
   }
 

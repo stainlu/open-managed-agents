@@ -93,6 +93,11 @@ class Event:
     tool_arguments: Optional[Dict[str, Any]] = None
     is_error: Optional[bool] = None
     approval_id: Optional[str] = None
+    run_id: Optional[str] = None
+    run_kind: Optional[str] = None
+    run_status: Optional[str] = None
+    parent_run_id: Optional[str] = None
+    event_index: Optional[int] = None
 
 
 @dataclass
@@ -103,6 +108,21 @@ class Approval:
     description: str
     arrived_at: int
     tool_call_id: Optional[str] = None
+
+
+@dataclass
+class ManagedRun:
+    run_id: str
+    session_id: str
+    agent_id: str
+    status: str
+    queued: bool
+    created_at: int
+    model: Optional[str] = None
+    thinking_level: Optional[str] = None
+    error: Optional[str] = None
+    started_at: Optional[int] = None
+    completed_at: Optional[int] = None
 
 
 @dataclass

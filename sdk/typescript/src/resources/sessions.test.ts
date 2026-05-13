@@ -121,4 +121,81 @@ describe("Sessions", () => {
     });
     expect(fetchFn.mock.calls[1]?.[1]?.body).toBe(JSON.stringify({ decision: "allow" }));
   });
+
+  it("lists, reads, and aborts managed runs", async () => {
+    const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/v1/sessions/ses_1/runs") && init?.method === "GET") {
+        return jsonResponse(200, {
+          runs: [
+            {
+              run_id: "run_1",
+              session_id: "ses_1",
+              agent_id: "agt_1",
+              status: "running",
+              queued: false,
+              model: "openai/gpt-5.5",
+              thinking_level: "high",
+              error: null,
+              created_at: 1234,
+              started_at: 1235,
+              completed_at: null,
+            },
+          ],
+        });
+      }
+      if (url.endsWith("/v1/sessions/ses_1/runs/run_1") && init?.method === "GET") {
+        return jsonResponse(200, {
+          run_id: "run_1",
+          session_id: "ses_1",
+          agent_id: "agt_1",
+          status: "running",
+          queued: false,
+          error: null,
+          created_at: 1234,
+          started_at: 1235,
+          completed_at: null,
+        });
+      }
+      if (url.endsWith("/v1/sessions/ses_1/runs/run_1/abort") && init?.method === "POST") {
+        return jsonResponse(200, {
+          session_id: "ses_1",
+          session_status: "idle",
+          aborted: true,
+          removed_queued: false,
+          run: {
+            run_id: "run_1",
+            session_id: "ses_1",
+            agent_id: "agt_1",
+            status: "cancelled",
+            queued: false,
+            error: "user changed direction",
+            created_at: 1234,
+            started_at: 1235,
+            completed_at: 1240,
+          },
+        });
+      }
+      return jsonResponse(404, { error: "not_found" });
+    });
+    const http = new HttpClient({ baseUrl: "http://o", timeoutMs: 1000, fetch: fetchFn });
+    const sessions = new Sessions(http);
+
+    const runs = await sessions.runs("ses_1");
+    const run = await sessions.run("ses_1", "run_1");
+    const aborted = await sessions.abortRun("ses_1", "run_1", {
+      reason: "user changed direction",
+    });
+
+    expect(runs[0]).toMatchObject({ run_id: "run_1", status: "running" });
+    expect(run).toMatchObject({ run_id: "run_1", status: "running" });
+    expect(aborted).toMatchObject({
+      session_id: "ses_1",
+      aborted: true,
+      run: { run_id: "run_1", status: "cancelled" },
+    });
+    expect(fetchFn.mock.calls[2]?.[1]?.body).toBe(
+      JSON.stringify({ reason: "user changed direction" }),
+    );
+  });
 });

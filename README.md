@@ -107,7 +107,7 @@ Working today:
   run/event mapping.
 - Managed runs are now durable control-plane records. OMA records queued,
   starting, running, terminal, and cancelled run status in the metadata store
-  and exposes session-scoped run list/get/abort APIs.
+  and exposes session-scoped run list/get/abort APIs and SDK methods.
 - Experimental Flue native harness driver, opt-in via
   `OMA_ENABLE_FLUE_HARNESS=1`, including prompt turns, real Flue
   `session.task()` and `session.shell()` operations over OMA-managed

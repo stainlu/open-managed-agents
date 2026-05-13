@@ -161,6 +161,29 @@ export interface Approval {
   arrived_at: number;
 }
 
+export type ManagedRunStatus =
+  | "queued"
+  | "starting"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "skipped";
+
+export interface ManagedRun {
+  run_id: string;
+  session_id: string;
+  agent_id: string;
+  status: ManagedRunStatus;
+  queued: boolean;
+  model?: string | null;
+  thinking_level?: ThinkingLevel | null;
+  error?: string | null;
+  created_at: number;
+  started_at?: number | null;
+  completed_at?: number | null;
+}
+
 export interface RunTreeSource {
   managed_run: boolean;
   event_log: boolean;
@@ -204,6 +227,14 @@ export interface ResolveApprovalResult {
   approval_id: string;
   decision: "allow" | "deny";
   resolved: true;
+}
+
+export interface AbortRunResult {
+  session_id: string;
+  session_status: Session["status"];
+  run: ManagedRun;
+  aborted: boolean;
+  removed_queued: boolean;
 }
 
 export interface CancelResult {

@@ -85,6 +85,29 @@ def _event(**overrides: Any) -> Dict[str, Any]:
         "tool_arguments": None,
         "is_error": False,
         "approval_id": None,
+        "run_id": "run_123",
+        "run_kind": "prompt",
+        "run_status": "succeeded",
+        "parent_run_id": None,
+        "event_index": 1,
+    }
+    data.update(overrides)
+    return data
+
+
+def _run(**overrides: Any) -> Dict[str, Any]:
+    data: Dict[str, Any] = {
+        "run_id": "run_123",
+        "session_id": "ses_123",
+        "agent_id": "agt_123",
+        "status": "running",
+        "queued": False,
+        "model": "openai/gpt-5.5",
+        "thinking_level": "high",
+        "error": None,
+        "created_at": 10,
+        "started_at": 11,
+        "completed_at": None,
     }
     data.update(overrides)
     return data
@@ -288,6 +311,22 @@ def test_sessions_resource_and_sse_stream() -> None:
             return httpx.Response(200, json={"status": "cancelled"})
         if request.method == "POST" and request.url.path == "/v1/sessions/ses_123/compact":
             return httpx.Response(200, json={"status": "queued"})
+        if request.method == "GET" and request.url.path == "/v1/sessions/ses_123/runs":
+            return httpx.Response(200, json={"runs": [_run()]})
+        if request.method == "GET" and request.url.path == "/v1/sessions/ses_123/runs/run_123":
+            return httpx.Response(200, json=_run())
+        if request.method == "POST" and request.url.path == "/v1/sessions/ses_123/runs/run_123/abort":
+            assert _json(request) == {"reason": "user changed direction"}
+            return httpx.Response(
+                200,
+                json={
+                    "session_id": "ses_123",
+                    "session_status": "idle",
+                    "aborted": True,
+                    "removed_queued": False,
+                    "run": _run(status="cancelled", error="user changed direction"),
+                },
+            )
         if request.method == "GET" and request.url.path == "/v1/sessions/ses_123/logs":
             assert request.url.params["tail"] == "50"
             return httpx.Response(200, text="container logs")
@@ -346,8 +385,17 @@ def test_sessions_resource_and_sse_stream() -> None:
         }
         assert client.sessions.cancel("ses_123") == {"status": "cancelled"}
         assert client.sessions.compact("ses_123") == {"status": "queued"}
+        assert client.sessions.runs("ses_123")[0].run_id == "run_123"
+        assert client.sessions.run("ses_123", "run_123").status == "running"
+        assert client.sessions.abort_run(
+            "ses_123",
+            "run_123",
+            reason="user changed direction",
+        )["run"]["status"] == "cancelled"
         assert client.sessions.logs("ses_123", tail=50) == "container logs"
-        assert client.sessions.events("ses_123")[0].content == "stored"
+        stored = client.sessions.events("ses_123")[0]
+        assert stored.content == "stored"
+        assert stored.run_id == "run_123"
         assert [event.content for event in client.sessions.stream("ses_123")] == ["streamed"]
         client.sessions.delete("ses_123")
 

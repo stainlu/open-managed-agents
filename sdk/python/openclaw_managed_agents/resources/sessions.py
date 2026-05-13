@@ -8,7 +8,7 @@ from typing import Any, Dict, Iterator, List, Optional
 import httpx
 from httpx_sse import connect_sse
 
-from ..types import Approval, Event, Session
+from ..types import Approval, Event, ManagedRun, Session
 
 
 def _parse_session(data: Dict[str, Any]) -> Session:
@@ -48,6 +48,11 @@ def _parse_event(data: Dict[str, Any]) -> Event:
         tool_arguments=data.get("tool_arguments"),
         is_error=data.get("is_error"),
         approval_id=data.get("approval_id"),
+        run_id=data.get("run_id"),
+        run_kind=data.get("run_kind"),
+        run_status=data.get("run_status"),
+        parent_run_id=data.get("parent_run_id"),
+        event_index=data.get("event_index"),
     )
 
 
@@ -59,6 +64,22 @@ def _parse_approval(data: Dict[str, Any]) -> Approval:
         description=data["description"],
         arrived_at=data["arrived_at"],
         tool_call_id=data.get("tool_call_id"),
+    )
+
+
+def _parse_managed_run(data: Dict[str, Any]) -> ManagedRun:
+    return ManagedRun(
+        run_id=data["run_id"],
+        session_id=data["session_id"],
+        agent_id=data["agent_id"],
+        status=data["status"],
+        queued=data["queued"],
+        created_at=data["created_at"],
+        model=data.get("model"),
+        thinking_level=data.get("thinking_level"),
+        error=data.get("error"),
+        started_at=data.get("started_at"),
+        completed_at=data.get("completed_at"),
     )
 
 
@@ -164,6 +185,36 @@ class Sessions:
     def compact(self, session_id: str) -> Dict[str, Any]:
         """Ask OpenClaw to compact context history for a session."""
         resp = self._client.post(f"/v1/sessions/{session_id}/compact")
+        resp.raise_for_status()
+        return resp.json()
+
+    def runs(self, session_id: str) -> List[ManagedRun]:
+        """List managed runs for a session."""
+        resp = self._client.get(f"/v1/sessions/{session_id}/runs")
+        resp.raise_for_status()
+        return [_parse_managed_run(r) for r in resp.json()["runs"]]
+
+    def run(self, session_id: str, run_id: str) -> ManagedRun:
+        """Read one managed run by id."""
+        resp = self._client.get(f"/v1/sessions/{session_id}/runs/{run_id}")
+        resp.raise_for_status()
+        return _parse_managed_run(resp.json())
+
+    def abort_run(
+        self,
+        session_id: str,
+        run_id: str,
+        *,
+        reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Abort a queued or active managed run."""
+        body: Dict[str, Any] = {}
+        if reason is not None:
+            body["reason"] = reason
+        resp = self._client.post(
+            f"/v1/sessions/{session_id}/runs/{run_id}/abort",
+            json=body,
+        )
         resp.raise_for_status()
         return resp.json()
 
