@@ -100,12 +100,13 @@ Unsupported behavior is capability-gated. For example, Hermes MCP, compaction,
 and managed subagents, Codex MCP, Codex per-tool deny policy, and Codex managed
 subagents, plus Claude Agent SDK managed subagents and manual compaction, are
 rejected explicitly instead of being silently faked. The same rule applies to
-Flue: stdio MCP, approve-all policy, built-in Flue tool policy beyond the
-`bash` executor seam, and first-class managed child sessions for Flue tasks are
-not claimed until the adapter actually owns those surfaces. The Flue adapter
-currently owns URL MCP wiring, exact deny filtering, and exact `always_ask`
-approval gates for those connected MCP tools. It also owns exact deny/approval
-policy for Flue's built-in `bash` tool at OMA's `SessionEnv.exec()` boundary.
+Flue: stdio MCP, built-in Flue tool policy beyond the OMA-controlled URL MCP
+tools and `bash` executor seam, and first-class managed child sessions for
+Flue tasks are not claimed until the adapter actually owns those surfaces. The
+Flue adapter currently owns URL MCP wiring, exact deny filtering, and exact or
+approve-all `always_ask` approval gates for those connected MCP tools. It also
+owns exact deny policy and exact or approve-all approval policy for Flue's
+built-in `bash` tool at OMA's `SessionEnv.exec()` boundary.
 The current Flue adapter owns prompt streaming: Flue `text_delta` callbacks
 become OpenAI-compatible streaming chunks, and normalized OMA events are
 appended while the streamed turn is still running. It also owns direct Flue

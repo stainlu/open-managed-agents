@@ -370,7 +370,7 @@ export class FlueHarnessAdapter implements HarnessAdapter {
     tool_approvals: {
       support: "partial",
       detail:
-        "Exact always_ask approvals are enforced for URL MCP tools connected by OMA and Flue's built-in bash tool at OMA's SessionEnv.exec boundary; approve-all policy is rejected.",
+        "always_ask approvals are enforced for URL MCP tools connected by OMA and Flue's built-in bash tool at OMA's SessionEnv.exec boundary; approve-all covers those OMA-controlled Flue tool surfaces only.",
     },
     permission_deny: {
       support: "partial",
@@ -1532,13 +1532,6 @@ function validateFluePermissionPolicy(
   mcpServers: HarnessAgentConfigValidationInput["mcpServers"],
 ): HarnessAgentConfigValidationIssue | undefined {
   if (policy.type !== "deny" && policy.type !== "always_ask") return undefined;
-  if (policy.type === "always_ask" && !policy.tools) {
-    return {
-      capability: "tool_approvals",
-      detail:
-        "Flue approve-all policy is not supported; provide exact URL MCP tool names such as mcp__server__tool",
-    };
-  }
   const tools = policy.type === "always_ask" ? (policy.tools ?? []) : policy.tools;
   const capability = policy.type === "always_ask" ? "tool_approvals" : "permission_deny";
   const action = policy.type === "always_ask" ? "approval" : "deny";
@@ -1576,8 +1569,14 @@ function applyFlueToolPolicy(
 ): FlueToolDef[] {
   if (policy.type !== "deny" && policy.type !== "always_ask") return tools;
   const exposed = new Set(tools.map((tool) => tool.name));
-  const requested = (policy.type === "always_ask" ? (policy.tools ?? []) : policy.tools)
-    .filter((tool) => isFlueMcpToolName(tool));
+  const approveAll = policy.type === "always_ask" && policy.tools === undefined;
+  const requested = (
+    approveAll
+      ? tools.map((tool) => tool.name)
+      : policy.type === "always_ask"
+        ? (policy.tools ?? [])
+        : policy.tools
+  ).filter((tool) => isFlueMcpToolName(tool));
   const missing = requested.filter((tool) => !exposed.has(tool));
   if (missing.length > 0) {
     throw new HarnessInvocationError(
@@ -1684,7 +1683,9 @@ async function enforceFlueBashPolicy(args: {
 
 function fluePolicyTargetsBash(policy: AgentConfig["permissionPolicy"]): boolean {
   if (policy.type === "deny") return policy.tools.includes(FLUE_BUILTIN_BASH_TOOL_NAME);
-  if (policy.type === "always_ask") return policy.tools?.includes(FLUE_BUILTIN_BASH_TOOL_NAME) === true;
+  if (policy.type === "always_ask") {
+    return policy.tools === undefined || policy.tools.includes(FLUE_BUILTIN_BASH_TOOL_NAME);
+  }
   return false;
 }
 

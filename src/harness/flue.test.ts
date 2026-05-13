@@ -580,6 +580,54 @@ describe("FlueHarnessAdapter", () => {
     unsubscribe();
   });
 
+  it("pauses Flue built-in bash for approve-all policy", async () => {
+    const workspace = new InMemoryManagedWorkspace();
+    const commandExecutor: FlueManagedWorkspaceCommandExecutor = {
+      exec: vi.fn(async () => ({ stdout: "approved all shell", stderr: "", exitCode: 0 })),
+    };
+    const adapter = new FlueHarnessAdapter({
+      workspace,
+      workspaceCommandExecutor: commandExecutor,
+    });
+    const approvals: HarnessApprovalRequest[] = [];
+    const unsubscribe = adapter.subscribeApprovalRequested(
+      undefined,
+      "ses_real_shell_approve_all",
+      (approval) => approvals.push(approval),
+    );
+
+    const shell = adapter.invokeShell({
+      agent: agent({ permissionPolicy: { type: "always_ask" } }),
+      sessionId: "ses_real_shell_approve_all",
+      runId: "run_shell_approve_all",
+      command: "pnpm build",
+      timeoutMs: 60_000,
+    });
+
+    await waitForCondition("Flue bash approve-all request", () => approvals.length === 1);
+    expect(commandExecutor.exec).not.toHaveBeenCalled();
+    expect(approvals[0]).toMatchObject({
+      sessionId: "ses_real_shell_approve_all",
+      toolName: "bash",
+      description: expect.stringContaining("pnpm build"),
+    });
+
+    await adapter.resolveApproval(
+      undefined,
+      "ses_real_shell_approve_all",
+      approvals[0]!.approvalId,
+      "allow",
+    );
+
+    await expect(shell).resolves.toMatchObject({
+      stdout: "approved all shell",
+      stderr: "",
+      exitCode: 0,
+    });
+    expect(commandExecutor.exec).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
   it("invokes Flue task operations and maps task lineage without promoting child sessions", async () => {
     const task = vi.fn<NonNullable<FlueEngine["task"]>>(async (args) => ({
       text: `task:${args.task}`,
@@ -961,15 +1009,6 @@ describe("FlueHarnessAdapter", () => {
         content: "hello",
         sessionId: "ses_flue",
         timeoutMs: 60_000,
-        agent: agent({ permissionPolicy: { type: "always_ask" } }),
-      }),
-    ).rejects.toThrow("Flue approve-all policy is not supported");
-
-    await expect(
-      adapter.invokeTurn({
-        content: "hello",
-        sessionId: "ses_flue",
-        timeoutMs: 60_000,
         agent: agent({
           permissionPolicy: { type: "always_ask", tools: ["docs_search"] },
         }),
@@ -1219,6 +1258,82 @@ describe("FlueHarnessAdapter", () => {
     expect(execute).toHaveBeenCalledWith({ path: "README.md" }, expect.any(AbortSignal));
     await expect(adapter.listApprovals(undefined, "ses_flue_mcp_approval"))
       .resolves.toEqual([]);
+    expect(close).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
+  it("pauses all OMA-connected Flue URL MCP tools for approve-all policy", async () => {
+    const close = vi.fn(async () => {});
+    const write = vi.fn(async () => "approved write");
+    const mcpConnector = vi.fn<FlueMcpConnector>(async (name) => ({
+      name,
+      tools: [
+        {
+          name: "mcp__docs__search",
+          description: "Search docs",
+          parameters: { type: "object", properties: {} },
+          execute: async () => "search",
+        },
+        {
+          name: "mcp__docs__write",
+          description: "Write docs",
+          parameters: {
+            type: "object",
+            properties: { path: { type: "string" } },
+            required: ["path"],
+          },
+          execute: write,
+        },
+      ],
+      close,
+    }));
+    const run = vi.fn(async () =>
+      run.mock.calls.length === 1
+        ? cloudflareToolCallResponse("mcp__docs__write", { path: "README.md" })
+        : cloudflareTextResponse("done")
+    );
+    const adapter = new FlueHarnessAdapter({
+      cloudflareAiBinding: { run },
+      cloudflareAiProviderPrefix: "cloudflare-mcp-approve-all-test",
+      mcpConnector,
+    });
+    const approvals: HarnessApprovalRequest[] = [];
+    const unsubscribe = adapter.subscribeApprovalRequested(
+      undefined,
+      "ses_flue_mcp_approve_all",
+      (approval) => approvals.push(approval),
+    );
+
+    const turn = adapter.invokeTurn({
+      content: "write docs",
+      sessionId: "ses_flue_mcp_approve_all",
+      timeoutMs: 60_000,
+      agent: agent({
+        model: "cloudflare-mcp-approve-all-test/@cf/openai/gpt-oss-20b",
+        mcpServers: {
+          docs: { url: "https://mcp.example.com/v2" },
+        },
+        permissionPolicy: { type: "always_ask" },
+      }),
+    });
+
+    await waitForCondition("Flue MCP approve-all request", () => approvals.length === 1);
+    expect(write).not.toHaveBeenCalled();
+    expect(approvals[0]).toMatchObject({
+      sessionId: "ses_flue_mcp_approve_all",
+      toolName: "mcp__docs__write",
+      description: expect.stringContaining("README.md"),
+    });
+
+    await adapter.resolveApproval(
+      undefined,
+      "ses_flue_mcp_approve_all",
+      approvals[0]!.approvalId,
+      "allow",
+    );
+
+    await expect(turn).resolves.toMatchObject({ output: "done" });
+    expect(write).toHaveBeenCalledWith({ path: "README.md" }, expect.any(AbortSignal));
     expect(close).toHaveBeenCalledTimes(1);
     unsubscribe();
   });
