@@ -40,6 +40,14 @@ harness-state contract as well. The next blockers are deepening the Flue driver
 beyond prompt calls, then promoting the Cloudflare/Flue helper into a real
 Durable Object runtime path.
 
+Update 2026-05-13: the Cloudflare path is now a real experimental backend
+candidate, not just a design. It has Worker, Durable Object, Workflow, D1, R2,
+Workers AI, Sandbox, Flue harness, local Durable Object coverage, and a smoke
+client. It is still not promoted. Promotion is tracked by
+`docs/cloudflare-backend-promotion.md` and requires live deployed evidence for
+replay, queued turns, active/queued cancellation, Flue task execution,
+sandbox-backed shell/build execution, and no public Cloudflare platform ids.
+
 ## Decision
 
 Docker-on-VPS stays the production runtime backend.

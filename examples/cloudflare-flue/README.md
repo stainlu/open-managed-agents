@@ -19,10 +19,12 @@ This is still an experimental smoke target. It proves the shape of the
 Cloudflare composition, but it is not the promoted production backend until we
 have live deployment coverage for replay, active/queued run cancellation,
 queued turns, Flue tasks, and sandbox-backed shell/build work.
+The OMA-level promotion bar is tracked in
+[`docs/cloudflare-backend-promotion.md`](../../docs/cloudflare-backend-promotion.md).
 
 ## Prerequisites
 
-- Node 22.18+ for the current `@flue/sdk` engine requirement
+- Node 22.18+ for the current published Flue runtime package engine requirement
 - Wrangler authenticated to a Cloudflare account
 - D1, R2, Workers AI, Workflows, and Cloudflare Sandboxes available on the
   target account
@@ -46,6 +48,17 @@ pnpm wrangler r2 bucket create oma-cloudflare-flue-workspace-preview
 ```
 
 Copy the returned D1 `database_id` into `wrangler.toml`.
+
+Run the local preflight before dry-run/deploy:
+
+```bash
+pnpm preflight
+```
+
+The preflight checks Node, the required Wrangler binding sections, replacement
+of the placeholder D1 id, the Sandbox Dockerfile, and Docker CLI readiness for
+Wrangler's container build. For local docs rehearsal only, use
+`pnpm preflight -- --allow-placeholder-d1 --skip-docker`.
 
 Create local secrets for development:
 
@@ -203,6 +216,11 @@ OMA_API_TOKEN=replace-with-token-if-configured \
 pnpm smoke:promotion
 ```
 
+`pnpm smoke:promotion` enables promotion mode, which requires
+`OMA_API_TOKEN`, requires a deployed `https://` target, and turns on the
+sandbox, Flue task, queued-abort, and active-abort checks. For local rehearsal
+only, pass `-- --allow-local-promotion`.
+
 If your model answers too quickly, the promotion smoke will fail at the queue
 or active-abort gate. That is expected: the script is a promotion verifier, not
 a flaky green badge.
@@ -239,5 +257,6 @@ The `wrangler.toml` uses:
   run against a live deployment before the backend is promoted.
 - Local Durable Object tests cover active and queued run abort through the
   public run API, but there is no live CI deployment test yet. Do not treat
-  this as the default backend until the promotion checklist in
-  `docs/designs/flue-cloudflare-managed-stack.md` is complete.
+  this as the default backend until
+  [`docs/cloudflare-backend-promotion.md`](../../docs/cloudflare-backend-promotion.md)
+  is complete.

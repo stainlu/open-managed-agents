@@ -10,10 +10,14 @@ const token = opts.token ?? process.env.OMA_API_TOKEN;
 const model = opts.model ?? process.env.OMA_SMOKE_MODEL ?? "cloudflare/@cf/openai/gpt-oss-20b";
 const timeoutMs = positiveInt(opts["timeout-ms"] ?? process.env.OMA_SMOKE_TIMEOUT_MS, 180_000);
 const pollMs = positiveInt(opts["poll-ms"] ?? process.env.OMA_SMOKE_POLL_MS, 1_000);
-const checkQueueAbort = boolOpt(opts["check-queue-abort"] ?? process.env.OMA_SMOKE_CHECK_QUEUE_ABORT);
-const checkActiveAbort = boolOpt(opts["check-active-abort"] ?? process.env.OMA_SMOKE_CHECK_ACTIVE_ABORT);
-const checkSandboxExec = boolOpt(opts["check-sandbox-exec"] ?? process.env.OMA_SMOKE_CHECK_SANDBOX_EXEC);
-const checkFlueTask = boolOpt(opts["check-flue-task"] ?? process.env.OMA_SMOKE_CHECK_FLUE_TASK);
+const promotion = boolOpt(opts.promotion ?? process.env.OMA_SMOKE_PROMOTION);
+const allowLocalPromotion = boolOpt(
+  opts["allow-local-promotion"] ?? process.env.OMA_SMOKE_ALLOW_LOCAL_PROMOTION,
+);
+const checkQueueAbort = promotion || boolOpt(opts["check-queue-abort"] ?? process.env.OMA_SMOKE_CHECK_QUEUE_ABORT);
+const checkActiveAbort = promotion || boolOpt(opts["check-active-abort"] ?? process.env.OMA_SMOKE_CHECK_ACTIVE_ABORT);
+const checkSandboxExec = promotion || boolOpt(opts["check-sandbox-exec"] ?? process.env.OMA_SMOKE_CHECK_SANDBOX_EXEC);
+const checkFlueTask = promotion || boolOpt(opts["check-flue-task"] ?? process.env.OMA_SMOKE_CHECK_FLUE_TASK);
 const keep = boolOpt(opts.keep ?? process.env.OMA_SMOKE_KEEP);
 const smokeId = `oma-smoke-${Date.now().toString(36)}`;
 const createdAgentIds = new Set();
@@ -26,6 +30,14 @@ main().catch((err) => {
 
 async function main() {
   console.log(`OMA Cloudflare/Flue smoke target: ${baseUrl}`);
+  if (promotion) {
+    assert(token, "promotion smoke requires OMA_API_TOKEN");
+    assert(
+      allowLocalPromotion || isDeployedHttpsUrl(baseUrl),
+      "promotion smoke must target a deployed https URL; pass --allow-local-promotion only for local rehearsal",
+    );
+    console.log("promotion mode enabled: sandbox, task, queued abort, and active abort checks are required");
+  }
 
   try {
     const health = await request("GET", "/healthz", { auth: false });
@@ -105,7 +117,7 @@ async function main() {
       console.log("skip active abort smoke; pass --check-active-abort to require it");
     }
 
-    console.log("PASS Cloudflare/Flue smoke");
+    console.log(promotion ? "PASS Cloudflare/Flue promotion smoke" : "PASS Cloudflare/Flue smoke");
   } finally {
     await cleanupCreated();
   }
@@ -438,6 +450,25 @@ function positiveInt(value, fallback) {
 
 function normalizeBaseUrl(value) {
   return String(value).replace(/\/+$/, "");
+}
+
+function isDeployedHttpsUrl(value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "https:") return false;
+  const hostname = url.hostname.toLowerCase();
+  return !(
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "0.0.0.0" ||
+    hostname === "::1" ||
+    hostname === "[::1]" ||
+    hostname.endsWith(".localhost")
+  );
 }
 
 function assert(condition, message) {

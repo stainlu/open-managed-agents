@@ -143,6 +143,12 @@ Rules:
 - Terminal runs are immutable from the client's point of view.
 - Harness-native run ids are adapter metadata. Public clients use OMA
   `run_id`.
+- Harness-native run registries, admin APIs, and OpenAPI specs are allowed
+  below the adapter boundary. They do not replace OMA's managed run store unless
+  the adapter explicitly maps them into OMA run records. For example, Flue can
+  expose `/runs/:runId` for direct Flue deployments while OMA still exposes
+  session-scoped `/v1/sessions/:id/runs/:runId` as the cross-harness control
+  plane.
 
 ## Runtime Contract
 

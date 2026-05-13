@@ -1055,7 +1055,7 @@ class OptionalSdkFlueEngine implements FlueEngine {
 
   private async loadInternal(): Promise<FlueInternalModule> {
     if (!this.internalPromise) {
-      this.internalPromise = importFlueModule(
+      this.internalPromise = importFlueRuntimeSubpath(
         "internal",
         validateFlueInternalModule,
         "runtime helpers",
@@ -1099,7 +1099,7 @@ class OptionalSdkFlueEngine implements FlueEngine {
 
   private async loadApp(): Promise<FlueAppModule> {
     if (!this.appPromise) {
-      this.appPromise = importFlueModule(
+      this.appPromise = importFlueRuntimeSubpath(
         "app",
         validateFlueAppModule,
         "provider configuration helpers",
@@ -1110,7 +1110,7 @@ class OptionalSdkFlueEngine implements FlueEngine {
 
   private async loadCloudflare(): Promise<FlueCloudflareModule> {
     if (!this.cloudflarePromise) {
-      this.cloudflarePromise = importFlueModule(
+      this.cloudflarePromise = importFlueRuntimeSubpath(
         "cloudflare",
         validateFlueCloudflareModule,
         "Cloudflare AI binding helpers",
@@ -1206,8 +1206,7 @@ class OptionalSdkFlueEngine implements FlueEngine {
 
   private async loadClient(): Promise<FlueClientModule> {
     if (!this.clientPromise) {
-      this.clientPromise = importFlueModule(
-        "client",
+      this.clientPromise = importFlueRuntimeRoot(
         validateFlueClientModule,
         "MCP client helpers",
       );
@@ -1429,12 +1428,28 @@ type FlueCallHandle<T = FluePromptResponseLike> = PromiseLike<T> & {
   abort?: (reason?: unknown) => void;
 };
 
-async function importFlueModule<T>(
-  subpath: "app" | "client" | "cloudflare" | "internal",
+async function importFlueRuntimeSubpath<T>(
+  subpath: "app" | "cloudflare" | "internal",
   validate: (mod: unknown) => T,
   purpose: string,
 ): Promise<T> {
-  const specifiers = [`@flue/core/${subpath}`, `@flue/sdk/${subpath}`];
+  const specifiers = [`@flue/runtime/${subpath}`, `@flue/sdk/${subpath}`];
+  return importFirstFlueModule(specifiers, validate, purpose);
+}
+
+async function importFlueRuntimeRoot<T>(
+  validate: (mod: unknown) => T,
+  purpose: string,
+): Promise<T> {
+  const specifiers = ["@flue/runtime", "@flue/sdk/client"];
+  return importFirstFlueModule(specifiers, validate, purpose);
+}
+
+async function importFirstFlueModule<T>(
+  specifiers: readonly string[],
+  validate: (mod: unknown) => T,
+  purpose: string,
+): Promise<T> {
   const failures: string[] = [];
   for (const specifier of specifiers) {
     try {
@@ -1445,7 +1460,7 @@ async function importFlueModule<T>(
     }
   }
   throw new HarnessInvocationError(
-    `Flue harness requires @flue/core/${subpath} or legacy @flue/sdk/${subpath} for ${purpose}: ${failures.join("; ")}`,
+    `Flue harness requires ${specifiers.join(" or ")} for ${purpose}: ${failures.join("; ")}`,
   );
 }
 
@@ -1457,7 +1472,7 @@ function validateFlueInternalModule(mod: unknown): FlueInternalModule {
     typeof candidate.resolveModel !== "function" ||
     typeof candidate.hasRegisteredProvider !== "function"
   ) {
-    throw new Error("@flue/sdk/internal did not expose the expected runtime helpers");
+    throw new Error("Flue runtime internal module did not expose the expected runtime helpers");
   }
   return candidate as FlueInternalModule;
 }
@@ -1469,7 +1484,7 @@ function validateFlueAppModule(mod: unknown): FlueAppModule {
     typeof candidate.registerApiProvider !== "function" ||
     typeof candidate.registerProvider !== "function"
   ) {
-    throw new Error("@flue/sdk/app did not expose the expected provider helpers");
+    throw new Error("Flue runtime app module did not expose the expected provider helpers");
   }
   return candidate as FlueAppModule;
 }
@@ -1477,7 +1492,7 @@ function validateFlueAppModule(mod: unknown): FlueAppModule {
 function validateFlueCloudflareModule(mod: unknown): FlueCloudflareModule {
   const candidate = mod as Partial<FlueCloudflareModule>;
   if (typeof candidate.getCloudflareAIBindingApiProvider !== "function") {
-    throw new Error("@flue/sdk/cloudflare did not expose getCloudflareAIBindingApiProvider()");
+    throw new Error("Flue runtime Cloudflare module did not expose getCloudflareAIBindingApiProvider()");
   }
   return candidate as FlueCloudflareModule;
 }
@@ -1485,7 +1500,7 @@ function validateFlueCloudflareModule(mod: unknown): FlueCloudflareModule {
 function validateFlueClientModule(mod: unknown): FlueClientModule {
   const candidate = mod as Partial<FlueClientModule>;
   if (typeof candidate.connectMcpServer !== "function") {
-    throw new Error("@flue/sdk/client did not expose connectMcpServer()");
+    throw new Error("Flue runtime root module did not expose connectMcpServer()");
   }
   return candidate as FlueClientModule;
 }

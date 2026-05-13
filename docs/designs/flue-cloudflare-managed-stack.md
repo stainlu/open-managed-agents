@@ -112,9 +112,11 @@ Done in OMA:
   `MOONSHOT_API_KEY` are treated as managed harness configuration rather than
   relying on ambient `process.env`. Deployments can also pass
   `OMA_FLUE_PROVIDER_CONFIG_JSON` for gateway/base URL overrides. The bridge
-  loads Flue runtime helpers from `@flue/core` when available and falls back to
-  legacy `@flue/sdk`, matching Flue's package split direction without forcing
-  OMA users onto an unreleased package.
+  loads Flue runtime helpers from `@flue/runtime` when available and falls
+  back to legacy `@flue/sdk`. `@flue/runtime` is the post-split package name
+  in Flue main; until it is published on npm, OMA's installable examples keep
+  the current published `@flue/sdk` dependency while the adapter probes the
+  future runtime package first.
 - The Flue SDK bridge now has real persistence coverage against Flue itself:
   a prompt turn stores Flue `SessionData` through OMA's
   `ManagedHarnessStateStore`, and a fresh adapter instance reloads the same
@@ -242,6 +244,27 @@ Started upstream in Flue:
 - Task/run telemetry is being shaped as Flue-native runtime behavior, not as an
   OMA-only patch. OMA should keep mapping those events into its normalized
   `Event` model once the Flue surface stabilizes.
+- Flue is adding its own run registry, read-only admin API, OpenAPI document,
+  and remote SDK surface. OMA should treat those as harness-local/runtime-local
+  capabilities that can make the Flue adapter thinner, not as a replacement for
+  OMA-managed `Agent`, `Environment`, `Session`, `Run`, `Event`, queue,
+  approval, credential, and recovery state.
+
+OMA stance:
+
+- OMA `run_id` is assigned before queueing, Workflow handoff, or harness
+  invocation. It remains the public control-plane handle for abort, queue
+  status, replay, and cross-harness event filtering.
+- Flue run ids and Flue registry pointers are adapter metadata unless OMA
+  explicitly records a mapping. They may enrich event lineage and debugging,
+  but public clients should not need to know them.
+- Flue's admin/OpenAPI/SDK surface is useful for direct Flue deployments. In an
+  OMA deployment, the public API remains OMA's `/v1` managed-agent contract; a
+  Flue-native admin route can be exposed only as a harness/runtime inspection
+  surface, behind deployment auth, without changing OMA identifiers.
+- If Flue gains a stable remote SDK for invoking deployed Flue agents, OMA can
+  reuse it inside the Flue adapter. That is an implementation detail beneath
+  `HarnessAdapter`, not a new public API layer.
 
 Still open:
 
@@ -254,10 +277,11 @@ Still open:
   run events, direct Flue task and shell operations can be executed and mapped,
   but Flue tasks are not promoted to managed child sessions yet.
 - Cloudflare deployment wiring exists as an experimental example in
-  `examples/cloudflare-flue`, but it is not promoted: there is no live
-  Workflow deployment test, deterministic live active/queued run abort smoke,
-  Flue task run, sandbox-backed shell/build task, or replay-after-hibernation
-  proof yet.
+  `examples/cloudflare-flue`, but it is not promoted. The OMA-level promotion
+  gates live in `docs/cloudflare-backend-promotion.md`; they require live
+  Workflow deployment proof, deterministic live active/queued run abort smoke,
+  queued turns, Flue task execution, sandbox-backed shell/build execution,
+  replay-after-hibernation proof, and no public Cloudflare platform ids.
 
 ## Non-Decision
 
@@ -566,11 +590,12 @@ workspace ids into the public session identity.
      execution and workspace sync-back.
    - [x] Add an opt-in example smoke check for real Flue task invocation and
      normalized task lineage.
-   - [ ] Promote production `wrangler.toml` only after live Cloudflare smoke
-     coverage.
+   - [ ] Promote production `wrangler.toml` only after the live Cloudflare
+     gates in `docs/cloudflare-backend-promotion.md` pass.
    - [x] No Docker compatibility shims.
 
-7. [ ] Promote Cloudflare runtime only after it proves:
+7. [ ] Promote Cloudflare runtime only after
+   `docs/cloudflare-backend-promotion.md` is complete and it proves:
    - durable event replay after restart/hibernation;
    - live active run cancellation path;
    - live queued run cancellation path;

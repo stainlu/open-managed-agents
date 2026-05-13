@@ -27,6 +27,24 @@ OpenRouter made model providers interchangeable behind one API.
 Open Managed Agents aims to make managed agent harnesses interchangeable behind
 one operational boundary.
 
+Layering rule:
+
+```text
+client / SDK
+  -> Open Managed Agents managed layer
+       Agent / Environment / Session / Run / Event
+       queues, policy, credentials, cancellation, recovery, observability
+  -> harness layer
+       Flue, OpenClaw, Hermes, Codex, Claude Agent SDK
+  -> runtime / cloud substrate
+       Docker, Cloudflare Workers/DO/Workflows/Sandboxes/R2/D1, future clouds
+```
+
+Flue is a preferred AI-native harness/runtime path, not a replacement for the
+managed-agent control plane. OMA keeps the cross-harness public contract while
+Flue owns its native agent loop, sessions, tasks, shell, MCP, and runtime
+events.
+
 ## Current Status
 
 This repo is in the baseline-port phase.
@@ -93,8 +111,10 @@ Working today:
   exact deny/approval policy for Flue's built-in `bash` tool at the
   `SessionEnv.exec()` boundary; stdio MCP, approve-all policy, and other
   built-in Flue tool policy are still rejected. The
-  bridge prefers Flue's runtime package name `@flue/core` and falls back to
-  legacy `@flue/sdk`.
+  bridge prefers Flue's runtime package name `@flue/runtime` and falls back to
+  legacy `@flue/sdk`. As of 2026-05-13, `@flue/runtime` exists in Flue main
+  after the package split but is not published on npm yet, so installable
+  examples still pin the current published `@flue/sdk` package.
 - Experimental Hermes adapter runtime via direct `AIAgent` integration.
 - Experimental Codex adapter runtime via `codex app-server`.
 - Experimental Claude Agent SDK adapter runtime via `@anthropic-ai/claude-agent-sdk`.
@@ -200,6 +220,7 @@ protocol pieces use `OMA_*`.
 Key docs:
 
 - `docs/architecture.md`
+- `docs/cloudflare-backend-promotion.md`
 - `docs/managed-agent-contract.md`
 - `docs/openclaw-migration-checklist.md`
 - `docs/runtime-backend-positioning.md`

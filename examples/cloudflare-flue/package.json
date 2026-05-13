@@ -6,10 +6,11 @@
     "deploy": "wrangler deploy",
     "dry-run": "wrangler deploy --dry-run",
     "dev": "wrangler dev",
+    "preflight": "node scripts/preflight.mjs",
     "smoke": "node scripts/smoke.mjs",
     "smoke:sandbox": "node scripts/smoke.mjs --check-sandbox-exec",
     "smoke:task": "node scripts/smoke.mjs --check-flue-task",
-    "smoke:promotion": "node scripts/smoke.mjs --check-sandbox-exec --check-flue-task --check-queue-abort --check-active-abort",
+    "smoke:promotion": "node scripts/smoke.mjs --promotion",
     "types": "wrangler types"
   },
   "dependencies": {
