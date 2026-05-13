@@ -64,6 +64,13 @@ jobs:
             bash -n "$script"
           done
 
+      - name: E2E script bash syntax
+        run: |
+          for script in test/e2e*.sh; do
+            echo "checking $script"
+            bash -n "$script"
+          done
+
       - name: apply-provider-config.mjs syntax
         run: node --check docker/apply-provider-config.mjs
 
