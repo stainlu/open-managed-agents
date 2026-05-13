@@ -179,6 +179,14 @@ real deployed Worker URL:
    `cloudflare promotion` workflow. Configure:
 
    - `OMA_CLOUDFLARE_FLUE_API_TOKEN` as the deployed Worker's `OMA_API_TOKEN`.
+   - `OMA_CLOUDFLARE_FLUE_WORKFLOW_INTERNAL_TOKEN` as the deployed Worker's
+     `OMA_WORKFLOW_INTERNAL_TOKEN`.
+   - `OMA_CLOUDFLARE_FLUE_PARENT_TOKEN_SECRET_BASE64` as the deployed Worker's
+     `OMA_PARENT_TOKEN_SECRET_BASE64`. It must be canonical padded base64 that
+     decodes to exactly 32 bytes.
+   - Optional `OMA_CLOUDFLARE_FLUE_PASSTHROUGH_ENV_JSON` and
+     `OMA_CLOUDFLARE_FLUE_PROVIDER_CONFIG_JSON` if the deployed Worker uses
+     those managed provider inputs.
    - `CLOUDFLARE_API_TOKEN` and, when your Wrangler account setup requires it,
      `CLOUDFLARE_ACCOUNT_ID` if `redeploy_for_replay=true`.
    - `OMA_CLOUDFLARE_FLUE_D1_DATABASE_ID` if `redeploy_for_replay=true`, so

@@ -39,6 +39,10 @@ jobs:
     env:
       OMA_CLOUDFLARE_FLUE_BASE_URL: ${{ inputs.target_url }}
       OMA_API_TOKEN: ${{ secrets.OMA_CLOUDFLARE_FLUE_API_TOKEN }}
+      OMA_WORKFLOW_INTERNAL_TOKEN: ${{ secrets.OMA_CLOUDFLARE_FLUE_WORKFLOW_INTERNAL_TOKEN }}
+      OMA_PARENT_TOKEN_SECRET_BASE64: ${{ secrets.OMA_CLOUDFLARE_FLUE_PARENT_TOKEN_SECRET_BASE64 }}
+      OMA_PASSTHROUGH_ENV_JSON: ${{ secrets.OMA_CLOUDFLARE_FLUE_PASSTHROUGH_ENV_JSON }}
+      OMA_FLUE_PROVIDER_CONFIG_JSON: ${{ secrets.OMA_CLOUDFLARE_FLUE_PROVIDER_CONFIG_JSON }}
       OMA_SMOKE_MODEL: ${{ inputs.model }}
       OMA_REPLAY_MODEL: ${{ inputs.model }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -83,6 +87,23 @@ jobs:
             echo "::error::Set the OMA_CLOUDFLARE_FLUE_API_TOKEN repository secret to the deployed Worker's OMA_API_TOKEN."
             exit 1
           fi
+
+      - name: Check required control-plane secrets
+        run: |
+          failed=0
+          if [ -z "$OMA_WORKFLOW_INTERNAL_TOKEN" ]; then
+            echo "::error::Set OMA_CLOUDFLARE_FLUE_WORKFLOW_INTERNAL_TOKEN to the deployed Worker's OMA_WORKFLOW_INTERNAL_TOKEN."
+            failed=1
+          fi
+          if [ -z "$OMA_PARENT_TOKEN_SECRET_BASE64" ]; then
+            echo "::error::Set OMA_CLOUDFLARE_FLUE_PARENT_TOKEN_SECRET_BASE64 to the deployed Worker's OMA_PARENT_TOKEN_SECRET_BASE64."
+            failed=1
+          fi
+          exit "$failed"
+
+      - name: Cloudflare promotion secret preflight
+        working-directory: examples/cloudflare-flue
+        run: pnpm preflight:secrets -- --skip-docker --allow-placeholder-d1
 
       - name: Full promotion smoke
         working-directory: examples/cloudflare-flue

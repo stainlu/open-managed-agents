@@ -309,9 +309,18 @@ The same evidence path is available as the manual GitHub Actions workflow
 `cloudflare promotion`. It targets an already deployed Worker URL, runs the
 promotion smoke, uploads the JSON reports, and can optionally run `wrangler
 deploy` between replay seed and verify to prove replay across a real deployment
-boundary. For that redeploy path, set `OMA_CLOUDFLARE_FLUE_D1_DATABASE_ID` as
-a repository secret. If your deployment uses non-example resource names, also
-set `OMA_CLOUDFLARE_FLUE_D1_DATABASE_NAME`,
+boundary. The workflow validates these repository secrets before live smoke:
+`OMA_CLOUDFLARE_FLUE_API_TOKEN`,
+`OMA_CLOUDFLARE_FLUE_WORKFLOW_INTERNAL_TOKEN`, and
+`OMA_CLOUDFLARE_FLUE_PARENT_TOKEN_SECRET_BASE64`. The latter must match the
+Worker's `OMA_PARENT_TOKEN_SECRET_BASE64` and decode to exactly 32 bytes.
+Optional provider config secrets are
+`OMA_CLOUDFLARE_FLUE_PASSTHROUGH_ENV_JSON` and
+`OMA_CLOUDFLARE_FLUE_PROVIDER_CONFIG_JSON`.
+
+For the redeploy path, set `OMA_CLOUDFLARE_FLUE_D1_DATABASE_ID` as a repository
+secret. If your deployment uses non-example resource names, also set
+`OMA_CLOUDFLARE_FLUE_D1_DATABASE_NAME`,
 `OMA_CLOUDFLARE_FLUE_R2_BUCKET_NAME`, and
 `OMA_CLOUDFLARE_FLUE_R2_PREVIEW_BUCKET_NAME`.
 
