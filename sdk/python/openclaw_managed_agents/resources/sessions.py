@@ -8,7 +8,7 @@ from typing import Any, Dict, Iterator, List, Optional
 import httpx
 from httpx_sse import connect_sse
 
-from ..types import Approval, Event, ManagedRun, Session
+from ..types import Approval, Event, ManagedRun, Session, SessionTree, SessionTreeNode
 
 
 def _parse_session(data: Dict[str, Any]) -> Session:
@@ -83,6 +83,21 @@ def _parse_managed_run(data: Dict[str, Any]) -> ManagedRun:
     )
 
 
+def _parse_session_tree_node(data: Dict[str, Any]) -> SessionTreeNode:
+    return SessionTreeNode(
+        session=_parse_session(data["session"]),
+        children=[_parse_session_tree_node(child) for child in data.get("children", [])],
+    )
+
+
+def _parse_session_tree(data: Dict[str, Any]) -> SessionTree:
+    return SessionTree(
+        session_id=data["session_id"],
+        count=data["count"],
+        root=_parse_session_tree_node(data["root"]),
+    )
+
+
 class Sessions:
     def __init__(self, client: httpx.Client) -> None:
         self._client = client
@@ -112,6 +127,18 @@ class Sessions:
         resp = self._client.get("/v1/sessions")
         resp.raise_for_status()
         return [_parse_session(s) for s in resp.json()["sessions"]]
+
+    def children(self, session_id: str) -> List[Session]:
+        """List direct managed child sessions."""
+        resp = self._client.get(f"/v1/sessions/{session_id}/children")
+        resp.raise_for_status()
+        return [_parse_session(s) for s in resp.json()["children"]]
+
+    def session_tree(self, session_id: str) -> SessionTree:
+        """Read the recursive managed session lineage tree."""
+        resp = self._client.get(f"/v1/sessions/{session_id}/session-tree")
+        resp.raise_for_status()
+        return _parse_session_tree(resp.json())
 
     def delete(self, session_id: str) -> None:
         resp = self._client.delete(f"/v1/sessions/{session_id}")

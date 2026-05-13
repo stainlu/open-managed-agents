@@ -11,6 +11,7 @@ import type {
   RunTree,
   SendEventResult,
   Session,
+  SessionTree,
   ThinkingLevel,
 } from "../types.js";
 
@@ -62,6 +63,21 @@ export class Sessions {
   async list(): Promise<Session[]> {
     const resp = await this.http.request<{ sessions: Session[] }>("GET", "/v1/sessions");
     return resp.sessions;
+  }
+
+  async children(sessionId: string): Promise<Session[]> {
+    const resp = await this.http.request<{ children: Session[] }>(
+      "GET",
+      `/v1/sessions/${encodeURIComponent(sessionId)}/children`,
+    );
+    return resp.children;
+  }
+
+  sessionTree(sessionId: string): Promise<SessionTree> {
+    return this.http.request<SessionTree>(
+      "GET",
+      `/v1/sessions/${encodeURIComponent(sessionId)}/session-tree`,
+    );
   }
 
   async delete(sessionId: string): Promise<void> {

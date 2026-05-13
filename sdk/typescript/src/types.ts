@@ -289,6 +289,17 @@ export interface RunTree {
   runs: RunTreeNode[];
 }
 
+export interface SessionTreeNode {
+  session: Session;
+  children: SessionTreeNode[];
+}
+
+export interface SessionTree {
+  session_id: string;
+  count: number;
+  root: SessionTreeNode;
+}
+
 export interface SendEventResult {
   session_id: string;
   status: string;

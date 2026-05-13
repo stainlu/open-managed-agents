@@ -95,6 +95,11 @@ Rules:
 
 - Session creation is metadata-only. No container is required until work starts.
 - The session's `harnessId` is captured at creation and must not change later.
+- Child sessions are OMA-managed sessions with `parent_session_id`; they are not
+  just harness-local task ids.
+- `GET /v1/sessions/:id/children` lists direct managed child sessions.
+- `GET /v1/sessions/:id/session-tree` returns the recursive managed session
+  lineage for clients, operators, and recovery tools.
 - A run against an `idle` session starts immediately.
 - A user event posted while the session is `starting` or `running` is queued by
   default.

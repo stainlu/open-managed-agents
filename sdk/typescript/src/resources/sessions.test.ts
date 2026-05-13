@@ -70,6 +70,90 @@ describe("Sessions", () => {
     });
   });
 
+  it("reads managed session lineage", async () => {
+    const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/v1/sessions/ses_1/children") && init?.method === "GET") {
+        return jsonResponse(200, {
+          session_id: "ses_1",
+          count: 1,
+          children: [
+            {
+              session_id: "ses_child",
+              agent_id: "agt_1",
+              harness_id: "openclaw",
+              status: "idle",
+              tokens: { input: 0, output: 0 },
+              cost_usd: 0,
+              created_at: 1,
+              parent_session_id: "ses_1",
+            },
+          ],
+        });
+      }
+      if (url.endsWith("/v1/sessions/ses_1/session-tree") && init?.method === "GET") {
+        return jsonResponse(200, {
+          session_id: "ses_1",
+          count: 2,
+          root: {
+            session: {
+              session_id: "ses_1",
+              agent_id: "agt_1",
+              harness_id: "openclaw",
+              status: "idle",
+              tokens: { input: 0, output: 0 },
+              cost_usd: 0,
+              created_at: 1,
+              parent_session_id: null,
+            },
+            children: [
+              {
+                session: {
+                  session_id: "ses_child",
+                  agent_id: "agt_1",
+                  harness_id: "openclaw",
+                  status: "idle",
+                  tokens: { input: 0, output: 0 },
+                  cost_usd: 0,
+                  created_at: 2,
+                  parent_session_id: "ses_1",
+                },
+                children: [],
+              },
+            ],
+          },
+        });
+      }
+      return jsonResponse(404, { error: "not_found" });
+    });
+    const http = new HttpClient({ baseUrl: "http://o", timeoutMs: 1000, fetch: fetchFn });
+    const sessions = new Sessions(http);
+
+    const children = await sessions.children("ses_1");
+    const tree = await sessions.sessionTree("ses_1");
+
+    expect(children).toMatchObject([
+      {
+        session_id: "ses_child",
+        parent_session_id: "ses_1",
+      },
+    ]);
+    expect(tree).toMatchObject({
+      session_id: "ses_1",
+      count: 2,
+      root: {
+        session: { session_id: "ses_1" },
+        children: [
+          {
+            session: { session_id: "ses_child" },
+          },
+        ],
+      },
+    });
+    expect(fetchFn.mock.calls[0]?.[0]).toBe("http://o/v1/sessions/ses_1/children");
+    expect(fetchFn.mock.calls[1]?.[0]).toBe("http://o/v1/sessions/ses_1/session-tree");
+  });
+
   it("lists and resolves pending approvals", async () => {
     const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();

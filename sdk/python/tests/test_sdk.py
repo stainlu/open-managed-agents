@@ -447,6 +447,40 @@ def test_sessions_resource_and_sse_stream() -> None:
             return httpx.Response(200, json={"sessions": [_session()]})
         if request.method == "GET" and request.url.path == "/v1/sessions/ses_123":
             return httpx.Response(200, json=_session())
+        if request.method == "GET" and request.url.path == "/v1/sessions/ses_123/children":
+            return httpx.Response(
+                200,
+                json={
+                    "session_id": "ses_123",
+                    "count": 1,
+                    "children": [
+                        _session(
+                            session_id="ses_child",
+                            parent_session_id="ses_123",
+                        )
+                    ],
+                },
+            )
+        if request.method == "GET" and request.url.path == "/v1/sessions/ses_123/session-tree":
+            return httpx.Response(
+                200,
+                json={
+                    "session_id": "ses_123",
+                    "count": 2,
+                    "root": {
+                        "session": _session(),
+                        "children": [
+                            {
+                                "session": _session(
+                                    session_id="ses_child",
+                                    parent_session_id="ses_123",
+                                ),
+                                "children": [],
+                            }
+                        ],
+                    },
+                },
+            )
         if request.method == "POST" and request.url.path == "/v1/sessions/ses_123/events":
             body = _json(request)
             if body.get("type") == "user.tool_confirmation":
@@ -533,6 +567,10 @@ def test_sessions_resource_and_sse_stream() -> None:
         assert created.boot_ms == 15000
         assert client.sessions.list()[0].status == "idle"
         assert client.sessions.get("ses_123").output == "done"
+        assert client.sessions.children("ses_123")[0].parent_session_id == "ses_123"
+        tree = client.sessions.session_tree("ses_123")
+        assert tree.count == 2
+        assert tree.root.children[0].session.session_id == "ses_child"
         assert client.sessions.send(
             "ses_123",
             content="hi",

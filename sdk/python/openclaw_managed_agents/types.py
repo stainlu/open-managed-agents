@@ -138,6 +138,19 @@ class ManagedRun:
 
 
 @dataclass
+class SessionTreeNode:
+    session: Session
+    children: List["SessionTreeNode"] = field(default_factory=list)
+
+
+@dataclass
+class SessionTree:
+    session_id: str
+    count: int
+    root: SessionTreeNode
+
+
+@dataclass
 class WorkspaceEntry:
     name: str
     path: str

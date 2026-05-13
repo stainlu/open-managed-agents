@@ -1153,6 +1153,88 @@ describe("session ownership in the HTTP API", () => {
     });
   });
 
+  it("exposes managed child sessions as a scoped session tree", async () => {
+    const { app, store } = makeApp();
+    const agent = createAgent(store);
+    const alice = store.users.create({ tier: "github" });
+    const bob = store.users.create({ tier: "github" });
+    store.sessions.create({
+      sessionId: "ses_parent",
+      agentId: agent.agentId,
+      userId: alice.userId,
+    });
+    store.sessions.create({
+      sessionId: "ses_child",
+      agentId: agent.agentId,
+      parentSessionId: "ses_parent",
+      userId: alice.userId,
+    });
+    store.sessions.create({
+      sessionId: "ses_grandchild",
+      agentId: agent.agentId,
+      parentSessionId: "ses_child",
+      userId: alice.userId,
+    });
+    store.sessions.create({
+      sessionId: "ses_hidden_cross_user",
+      agentId: agent.agentId,
+      parentSessionId: "ses_parent",
+      userId: bob.userId,
+    });
+
+    const children = await req(app, "/v1/sessions/ses_parent/children", {
+      token: alice.apiToken,
+    });
+    expect(children.status).toBe(200);
+    expect(children.body).toMatchObject({
+      session_id: "ses_parent",
+      count: 1,
+      children: [
+        {
+          session_id: "ses_child",
+          parent_session_id: "ses_parent",
+        },
+      ],
+    });
+
+    const tree = await req(app, "/v1/sessions/ses_parent/session-tree", {
+      token: alice.apiToken,
+    });
+    expect(tree.status).toBe(200);
+    expect(tree.body).toMatchObject({
+      session_id: "ses_parent",
+      count: 3,
+      root: {
+        session: {
+          session_id: "ses_parent",
+          parent_session_id: null,
+        },
+        children: [
+          {
+            session: {
+              session_id: "ses_child",
+              parent_session_id: "ses_parent",
+            },
+            children: [
+              {
+                session: {
+                  session_id: "ses_grandchild",
+                  parent_session_id: "ses_child",
+                },
+                children: [],
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const hidden = await req(app, "/v1/sessions/ses_parent/session-tree", {
+      token: bob.apiToken,
+    });
+    expect(hidden.status).toBe(404);
+  });
+
   it("binds legacy /run sessions to the authenticated user", async () => {
     const { app, store } = makeApp();
     const agent = createAgent(store);

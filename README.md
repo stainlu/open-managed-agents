@@ -112,6 +112,9 @@ Working today:
 - Managed runs are now durable control-plane records. OMA records queued,
   starting, running, terminal, and cancelled run status in the metadata store
   and exposes session-scoped run list/get/abort APIs and SDK methods.
+- Managed subagent/session lineage is now inspectable through direct child
+  listing and recursive session-tree APIs. This is OMA-owned session topology,
+  separate from harness-local task/run lineage.
 - `/healthz` exposes sanitized runtime readiness for both the default
   self-hosted container path and the Cloudflare/Flue path, so operators can see
   the active substrate without exposing platform ids or secrets.

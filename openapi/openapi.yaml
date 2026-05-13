@@ -418,6 +418,40 @@ paths:
       responses:
         "200":
           description: Deleted
+  /v1/sessions/{sessionId}/children:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      summary: List direct managed child sessions
+      responses:
+        "200":
+          description: Direct child sessions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session_id, count, children]
+                properties:
+                  session_id:
+                    type: string
+                  count:
+                    type: integer
+                  children:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Session"
+  /v1/sessions/{sessionId}/session-tree:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      summary: Read recursive managed session lineage
+      responses:
+        "200":
+          description: Session tree
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionTree"
   /v1/sessions/{sessionId}/events:
     parameters:
       - $ref: "#/components/parameters/SessionId"
@@ -1423,6 +1457,26 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/RunTreeNode"
+    SessionTreeNode:
+      type: object
+      required: [session, children]
+      properties:
+        session:
+          $ref: "#/components/schemas/Session"
+        children:
+          type: array
+          items:
+            $ref: "#/components/schemas/SessionTreeNode"
+    SessionTree:
+      type: object
+      required: [session_id, count, root]
+      properties:
+        session_id:
+          type: string
+        count:
+          type: integer
+        root:
+          $ref: "#/components/schemas/SessionTreeNode"
     AbortRunRequest:
       type: object
       properties:

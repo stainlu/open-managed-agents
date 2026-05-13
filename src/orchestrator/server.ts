@@ -683,6 +683,68 @@ function countRunTreeNodes(nodes: RunTreeNode[]): number {
   return count;
 }
 
+type SessionTreeNode = {
+  session: Session;
+  children: SessionTreeNode[];
+};
+
+function directChildSessions(parentSessionId: string, sessions: Session[]): Session[] {
+  return sessions
+    .filter((session) => session.parentSessionId === parentSessionId)
+    .sort(compareSessionsForLineage);
+}
+
+function buildSessionTree(root: Session, sessions: Session[]): SessionTreeNode {
+  const byParent = new Map<string, Session[]>();
+  for (const session of sessions) {
+    if (!session.parentSessionId) continue;
+    const siblings = byParent.get(session.parentSessionId) ?? [];
+    siblings.push(session);
+    byParent.set(session.parentSessionId, siblings);
+  }
+  for (const siblings of byParent.values()) {
+    siblings.sort(compareSessionsForLineage);
+  }
+
+  const visit = (session: Session, ancestors: Set<string>): SessionTreeNode => {
+    const nextAncestors = new Set(ancestors);
+    nextAncestors.add(session.sessionId);
+    const children = (byParent.get(session.sessionId) ?? [])
+      .filter((child) => !nextAncestors.has(child.sessionId))
+      .map((child) => visit(child, nextAncestors));
+    return { session, children };
+  };
+
+  return visit(root, new Set());
+}
+
+function compareSessionsForLineage(a: Session, b: Session): number {
+  return a.createdAt - b.createdAt || a.sessionId.localeCompare(b.sessionId);
+}
+
+async function sessionTreeNodeResponse(
+  node: SessionTreeNode,
+  deps: ServerDeps,
+): Promise<Record<string, unknown>> {
+  return {
+    session: await sessionResponse(
+      node.session,
+      deps.events,
+      deps.passthroughEnv,
+      deps.sessionContainers,
+    ),
+    children: await Promise.all(
+      node.children.map((child) => sessionTreeNodeResponse(child, deps)),
+    ),
+  };
+}
+
+function countSessionTreeNodes(node: SessionTreeNode): number {
+  let count = 1;
+  for (const child of node.children) count += countSessionTreeNodes(child);
+  return count;
+}
+
 function handleRouterError(err: unknown, c: Context): Response {
   const reply = routerErrorReply(err);
   return c.json(reply.body, reply.status);
@@ -774,6 +836,12 @@ export function buildApp(deps: ServerDeps): Hono {
     const userId = getUserId(c);
     if (userId && session.userId !== userId) return undefined;
     return session;
+  }
+
+  function listScopedSessions(c: any): Session[] {
+    const userId = getUserId(c);
+    const sessions = deps.sessions.list();
+    return userId ? sessions.filter((session) => session.userId === userId) : sessions;
   }
 
   // ---------- Auth endpoints (no /v1/ prefix — infrastructure, not API) ----------
@@ -930,6 +998,8 @@ export function buildApp(deps: ServerDeps): Hono {
           cancel: "POST /v1/sessions/:sessionId/cancel",
           list_runs: "GET /v1/sessions/:sessionId/runs",
           run_tree: "GET /v1/sessions/:sessionId/run-tree",
+          list_children: "GET /v1/sessions/:sessionId/children",
+          session_tree: "GET /v1/sessions/:sessionId/session-tree",
           get_run: "GET /v1/sessions/:sessionId/runs/:runId",
           abort_run: "POST /v1/sessions/:sessionId/runs/:runId/abort",
           list_approvals: "GET /v1/sessions/:sessionId/approvals",
@@ -1599,6 +1669,41 @@ export function buildApp(deps: ServerDeps): Hono {
       return c.json({ error: "session_not_found" }, 404);
     }
     return c.json(await sessionResponse(session, deps.events, deps.passthroughEnv, deps.sessionContainers));
+  });
+
+  app.get("/v1/sessions/:sessionId/children", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const session = getScopedSession(c, sessionId);
+    if (!session) {
+      return c.json({ error: "session_not_found" }, 404);
+    }
+    const children = directChildSessions(sessionId, listScopedSessions(c));
+    return c.json({
+      session_id: sessionId,
+      count: children.length,
+      children: await Promise.all(
+        children.map((child) => sessionResponse(
+          child,
+          deps.events,
+          deps.passthroughEnv,
+          deps.sessionContainers,
+        )),
+      ),
+    });
+  });
+
+  app.get("/v1/sessions/:sessionId/session-tree", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const session = getScopedSession(c, sessionId);
+    if (!session) {
+      return c.json({ error: "session_not_found" }, 404);
+    }
+    const tree = buildSessionTree(session, listScopedSessions(c));
+    return c.json({
+      session_id: sessionId,
+      count: countSessionTreeNodes(tree),
+      root: await sessionTreeNodeResponse(tree, deps),
+    });
   });
 
   app.delete("/v1/sessions/:sessionId", async (c) => {
