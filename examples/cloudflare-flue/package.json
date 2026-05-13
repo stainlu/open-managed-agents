@@ -11,6 +11,7 @@
     "smoke:sandbox": "node scripts/smoke.mjs --check-sandbox-exec",
     "smoke:task": "node scripts/smoke.mjs --check-flue-task",
     "smoke:promotion": "node scripts/smoke.mjs --promotion",
+    "smoke:verify-report": "node scripts/verify-promotion-report.mjs",
     "types": "wrangler types"
   },
   "dependencies": {

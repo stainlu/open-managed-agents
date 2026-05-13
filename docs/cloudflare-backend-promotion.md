@@ -93,6 +93,7 @@ real deployed Worker URL:
    OMA_CLOUDFLARE_FLUE_BASE_URL=https://oma-cloudflare-flue.<account>.workers.dev \
    OMA_API_TOKEN=replace-with-worker-token \
    pnpm smoke:promotion -- --report ./promotion-report.json
+   pnpm smoke:verify-report -- ./promotion-report.json
    ```
 
    This runs smoke promotion mode. Promotion mode requires `OMA_API_TOKEN`,
@@ -101,7 +102,9 @@ real deployed Worker URL:
    cancellation. `-- --allow-local-promotion` is only for local rehearsal; it
    cannot be used as promotion evidence. The JSON report records target, mode,
    model, smoke id, check names, resource ids, cleanup status, and failure
-   message if any. It does not record the bearer token.
+   message if any. It does not record the bearer token. The verifier rejects
+   failed reports, localhost targets, skipped required checks, incomplete
+   cleanup, public Cloudflare platform-id keys, and bearer-token-looking values.
 
 4. Live replay proof.
 

@@ -229,6 +229,12 @@ OMA_API_TOKEN=replace-with-token-if-configured \
 pnpm smoke:promotion -- --report ./promotion-report.json
 ```
 
+Verify that the report is complete enough to count as promotion evidence:
+
+```bash
+pnpm smoke:verify-report -- ./promotion-report.json
+```
+
 If your model answers too quickly, the promotion smoke will fail at the queue
 or active-abort gate. That is expected: the script is a promotion verifier, not
 a flaky green badge.
