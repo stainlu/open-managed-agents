@@ -100,6 +100,8 @@ Rules:
 - `GET /v1/sessions/:id/children` lists direct managed child sessions.
 - `GET /v1/sessions/:id/session-tree` returns the recursive managed session
   lineage for clients, operators, and recovery tools.
+- `POST /v1/sessions/:id/cancel-tree` cancels in-flight work across the
+  visible managed session tree and returns per-session aggregate results.
 - A run against an `idle` session starts immediately.
 - A user event posted while the session is `starting` or `running` is queued by
   default.

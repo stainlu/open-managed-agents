@@ -8,7 +8,16 @@ from typing import Any, Dict, Iterator, List, Optional
 import httpx
 from httpx_sse import connect_sse
 
-from ..types import Approval, Event, ManagedRun, Session, SessionTree, SessionTreeNode
+from ..types import (
+    Approval,
+    CancelTreeResult,
+    CancelTreeSessionResult,
+    Event,
+    ManagedRun,
+    Session,
+    SessionTree,
+    SessionTreeNode,
+)
 
 
 def _parse_session(data: Dict[str, Any]) -> Session:
@@ -95,6 +104,28 @@ def _parse_session_tree(data: Dict[str, Any]) -> SessionTree:
         session_id=data["session_id"],
         count=data["count"],
         root=_parse_session_tree_node(data["root"]),
+    )
+
+
+def _parse_cancel_tree_result(data: Dict[str, Any]) -> CancelTreeResult:
+    return CancelTreeResult(
+        session_id=data["session_id"],
+        count=data["count"],
+        cancelled_count=data["cancelled_count"],
+        skipped_count=data["skipped_count"],
+        failed_count=data["failed_count"],
+        results=[
+            CancelTreeSessionResult(
+                session_id=item["session_id"],
+                parent_session_id=item.get("parent_session_id"),
+                status_before=item["status_before"],
+                session_status=item["session_status"],
+                cancelled=item["cancelled"],
+                skipped=item["skipped"],
+                error=item.get("error"),
+            )
+            for item in data.get("results", [])
+        ],
     )
 
 
@@ -208,6 +239,20 @@ class Sessions:
         resp = self._client.post(f"/v1/sessions/{session_id}/cancel")
         resp.raise_for_status()
         return resp.json()
+
+    def cancel_tree(
+        self,
+        session_id: str,
+        *,
+        reason: Optional[str] = None,
+    ) -> CancelTreeResult:
+        """Cancel in-flight work across a managed session tree."""
+        body: Dict[str, Any] = {}
+        if reason is not None:
+            body["reason"] = reason
+        resp = self._client.post(f"/v1/sessions/{session_id}/cancel-tree", json=body)
+        resp.raise_for_status()
+        return _parse_cancel_tree_result(resp.json())
 
     def compact(self, session_id: str) -> Dict[str, Any]:
         """Ask OpenClaw to compact context history for a session."""

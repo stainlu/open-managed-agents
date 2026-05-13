@@ -115,6 +115,8 @@ Working today:
 - Managed subagent/session lineage is now inspectable through direct child
   listing and recursive session-tree APIs. This is OMA-owned session topology,
   separate from harness-local task/run lineage.
+- Managed session trees can be cancelled explicitly, with aggregate per-session
+  results for cancelled, skipped, and failed descendants.
 - `/healthz` exposes sanitized runtime readiness for both the default
   self-hosted container path and the Cloudflare/Flue path, so operators can see
   the active substrate without exposing platform ids or secrets.

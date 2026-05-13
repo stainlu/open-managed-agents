@@ -1235,6 +1235,92 @@ describe("session ownership in the HTTP API", () => {
     expect(hidden.status).toBe(404);
   });
 
+  it("cancels a managed session tree without touching another user's descendants", async () => {
+    const cancelled: Array<{ sessionId: string; reason?: string }> = [];
+    const { app, store } = makeApp({
+      routerOverrides: {
+        async cancel(sessionId: string, opts?: { reason?: string }) {
+          cancelled.push({ sessionId, reason: opts?.reason });
+          const session = store.sessions.endRunCancelled(sessionId);
+          if (!session) {
+            throw new RouterError("session_not_running", `session ${sessionId} is not running`);
+          }
+          return session;
+        },
+      } as Partial<ServerDeps["router"]>,
+    });
+    const agent = createAgent(store);
+    const alice = store.users.create({ tier: "github" });
+    const bob = store.users.create({ tier: "github" });
+    store.sessions.create({
+      sessionId: "ses_parent",
+      agentId: agent.agentId,
+      userId: alice.userId,
+    });
+    store.sessions.create({
+      sessionId: "ses_child_idle",
+      agentId: agent.agentId,
+      parentSessionId: "ses_parent",
+      userId: alice.userId,
+    });
+    store.sessions.create({
+      sessionId: "ses_grandchild_running",
+      agentId: agent.agentId,
+      parentSessionId: "ses_child_idle",
+      userId: alice.userId,
+    });
+    store.sessions.create({
+      sessionId: "ses_hidden_running",
+      agentId: agent.agentId,
+      parentSessionId: "ses_parent",
+      userId: bob.userId,
+    });
+    for (const sessionId of ["ses_parent", "ses_grandchild_running", "ses_hidden_running"]) {
+      store.sessions.beginRun(sessionId);
+      store.sessions.markRunning(sessionId);
+    }
+
+    const res = await req(app, "/v1/sessions/ses_parent/cancel-tree", {
+      method: "POST",
+      token: alice.apiToken,
+      body: { reason: "operator stop" },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      session_id: "ses_parent",
+      count: 3,
+      cancelled_count: 2,
+      skipped_count: 1,
+      failed_count: 0,
+      results: [
+        {
+          session_id: "ses_parent",
+          status_before: "running",
+          session_status: "idle",
+          cancelled: true,
+        },
+        {
+          session_id: "ses_child_idle",
+          status_before: "idle",
+          session_status: "idle",
+          skipped: true,
+        },
+        {
+          session_id: "ses_grandchild_running",
+          status_before: "running",
+          session_status: "idle",
+          cancelled: true,
+        },
+      ],
+    });
+    expect(cancelled).toEqual([
+      { sessionId: "ses_parent", reason: "operator stop" },
+      { sessionId: "ses_grandchild_running", reason: "operator stop" },
+    ]);
+    expect(store.sessions.get("ses_hidden_running")?.status).toBe("running");
+  });
+
   it("binds legacy /run sessions to the authenticated user", async () => {
     const { app, store } = makeApp();
     const agent = createAgent(store);

@@ -151,6 +151,27 @@ class SessionTree:
 
 
 @dataclass
+class CancelTreeSessionResult:
+    session_id: str
+    status_before: str
+    session_status: str
+    cancelled: bool
+    skipped: bool
+    parent_session_id: Optional[str] = None
+    error: Optional[str] = None
+
+
+@dataclass
+class CancelTreeResult:
+    session_id: str
+    count: int
+    cancelled_count: int
+    skipped_count: int
+    failed_count: int
+    results: List[CancelTreeSessionResult] = field(default_factory=list)
+
+
+@dataclass
 class WorkspaceEntry:
     name: str
     path: str

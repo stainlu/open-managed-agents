@@ -124,6 +124,35 @@ describe("Sessions", () => {
           },
         });
       }
+      if (url.endsWith("/v1/sessions/ses_1/cancel-tree") && init?.method === "POST") {
+        return jsonResponse(200, {
+          session_id: "ses_1",
+          count: 2,
+          cancelled_count: 1,
+          skipped_count: 1,
+          failed_count: 0,
+          results: [
+            {
+              session_id: "ses_1",
+              parent_session_id: null,
+              status_before: "running",
+              session_status: "idle",
+              cancelled: true,
+              skipped: false,
+              error: null,
+            },
+            {
+              session_id: "ses_child",
+              parent_session_id: "ses_1",
+              status_before: "idle",
+              session_status: "idle",
+              cancelled: false,
+              skipped: true,
+              error: null,
+            },
+          ],
+        });
+      }
       return jsonResponse(404, { error: "not_found" });
     });
     const http = new HttpClient({ baseUrl: "http://o", timeoutMs: 1000, fetch: fetchFn });
@@ -131,6 +160,9 @@ describe("Sessions", () => {
 
     const children = await sessions.children("ses_1");
     const tree = await sessions.sessionTree("ses_1");
+    const cancelled = await sessions.cancelTree("ses_1", {
+      reason: "operator stop",
+    });
 
     expect(children).toMatchObject([
       {
@@ -150,8 +182,15 @@ describe("Sessions", () => {
         ],
       },
     });
+    expect(cancelled).toMatchObject({
+      session_id: "ses_1",
+      cancelled_count: 1,
+      skipped_count: 1,
+    });
     expect(fetchFn.mock.calls[0]?.[0]).toBe("http://o/v1/sessions/ses_1/children");
     expect(fetchFn.mock.calls[1]?.[0]).toBe("http://o/v1/sessions/ses_1/session-tree");
+    expect(fetchFn.mock.calls[2]?.[0]).toBe("http://o/v1/sessions/ses_1/cancel-tree");
+    expect(fetchFn.mock.calls[2]?.[1]?.body).toBe(JSON.stringify({ reason: "operator stop" }));
   });
 
   it("lists and resolves pending approvals", async () => {

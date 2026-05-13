@@ -523,6 +523,24 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CancelResult"
+  /v1/sessions/{sessionId}/cancel-tree:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      summary: Cancel in-flight work across a managed session tree
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelTreeRequest"
+      responses:
+        "200":
+          description: Aggregate cancellation result for the root session and descendants
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelTreeResult"
   /v1/sessions/{sessionId}/approvals:
     parameters:
       - $ref: "#/components/parameters/SessionId"
@@ -1506,6 +1524,60 @@ components:
           type: string
         cancelled:
           const: true
+    CancelTreeRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+    CancelTreeSessionResult:
+      type: object
+      required:
+        - session_id
+        - parent_session_id
+        - status_before
+        - session_status
+        - cancelled
+        - skipped
+        - error
+      properties:
+        session_id:
+          type: string
+        parent_session_id:
+          type: [string, "null"]
+        status_before:
+          type: string
+        session_status:
+          type: string
+        cancelled:
+          type: boolean
+        skipped:
+          type: boolean
+        error:
+          type: [string, "null"]
+    CancelTreeResult:
+      type: object
+      required:
+        - session_id
+        - count
+        - cancelled_count
+        - skipped_count
+        - failed_count
+        - results
+      properties:
+        session_id:
+          type: string
+        count:
+          type: integer
+        cancelled_count:
+          type: integer
+        skipped_count:
+          type: integer
+        failed_count:
+          type: integer
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/CancelTreeSessionResult"
     CompactResult:
       type: object
       required: [session_id, session_status, compacted]

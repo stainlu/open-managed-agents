@@ -518,6 +518,38 @@ def test_sessions_resource_and_sse_stream() -> None:
             })
         if request.method == "POST" and request.url.path == "/v1/sessions/ses_123/cancel":
             return httpx.Response(200, json={"status": "cancelled"})
+        if request.method == "POST" and request.url.path == "/v1/sessions/ses_123/cancel-tree":
+            assert _json(request) == {"reason": "operator stop"}
+            return httpx.Response(
+                200,
+                json={
+                    "session_id": "ses_123",
+                    "count": 2,
+                    "cancelled_count": 1,
+                    "skipped_count": 1,
+                    "failed_count": 0,
+                    "results": [
+                        {
+                            "session_id": "ses_123",
+                            "parent_session_id": None,
+                            "status_before": "running",
+                            "session_status": "idle",
+                            "cancelled": True,
+                            "skipped": False,
+                            "error": None,
+                        },
+                        {
+                            "session_id": "ses_child",
+                            "parent_session_id": "ses_123",
+                            "status_before": "idle",
+                            "session_status": "idle",
+                            "cancelled": False,
+                            "skipped": True,
+                            "error": None,
+                        },
+                    ],
+                },
+            )
         if request.method == "POST" and request.url.path == "/v1/sessions/ses_123/compact":
             return httpx.Response(200, json={"status": "queued"})
         if request.method == "GET" and request.url.path == "/v1/sessions/ses_123/runs":
@@ -597,6 +629,10 @@ def test_sessions_resource_and_sse_stream() -> None:
             "resolved": True,
         }
         assert client.sessions.cancel("ses_123") == {"status": "cancelled"}
+        cancel_tree = client.sessions.cancel_tree("ses_123", reason="operator stop")
+        assert cancel_tree.cancelled_count == 1
+        assert cancel_tree.results[1].session_id == "ses_child"
+        assert cancel_tree.results[1].skipped is True
         assert client.sessions.compact("ses_123") == {"status": "queued"}
         assert client.sessions.runs("ses_123")[0].run_id == "run_123"
         assert client.sessions.run("ses_123", "run_123").status == "running"

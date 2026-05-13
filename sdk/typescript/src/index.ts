@@ -29,6 +29,7 @@ export type {
   ConfirmToolParams,
   ResolveApprovalParams,
   AbortRunParams,
+  CancelTreeParams,
 } from "./resources/sessions.js";
 export type {
   AddCredentialParams,

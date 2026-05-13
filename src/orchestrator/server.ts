@@ -688,6 +688,16 @@ type SessionTreeNode = {
   children: SessionTreeNode[];
 };
 
+type CancelTreeSessionResult = {
+  session_id: string;
+  parent_session_id: string | null;
+  status_before: string;
+  session_status: string;
+  cancelled: boolean;
+  skipped: boolean;
+  error: string | null;
+};
+
 function directChildSessions(parentSessionId: string, sessions: Session[]): Session[] {
   return sessions
     .filter((session) => session.parentSessionId === parentSessionId)
@@ -743,6 +753,13 @@ function countSessionTreeNodes(node: SessionTreeNode): number {
   let count = 1;
   for (const child of node.children) count += countSessionTreeNodes(child);
   return count;
+}
+
+function flattenSessionTree(node: SessionTreeNode): Session[] {
+  return [
+    node.session,
+    ...node.children.flatMap((child) => flattenSessionTree(child)),
+  ];
 }
 
 function handleRouterError(err: unknown, c: Context): Response {
@@ -996,6 +1013,7 @@ export function buildApp(deps: ServerDeps): Hono {
           list_events: "GET /v1/sessions/:sessionId/events",
           stream_events: "GET /v1/sessions/:sessionId/events?stream=true",
           cancel: "POST /v1/sessions/:sessionId/cancel",
+          cancel_tree: "POST /v1/sessions/:sessionId/cancel-tree",
           list_runs: "GET /v1/sessions/:sessionId/runs",
           run_tree: "GET /v1/sessions/:sessionId/run-tree",
           list_children: "GET /v1/sessions/:sessionId/children",
@@ -1868,6 +1886,109 @@ export function buildApp(deps: ServerDeps): Hono {
       });
       return handleRouterError(err, c);
     }
+  });
+
+  app.post("/v1/sessions/:sessionId/cancel-tree", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const session = getScopedSession(c, sessionId);
+    if (!session) {
+      writeAudit(deps.audit, c, {
+        action: "session.cancel_tree",
+        target: sessionId,
+        outcome: "session_not_found",
+      });
+      return c.json({ error: "session_not_found" }, 404);
+    }
+
+    let body: Record<string, unknown> | undefined;
+    try {
+      body = await readOptionalJsonObject(c.req.raw);
+    } catch {
+      return c.json({
+        error: "invalid_request",
+        message: "cancel-tree body must be valid JSON when provided",
+      }, 400);
+    }
+    const reason = typeof body?.reason === "string" && body.reason.trim().length > 0
+      ? body.reason.trim()
+      : "session tree cancelled";
+
+    const tree = buildSessionTree(session, listScopedSessions(c));
+    const targets = flattenSessionTree(tree);
+    const results: CancelTreeSessionResult[] = [];
+    for (const target of targets) {
+      const current = deps.sessions.get(target.sessionId);
+      if (!current) {
+        results.push({
+          session_id: target.sessionId,
+          parent_session_id: target.parentSessionId,
+          status_before: "missing",
+          session_status: "missing",
+          cancelled: false,
+          skipped: false,
+          error: "session_missing",
+        });
+        continue;
+      }
+      if (current.status !== "starting" && current.status !== "running") {
+        results.push({
+          session_id: current.sessionId,
+          parent_session_id: current.parentSessionId,
+          status_before: current.status,
+          session_status: current.status,
+          cancelled: false,
+          skipped: true,
+          error: null,
+        });
+        continue;
+      }
+      const statusBefore = current.status;
+      try {
+        const cancelled = await deps.router.cancel(current.sessionId, { reason });
+        results.push({
+          session_id: cancelled.sessionId,
+          parent_session_id: cancelled.parentSessionId,
+          status_before: statusBefore,
+          session_status: cancelled.status,
+          cancelled: true,
+          skipped: false,
+          error: null,
+        });
+      } catch (err) {
+        results.push({
+          session_id: current.sessionId,
+          parent_session_id: current.parentSessionId,
+          status_before: statusBefore,
+          session_status: deps.sessions.get(current.sessionId)?.status ?? current.status,
+          cancelled: false,
+          skipped: false,
+          error: err instanceof RouterError ? err.code : "cancel_failed",
+        });
+      }
+    }
+
+    const cancelledCount = results.filter((result) => result.cancelled).length;
+    const skippedCount = results.filter((result) => result.skipped).length;
+    const failedCount = results.filter((result) => result.error).length;
+    writeAudit(deps.audit, c, {
+      action: "session.cancel_tree",
+      target: sessionId,
+      outcome: failedCount > 0 ? "partial_error" : "ok",
+      metadata: {
+        count: results.length,
+        cancelled_count: cancelledCount,
+        skipped_count: skippedCount,
+        failed_count: failedCount,
+      },
+    });
+    return c.json({
+      session_id: sessionId,
+      count: results.length,
+      cancelled_count: cancelledCount,
+      skipped_count: skippedCount,
+      failed_count: failedCount,
+      results,
+    });
   });
 
   app.get("/v1/sessions/:sessionId/approvals", async (c) => {

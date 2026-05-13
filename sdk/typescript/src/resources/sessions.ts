@@ -4,6 +4,7 @@ import type {
   AbortRunResult,
   Approval,
   CancelResult,
+  CancelTreeResult,
   CompactResult,
   Event,
   ManagedRun,
@@ -38,6 +39,10 @@ export interface ResolveApprovalParams {
 }
 
 export interface AbortRunParams {
+  reason?: string;
+}
+
+export interface CancelTreeParams {
   reason?: string;
 }
 
@@ -136,6 +141,19 @@ export class Sessions {
     return this.http.request<CancelResult>(
       "POST",
       `/v1/sessions/${encodeURIComponent(sessionId)}/cancel`,
+    );
+  }
+
+  cancelTree(
+    sessionId: string,
+    params: CancelTreeParams = {},
+  ): Promise<CancelTreeResult> {
+    const body: Record<string, unknown> = {};
+    if (params.reason !== undefined) body["reason"] = params.reason;
+    return this.http.request<CancelTreeResult>(
+      "POST",
+      `/v1/sessions/${encodeURIComponent(sessionId)}/cancel-tree`,
+      body,
     );
   }
 

@@ -327,6 +327,25 @@ export interface CancelResult {
   cancelled: true;
 }
 
+export interface CancelTreeSessionResult {
+  session_id: string;
+  parent_session_id?: string | null;
+  status_before: string;
+  session_status: string;
+  cancelled: boolean;
+  skipped: boolean;
+  error?: string | null;
+}
+
+export interface CancelTreeResult {
+  session_id: string;
+  count: number;
+  cancelled_count: number;
+  skipped_count: number;
+  failed_count: number;
+  results: CancelTreeSessionResult[];
+}
+
 export interface CompactResult {
   session_id: string;
   session_status: Session["status"];
