@@ -30,6 +30,7 @@ import {
   CloudflareFlueDurableObject,
   ConfigurableCloudflareFlueDurableObject,
   createCloudflareFlueDurableObjectHandler,
+  type CloudflareFlueDurableObjectEnv,
   type CloudflareFlueDurableObjectHandlerOptions,
 } from "./durable-object.js";
 import {
@@ -40,6 +41,7 @@ import {
 } from "./workflow.js";
 
 let tmpDir: string;
+const TEST_PARENT_TOKEN_SECRET_BASE64 = Buffer.from("0123456789abcdef").toString("base64");
 
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "oma-cf-do-"));
@@ -319,6 +321,7 @@ describe("CloudflareFlueDurableObject", () => {
         {
           OMA_DB: db,
           OMA_WORKSPACE: r2Bucket,
+          OMA_PARENT_TOKEN_SECRET_BASE64: TEST_PARENT_TOKEN_SECRET_BASE64,
           OMA_VERSION: "cf-test",
           OMA_COMMIT_SHA: "abc123",
           OMA_RUN_TIMEOUT_MS: "500",
@@ -334,7 +337,7 @@ describe("CloudflareFlueDurableObject", () => {
       });
 
       const store = new DurableObjectSqlStore(doStorage);
-      expect(store.secrets.get("parent_token_hmac_secret")?.byteLength).toBe(32);
+      expect(store.secrets.get("parent_token_hmac_secret")).toBeUndefined();
     } finally {
       close();
       doBacking.close();
@@ -365,6 +368,7 @@ describe("CloudflareFlueDurableObject", () => {
         {
           OMA_DB: db,
           OMA_WORKSPACE: new FakeR2Bucket(),
+          OMA_PARENT_TOKEN_SECRET_BASE64: TEST_PARENT_TOKEN_SECRET_BASE64,
         },
       );
       const harness = object.handlerForTest().stack.flueHarness as unknown as {
@@ -389,6 +393,7 @@ describe("CloudflareFlueDurableObject", () => {
         {
           OMA_DB: db,
           OMA_WORKSPACE: new FakeR2Bucket(),
+          OMA_PARENT_TOKEN_SECRET_BASE64: TEST_PARENT_TOKEN_SECRET_BASE64,
           OMA_RUN_WORKFLOW: workflow,
           OMA_WORKFLOW_INTERNAL_TOKEN: "secret",
         },
@@ -443,6 +448,7 @@ describe("CloudflareFlueDurableObject", () => {
         {
           OMA_DB: db,
           OMA_WORKSPACE: new FakeR2Bucket(),
+          OMA_PARENT_TOKEN_SECRET_BASE64: TEST_PARENT_TOKEN_SECRET_BASE64,
           OMA_WORKFLOW_INTERNAL_TOKEN: "secret",
         },
       );
@@ -487,6 +493,7 @@ describe("CloudflareFlueDurableObject", () => {
         {
           OMA_DB: db,
           OMA_WORKSPACE: new FakeR2Bucket(),
+          OMA_PARENT_TOKEN_SECRET_BASE64: TEST_PARENT_TOKEN_SECRET_BASE64,
           OMA_WORKFLOW_INTERNAL_TOKEN: "secret",
         },
       );
@@ -525,6 +532,7 @@ describe("CloudflareFlueDurableObject", () => {
         {
           OMA_DB: db,
           OMA_WORKSPACE: new FakeR2Bucket(),
+          OMA_PARENT_TOKEN_SECRET_BASE64: TEST_PARENT_TOKEN_SECRET_BASE64,
           OMA_WORKFLOW_INTERNAL_TOKEN: "secret",
         },
       );
@@ -570,6 +578,48 @@ describe("CloudflareFlueDurableObject", () => {
     }
   });
 
+  it("fails loudly when the metadata D1 binding is missing", () => {
+    const doBacking = new Database(join(tmpDir, "metadata.db"));
+    const doStorage = new FakeDurableObjectStorage(doBacking);
+
+    try {
+      const object = new CloudflareFlueDurableObject(
+        { storage: doStorage },
+        {
+          OMA_WORKSPACE: new FakeR2Bucket(),
+          OMA_PARENT_TOKEN_SECRET_BASE64: TEST_PARENT_TOKEN_SECRET_BASE64,
+        } as CloudflareFlueDurableObjectEnv,
+      );
+
+      expect(() => object.fetch(new Request("https://oma.example/healthz")))
+        .toThrow(/OMA_DB/);
+    } finally {
+      doBacking.close();
+    }
+  });
+
+  it("fails loudly when the parent-token signing secret is missing", () => {
+    const doBacking = new Database(join(tmpDir, "metadata.db"));
+    const doStorage = new FakeDurableObjectStorage(doBacking);
+    const { db, close } = sqliteD1();
+
+    try {
+      const object = new CloudflareFlueDurableObject(
+        { storage: doStorage },
+        {
+          OMA_DB: db,
+          OMA_WORKSPACE: new FakeR2Bucket(),
+        },
+      );
+
+      expect(() => object.fetch(new Request("https://oma.example/healthz")))
+        .toThrow(/OMA_PARENT_TOKEN_SECRET_BASE64/);
+    } finally {
+      close();
+      doBacking.close();
+    }
+  });
+
   it("fails loudly when Workflow scheduling lacks an internal re-entry token", async () => {
     const doBacking = new Database(join(tmpDir, "metadata.db"));
     const doStorage = new FakeDurableObjectStorage(doBacking);
@@ -581,6 +631,7 @@ describe("CloudflareFlueDurableObject", () => {
         {
           OMA_DB: db,
           OMA_WORKSPACE: new FakeR2Bucket(),
+          OMA_PARENT_TOKEN_SECRET_BASE64: TEST_PARENT_TOKEN_SECRET_BASE64,
           OMA_RUN_WORKFLOW: new FakeWorkflow(),
         },
       );

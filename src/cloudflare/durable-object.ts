@@ -140,6 +140,9 @@ export class CloudflareFlueDurableObject<
     if (!this.env.OMA_WORKSPACE) {
       throw new Error("CloudflareFlueDurableObject requires OMA_WORKSPACE R2 binding");
     }
+    if (!this.env.OMA_PARENT_TOKEN_SECRET_BASE64) {
+      throw new Error("CloudflareFlueDurableObject requires OMA_PARENT_TOKEN_SECRET_BASE64");
+    }
     if (this.env.OMA_RUN_WORKFLOW && !this.env.OMA_WORKFLOW_INTERNAL_TOKEN) {
       throw new Error(
         "CloudflareFlueDurableObject requires OMA_WORKFLOW_INTERNAL_TOKEN when OMA_RUN_WORKFLOW is configured",
