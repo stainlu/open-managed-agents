@@ -163,7 +163,7 @@ globalThis.fetch = async function fakeFetch(input, init = {}) {
     });
   }
   if (method === "GET" && url.pathname === "/v1/harnesses") {
-    return json({ harnesses: [{ harness_id: "flue", capabilities: {} }] });
+    return json({ harnesses: [{ harness_id: "flue", runtime_mode: "native", capabilities: {} }] });
   }
   if (method === "POST" && url.pathname === "/v1/agents") {
     const body = await readBodyJson(init);

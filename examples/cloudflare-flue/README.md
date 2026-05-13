@@ -212,7 +212,7 @@ The basic smoke proves:
 - `/healthz` does not leak platform ids and, in promotion mode, proves the
   native `cloudflare-flue` runtime plus metadata, database, workspace,
   Workflow, Workers AI, and Sandbox bindings are configured;
-- `flue` is present in the harness catalog;
+- `flue` is present in the harness catalog with `runtime_mode: "native"`;
 - a Flue agent can be created;
 - a managed prompt run reaches `succeeded`;
 - `events?run_id=...` returns run-scoped events;

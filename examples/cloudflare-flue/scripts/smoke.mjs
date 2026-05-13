@@ -84,13 +84,20 @@ async function main() {
     );
 
     const harnesses = await request("GET", "/v1/harnesses");
+    const flueHarness = Array.isArray(harnesses.harnesses)
+      ? harnesses.harnesses.find((harness) => harness.harness_id === "flue")
+      : undefined;
+    assert(flueHarness, "GET /v1/harnesses does not include flue");
     assert(
-      Array.isArray(harnesses.harnesses)
-        && harnesses.harnesses.some((harness) => harness.harness_id === "flue"),
-      "GET /v1/harnesses does not include flue",
+      flueHarness.runtime_mode === "native",
+      `flue harness runtime_mode must be native, got ${flueHarness.runtime_mode}`,
     );
-    recordCheck("harness_catalog", { harness_id: "flue" });
-    console.log("ok harness catalog includes flue");
+    assertNoPlatformIds(harnesses, "harness catalog response");
+    recordCheck("harness_catalog", {
+      harness_id: "flue",
+      runtime_mode: flueHarness.runtime_mode,
+    });
+    console.log("ok harness catalog includes native flue");
 
     const agent = await request("POST", "/v1/agents", {
       body: {

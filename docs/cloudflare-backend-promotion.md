@@ -101,11 +101,11 @@ real deployed Worker URL:
    pnpm smoke
    ```
 
-   This proves health, harness catalog, Flue agent creation, prompt run,
-   run-scoped event filtering, run-tree projection, cleanup, and no leaked
-   Cloudflare platform ids. In promotion mode, health must also prove the
-   native `cloudflare-flue` runtime and configured metadata, database,
-   workspace, Workflow, Workers AI, and Sandbox bindings.
+   This proves health, harness catalog with `flue` as a native harness, Flue
+   agent creation, prompt run, run-scoped event filtering, run-tree projection,
+   cleanup, and no leaked Cloudflare platform ids. In promotion mode, health
+   must also prove the native `cloudflare-flue` runtime and configured
+   metadata, database, workspace, Workflow, Workers AI, and Sandbox bindings.
 
 3. Full promotion smoke.
 

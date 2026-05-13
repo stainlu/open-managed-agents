@@ -57,6 +57,7 @@ async function main() {
     if (check?.status === "skipped") failures.push(`check ${check.name} was skipped`);
   }
   requireCloudflareRuntimeEvidence(checksByName.get("health"), failures);
+  requireFlueHarnessCatalogEvidence(checksByName.get("harness_catalog"), failures);
 
   const resources = report.resources ?? {};
   if (!Array.isArray(resources.agent_ids) || resources.agent_ids.length < 1) {
@@ -172,6 +173,19 @@ function requireCloudflareRuntimeEvidence(healthCheck, failures) {
     if (bindings[name] !== true) {
       failures.push(`health runtime binding ${name} must be configured`);
     }
+  }
+}
+
+function requireFlueHarnessCatalogEvidence(harnessCheck, failures) {
+  if (!harnessCheck || typeof harnessCheck !== "object" || Array.isArray(harnessCheck)) {
+    failures.push("harness_catalog check must include Flue harness evidence");
+    return;
+  }
+  if (harnessCheck.harness_id !== "flue") {
+    failures.push(`harness_catalog harness_id must be flue, got ${harnessCheck.harness_id}`);
+  }
+  if (harnessCheck.runtime_mode !== "native") {
+    failures.push(`harness_catalog runtime_mode must be native, got ${harnessCheck.runtime_mode}`);
   }
 }
 

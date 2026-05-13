@@ -65,6 +65,18 @@ describe("verify-promotion-report", () => {
       });
   });
 
+  it("rejects reports without native Flue harness evidence", async () => {
+    const report = passingReport();
+    const harness = report.checks.find((check) => check.name === "harness_catalog");
+    harness.runtime_mode = "container";
+    const reportPath = await writeReport(report);
+
+    await expect(execFileAsync(process.execPath, [scriptPath, reportPath]))
+      .rejects.toMatchObject({
+        stderr: expect.stringContaining("harness_catalog runtime_mode must be native"),
+      });
+  });
+
   it("rejects leaked platform ids and bearer-looking values", async () => {
     const reportPath = await writeReport({
       ...passingReport(),
@@ -90,11 +102,7 @@ function passingReport() {
     started_at: now,
     finished_at: now,
     status: "passed",
-    checks: requiredChecks.map((name) =>
-      name === "health"
-        ? cloudflareHealthCheck(now)
-        : { name, status: "passed", at: now }
-    ),
+    checks: requiredChecks.map((name) => passedCheck(name, now)),
     resources: {
       agent_ids: ["agt_test"],
       session_ids: ["ses_test"],
@@ -105,6 +113,20 @@ function passingReport() {
       { type: "agent", id: "agt_test", status: "deleted" },
     ],
   };
+}
+
+function passedCheck(name, now) {
+  if (name === "health") return cloudflareHealthCheck(now);
+  if (name === "harness_catalog") {
+    return {
+      name,
+      status: "passed",
+      at: now,
+      harness_id: "flue",
+      runtime_mode: "native",
+    };
+  }
+  return { name, status: "passed", at: now };
 }
 
 function cloudflareHealthCheck(now) {
