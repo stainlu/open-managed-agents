@@ -319,8 +319,16 @@ paths:
       responses:
         "200":
           description: Accepted immediately or queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SendEventResult"
         "202":
           description: Started in background
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SendEventResult"
     get:
       summary: List events or stream SSE with stream=true
       parameters:
@@ -328,9 +336,32 @@ paths:
           name: stream
           schema:
             type: boolean
+        - in: query
+          name: run_id
+          schema:
+            type: string
+          description: Return only events for this managed run id.
+        - in: query
+          name: parent_run_id
+          schema:
+            type: string
+          description: Return only direct child events of this parent run id.
       responses:
         "200":
           description: Events JSON or text/event-stream
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events]
+                properties:
+                  events:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Event"
+            text/event-stream:
+              schema:
+                type: string
   /v1/sessions/{sessionId}/cancel:
     parameters:
       - $ref: "#/components/parameters/SessionId"
@@ -339,6 +370,115 @@ paths:
       responses:
         "200":
           description: Cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelResult"
+  /v1/sessions/{sessionId}/approvals:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      summary: List pending tool approvals for a session
+      responses:
+        "200":
+          description: Pending approvals
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session_id, approvals]
+                properties:
+                  session_id:
+                    type: string
+                  approvals:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Approval"
+  /v1/sessions/{sessionId}/approvals/{approvalId}:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/ApprovalId"
+    post:
+      summary: Resolve a pending tool approval
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveApprovalRequest"
+      responses:
+        "200":
+          description: Approval resolved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResolveApprovalResult"
+        "404":
+          description: Session or approval not found
+  /v1/sessions/{sessionId}/runs:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      summary: List managed runs for a session
+      responses:
+        "200":
+          description: Managed runs
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [runs]
+                properties:
+                  runs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ManagedRun"
+  /v1/sessions/{sessionId}/run-tree:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      summary: Read managed run tree projection for a session
+      responses:
+        "200":
+          description: Run tree
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunTree"
+  /v1/sessions/{sessionId}/runs/{runId}:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/RunId"
+    get:
+      summary: Get one managed run
+      responses:
+        "200":
+          description: Managed run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManagedRun"
+        "404":
+          description: Session or run not found
+  /v1/sessions/{sessionId}/runs/{runId}/abort:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/RunId"
+    post:
+      summary: Abort a queued or active managed run
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AbortRunRequest"
+      responses:
+        "200":
+          description: Run abort result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AbortRunResult"
   /v1/sessions/{sessionId}/compact:
     parameters:
       - $ref: "#/components/parameters/SessionId"
@@ -347,6 +487,10 @@ paths:
       responses:
         "200":
           description: Compacted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompactResult"
   /v1/sessions/{sessionId}/logs:
     parameters:
       - $ref: "#/components/parameters/SessionId"
@@ -386,6 +530,18 @@ components:
     SessionId:
       in: path
       name: sessionId
+      required: true
+      schema:
+        type: string
+    RunId:
+      in: path
+      name: runId
+      required: true
+      schema:
+        type: string
+    ApprovalId:
+      in: path
+      name: approvalId
       required: true
       schema:
         type: string
@@ -802,3 +958,246 @@ components:
         result:
           type: string
           enum: [allow, deny]
+        denyMessage:
+          type: string
+    SendEventResult:
+      type: object
+      required: [session_id]
+      properties:
+        session_id:
+          type: string
+        run_id:
+          type: string
+        session_status:
+          type: string
+        queued:
+          type: boolean
+        confirmed:
+          type: boolean
+    Event:
+      type: object
+      required: [event_id, session_id, type, content, created_at]
+      properties:
+        event_id:
+          type: string
+        session_id:
+          type: string
+        type:
+          type: string
+        content:
+          type: string
+        created_at:
+          type: integer
+        tokens:
+          anyOf:
+            - type: object
+              properties:
+                input:
+                  type: integer
+                output:
+                  type: integer
+            - type: "null"
+        cost_usd:
+          type: [number, "null"]
+        model:
+          type: [string, "null"]
+        tool_name:
+          type: [string, "null"]
+        tool_call_id:
+          type: [string, "null"]
+        tool_arguments:
+          anyOf:
+            - type: object
+              additionalProperties: true
+            - type: "null"
+        is_error:
+          type: [boolean, "null"]
+        approval_id:
+          type: [string, "null"]
+        run_id:
+          type: [string, "null"]
+        run_kind:
+          type: [string, "null"]
+        run_status:
+          type: [string, "null"]
+        parent_run_id:
+          type: [string, "null"]
+        event_index:
+          type: [integer, "null"]
+    Approval:
+      type: object
+      required: [approval_id, session_id, tool_name, description, arrived_at]
+      properties:
+        approval_id:
+          type: string
+        session_id:
+          type: string
+        tool_name:
+          type: string
+        tool_call_id:
+          type: [string, "null"]
+        description:
+          type: string
+        arrived_at:
+          type: integer
+    ResolveApprovalRequest:
+      type: object
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [allow, deny]
+    ResolveApprovalResult:
+      type: object
+      required: [session_id, approval_id, decision, resolved]
+      properties:
+        session_id:
+          type: string
+        approval_id:
+          type: string
+        decision:
+          type: string
+          enum: [allow, deny]
+        resolved:
+          const: true
+    ManagedRunStatus:
+      type: string
+      enum: [queued, starting, running, succeeded, failed, cancelled, skipped]
+    ManagedRun:
+      type: object
+      required: [run_id, session_id, agent_id, status, queued, error, created_at, started_at, completed_at]
+      properties:
+        run_id:
+          type: string
+        session_id:
+          type: string
+        agent_id:
+          type: string
+        status:
+          $ref: "#/components/schemas/ManagedRunStatus"
+        queued:
+          type: boolean
+        model:
+          type: [string, "null"]
+        thinking_level:
+          anyOf:
+            - $ref: "#/components/schemas/ThinkingLevel"
+            - type: "null"
+        error:
+          type: [string, "null"]
+        created_at:
+          type: integer
+        started_at:
+          type: [integer, "null"]
+        completed_at:
+          type: [integer, "null"]
+    RunTreeSource:
+      type: object
+      required: [managed_run, event_log]
+      properties:
+        managed_run:
+          type: boolean
+        event_log:
+          type: boolean
+    RunTreeNode:
+      type: object
+      required: [run_id, event_count, source, children]
+      properties:
+        run_id:
+          type: string
+        parent_run_id:
+          type: [string, "null"]
+        run_kind:
+          type: [string, "null"]
+        status:
+          type: [string, "null"]
+        managed_status:
+          anyOf:
+            - $ref: "#/components/schemas/ManagedRunStatus"
+            - type: "null"
+        queued:
+          type: [boolean, "null"]
+        created_at:
+          type: [integer, "null"]
+        started_at:
+          type: [integer, "null"]
+        completed_at:
+          type: [integer, "null"]
+        first_event_at:
+          type: [integer, "null"]
+        last_event_at:
+          type: [integer, "null"]
+        event_count:
+          type: integer
+        tokens:
+          anyOf:
+            - type: object
+              properties:
+                input:
+                  type: integer
+                output:
+                  type: integer
+            - type: "null"
+        cost_usd:
+          type: [number, "null"]
+        model:
+          type: [string, "null"]
+        is_error:
+          type: [boolean, "null"]
+        source:
+          $ref: "#/components/schemas/RunTreeSource"
+        children:
+          type: array
+          items:
+            $ref: "#/components/schemas/RunTreeNode"
+    RunTree:
+      type: object
+      required: [session_id, count, runs]
+      properties:
+        session_id:
+          type: string
+        count:
+          type: integer
+        runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/RunTreeNode"
+    AbortRunRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+    AbortRunResult:
+      type: object
+      required: [session_id, session_status, run, aborted, removed_queued]
+      properties:
+        session_id:
+          type: string
+        session_status:
+          type: string
+        run:
+          $ref: "#/components/schemas/ManagedRun"
+        aborted:
+          type: boolean
+        removed_queued:
+          type: boolean
+    CancelResult:
+      type: object
+      required: [session_id, session_status, cancelled]
+      properties:
+        session_id:
+          type: string
+        session_status:
+          type: string
+        cancelled:
+          const: true
+    CompactResult:
+      type: object
+      required: [session_id, session_status, compacted]
+      properties:
+        session_id:
+          type: string
+        session_status:
+          type: string
+        compacted:
+          const: true
