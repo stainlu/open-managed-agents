@@ -37,6 +37,7 @@ from .types import (
     Session,
     Vault,
     VaultCredential,
+    WorkspaceEntry,
 )
 
 __all__ = [
@@ -52,6 +53,7 @@ __all__ = [
     "Event",
     "Vault",
     "VaultCredential",
+    "WorkspaceEntry",
 ]
 
 

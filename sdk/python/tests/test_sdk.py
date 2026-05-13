@@ -11,7 +11,10 @@ from openclaw_managed_agents import OpenClawClient
 def _json(request: httpx.Request) -> Dict[str, Any]:
     if not request.content:
         return {}
-    return json.loads(request.content.decode("utf-8"))
+    try:
+        return json.loads(request.content.decode("utf-8"))
+    except json.JSONDecodeError:
+        return {}
 
 
 def _client(handler: Callable[[httpx.Request], httpx.Response]) -> OpenClawClient:
@@ -219,6 +222,39 @@ def test_agents_resource_round_trips_payloads() -> None:
         if request.method == "POST" and request.url.path == "/v1/agents/agt_123/run":
             assert _json(request) == {"task": "summarize", "sessionId": "ses_123"}
             return httpx.Response(200, json={"session_id": "ses_123", "output": "done"})
+        if request.method == "GET" and request.url.path == "/v1/agents/agt_123/files":
+            assert request.url.params["session_id"] == "ses_123"
+            assert request.url.params["path"] == "src"
+            return httpx.Response(200, json={
+                "agent_id": "agt_123",
+                "path": "src",
+                "entries": [{
+                    "name": "index.py",
+                    "path": "src/index.py",
+                    "type": "file",
+                    "size": 12,
+                    "mtime": 1234,
+                }],
+            })
+        if request.method == "GET" and request.url.path == "/v1/agents/agt_123/files/src/index.py":
+            assert request.url.params["session_id"] == "ses_123"
+            return httpx.Response(200, content=b"hello")
+        if request.method == "PUT" and request.url.path == "/v1/agents/agt_123/files/src/index.py":
+            assert request.url.params["session_id"] == "ses_123"
+            assert request.content == b"updated"
+            assert request.headers["content-type"] == "application/octet-stream"
+            return httpx.Response(200, json={
+                "agent_id": "agt_123",
+                "path": "src/index.py",
+                "size": 7,
+            })
+        if request.method == "DELETE" and request.url.path == "/v1/agents/agt_123/files/src/index.py":
+            assert request.url.params["session_id"] == "ses_123"
+            return httpx.Response(200, json={
+                "agent_id": "agt_123",
+                "path": "src/index.py",
+                "deleted": True,
+            })
         raise AssertionError(f"unexpected request {request.method} {request.url}")
 
     with _client(handler) as client:
@@ -253,6 +289,28 @@ def test_agents_resource_round_trips_payloads() -> None:
         assert client.agents.run("agt_123", task="summarize", session_id="ses_123") == {
             "session_id": "ses_123",
             "output": "done",
+        }
+        files = client.agents.list_files("agt_123", session_id="ses_123", path="src")
+        assert files[0].path == "src/index.py"
+        assert client.agents.read_file("agt_123", "src/index.py", session_id="ses_123") == b"hello"
+        assert client.agents.write_file(
+            "agt_123",
+            "src/index.py",
+            b"updated",
+            session_id="ses_123",
+        ) == {
+            "agent_id": "agt_123",
+            "path": "src/index.py",
+            "size": 7,
+        }
+        assert client.agents.delete_file(
+            "agt_123",
+            "src/index.py",
+            session_id="ses_123",
+        ) == {
+            "agent_id": "agt_123",
+            "path": "src/index.py",
+            "deleted": True,
         }
         client.agents.delete("agt_123")
 

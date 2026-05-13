@@ -7,7 +7,14 @@ import { Vaults } from "./resources/vaults.js";
 
 export { OpenClawError } from "./http.js";
 export * from "./types.js";
-export type { CreateAgentParams, RunAgentParams, UpdateAgentParams } from "./resources/agents.js";
+export type {
+  CreateAgentParams,
+  ListWorkspaceFilesParams,
+  RunAgentParams,
+  UpdateAgentParams,
+  WorkspaceFileParams,
+  WriteWorkspaceFileParams,
+} from "./resources/agents.js";
 export type { CreateEnvironmentParams } from "./resources/environments.js";
 export type {
   CreateSessionParams,

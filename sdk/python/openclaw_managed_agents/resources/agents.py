@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
+from urllib.parse import quote
 
 import httpx
 
-from ..types import Agent
+from ..types import Agent, WorkspaceEntry
 
 
 def _parse_agent(data: Dict[str, Any]) -> Agent:
@@ -28,6 +29,16 @@ def _parse_agent(data: Dict[str, Any]) -> Agent:
         thinking_level=data.get("thinking_level", "off"),
         channels=data.get("channels", {}),
         archived_at=data.get("archived_at"),
+    )
+
+
+def _parse_workspace_entry(data: Dict[str, Any]) -> WorkspaceEntry:
+    return WorkspaceEntry(
+        name=data["name"],
+        path=data["path"],
+        type=data["type"],
+        size=data["size"],
+        mtime=data["mtime"],
     )
 
 
@@ -165,3 +176,54 @@ class Agents:
         resp = self._client.post(f"/v1/agents/{agent_id}/run", json=body)
         resp.raise_for_status()
         return resp.json()
+
+    def list_files(
+        self,
+        agent_id: str,
+        *,
+        session_id: str,
+        path: str = "",
+    ) -> List[WorkspaceEntry]:
+        params = {"session_id": session_id}
+        if path:
+            params["path"] = path
+        resp = self._client.get(f"/v1/agents/{agent_id}/files", params=params)
+        resp.raise_for_status()
+        return [_parse_workspace_entry(entry) for entry in resp.json()["entries"]]
+
+    def read_file(self, agent_id: str, path: str, *, session_id: str) -> bytes:
+        resp = self._client.get(
+            f"/v1/agents/{agent_id}/files/{_encode_workspace_path(path)}",
+            params={"session_id": session_id},
+        )
+        resp.raise_for_status()
+        return resp.content
+
+    def write_file(
+        self,
+        agent_id: str,
+        path: str,
+        content: Union[bytes, str],
+        *,
+        session_id: str,
+    ) -> Dict[str, Any]:
+        resp = self._client.put(
+            f"/v1/agents/{agent_id}/files/{_encode_workspace_path(path)}",
+            params={"session_id": session_id},
+            content=content,
+            headers={"content-type": "application/octet-stream"},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def delete_file(self, agent_id: str, path: str, *, session_id: str) -> Dict[str, Any]:
+        resp = self._client.delete(
+            f"/v1/agents/{agent_id}/files/{_encode_workspace_path(path)}",
+            params={"session_id": session_id},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+def _encode_workspace_path(path: str) -> str:
+    return "/".join(quote(part, safe="") for part in path.split("/"))

@@ -261,6 +261,32 @@ export interface WarmAgentResult {
   queued: true;
 }
 
+export interface WorkspaceEntry {
+  name: string;
+  path: string;
+  type: "file" | "dir";
+  size: number;
+  mtime: number;
+}
+
+export interface WorkspaceFileList {
+  agent_id: string;
+  path: string;
+  entries: WorkspaceEntry[];
+}
+
+export interface WorkspaceFileWriteResult {
+  agent_id: string;
+  path: string;
+  size: number;
+}
+
+export interface WorkspaceFileDeleteResult {
+  agent_id: string;
+  path: string;
+  deleted: true;
+}
+
 export interface Vault {
   vault_id: string;
   user_id: string;

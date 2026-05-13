@@ -126,6 +126,15 @@ class ManagedRun:
 
 
 @dataclass
+class WorkspaceEntry:
+    name: str
+    path: str
+    type: str
+    size: int
+    mtime: int
+
+
+@dataclass
 class Vault:
     vault_id: str
     user_id: str

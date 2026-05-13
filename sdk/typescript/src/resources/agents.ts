@@ -9,6 +9,9 @@ import type {
   RunAgentResult,
   ThinkingLevel,
   WarmAgentResult,
+  WorkspaceFileDeleteResult,
+  WorkspaceFileList,
+  WorkspaceFileWriteResult,
 } from "../types.js";
 
 export interface CreateAgentParams {
@@ -45,6 +48,18 @@ export interface UpdateAgentParams {
 export interface RunAgentParams {
   task: string;
   sessionId?: string;
+}
+
+export interface WorkspaceFileParams {
+  sessionId: string;
+}
+
+export interface ListWorkspaceFilesParams extends WorkspaceFileParams {
+  path?: string;
+}
+
+export interface WriteWorkspaceFileParams extends WorkspaceFileParams {
+  contentType?: string;
 }
 
 export class Agents {
@@ -133,4 +148,50 @@ export class Agents {
       body,
     );
   }
+
+  listFiles(agentId: string, params: ListWorkspaceFilesParams): Promise<WorkspaceFileList> {
+    const query = new URLSearchParams({ session_id: params.sessionId });
+    if (params.path !== undefined) query.set("path", params.path);
+    return this.http.request<WorkspaceFileList>(
+      "GET",
+      `/v1/agents/${encodeURIComponent(agentId)}/files?${query.toString()}`,
+    );
+  }
+
+  readFile(agentId: string, path: string, params: WorkspaceFileParams): Promise<Uint8Array> {
+    return this.http.bytesRequest("GET", filePath(agentId, path, params.sessionId));
+  }
+
+  writeFile(
+    agentId: string,
+    path: string,
+    body: BodyInit,
+    params: WriteWorkspaceFileParams,
+  ): Promise<WorkspaceFileWriteResult> {
+    return this.http.uploadRequest<WorkspaceFileWriteResult>(
+      "PUT",
+      filePath(agentId, path, params.sessionId),
+      body,
+      params.contentType,
+    );
+  }
+
+  deleteFile(
+    agentId: string,
+    path: string,
+    params: WorkspaceFileParams,
+  ): Promise<WorkspaceFileDeleteResult> {
+    return this.http.request<WorkspaceFileDeleteResult>(
+      "DELETE",
+      filePath(agentId, path, params.sessionId),
+    );
+  }
+}
+
+function encodeWorkspacePath(path: string): string {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+
+function filePath(agentId: string, path: string, sessionId: string): string {
+  return `/v1/agents/${encodeURIComponent(agentId)}/files/${encodeWorkspacePath(path)}?session_id=${encodeURIComponent(sessionId)}`;
 }

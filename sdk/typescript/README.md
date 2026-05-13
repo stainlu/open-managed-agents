@@ -44,7 +44,7 @@ for await (const event of client.sessions.stream(session.session_id)) {
 
 | Resource | Methods |
 |---|---|
-| `client.agents` | `create`, `get`, `list`, `update`, `archive`, `delete`, `listVersions`, `warm`, `run` |
+| `client.agents` | `create`, `get`, `list`, `update`, `archive`, `delete`, `listVersions`, `warm`, `run`, `listFiles`, `readFile`, `writeFile`, `deleteFile` |
 | `client.environments` | `create`, `get`, `list`, `delete` |
 | `client.harnesses` | `catalog`, `list` |
 | `client.sessions` | `create`, `get`, `list`, `delete`, `send`, `cancel`, `compact`, `runs`, `run`, `abortRun`, `logs`, `events`, `stream`, `confirmTool`, `approvals`, `resolveApproval` |

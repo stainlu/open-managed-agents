@@ -39,7 +39,7 @@ for event in client.sessions.stream(session.session_id):
 
 ## Resources
 
-- `client.agents` — create, get, list, update, archive, delete, list_versions, warm, run
+- `client.agents` — create, get, list, update, archive, delete, list_versions, warm, run, list_files, read_file, write_file, delete_file
 - `client.environments` — create, get, list, delete
 - `client.harnesses` — catalog, list
 - `client.sessions` — create, get, list, delete, send, cancel, compact, runs, run, abort_run, logs, events, stream, confirm_tool, approvals, resolve_approval

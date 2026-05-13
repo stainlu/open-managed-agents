@@ -89,6 +89,63 @@ export class HttpClient {
     }
   }
 
+  async bytesRequest(method: string, path: string): Promise<Uint8Array> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const headers: Record<string, string> = {
+      ...this.headers,
+      accept: "application/octet-stream",
+    };
+    delete headers["content-type"];
+    try {
+      const resp = await this.fetchImpl(this.url(path), {
+        method,
+        headers,
+        signal: controller.signal,
+      });
+      const buf = await resp.arrayBuffer();
+      if (!resp.ok) {
+        const text = new TextDecoder().decode(buf);
+        const parsed = safeJson(text);
+        const msg = errorMessageFrom(parsed, resp.status, resp.statusText);
+        throw new OpenClawError(resp.status, msg, parsed ?? text);
+      }
+      return new Uint8Array(buf);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async uploadRequest<T>(
+    method: string,
+    path: string,
+    body: BodyInit,
+    contentType = "application/octet-stream",
+  ): Promise<T> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const resp = await this.fetchImpl(this.url(path), {
+        method,
+        headers: {
+          ...this.headers,
+          "content-type": contentType,
+        },
+        body,
+        signal: controller.signal,
+      });
+      const text = await resp.text();
+      const parsed = text.length > 0 ? safeJson(text) : undefined;
+      if (!resp.ok) {
+        const msg = errorMessageFrom(parsed, resp.status, resp.statusText);
+        throw new OpenClawError(resp.status, msg, parsed ?? text);
+      }
+      return parsed as T;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async streamRequest(path: string): Promise<Response> {
     const controller = new AbortController();
     // Deliberately no timeout: streaming connections live for the session.
