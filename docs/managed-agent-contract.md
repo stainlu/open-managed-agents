@@ -98,6 +98,9 @@ Rules:
 - Child sessions are OMA-managed sessions with `parent_session_id`; they are not
   just harness-local task ids.
 - `GET /v1/sessions/:id/children` lists direct managed child sessions.
+- `POST /v1/sessions/:id/children` creates a managed child session under the
+  parent using the parent agent template's callable-agent allowlist and
+  remaining subagent depth.
 - `GET /v1/sessions/:id/session-tree` returns the recursive managed session
   lineage for clients, operators, and recovery tools.
 - `POST /v1/sessions/:id/cancel-tree` cancels in-flight work across the

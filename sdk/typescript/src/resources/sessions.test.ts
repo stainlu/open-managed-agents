@@ -70,6 +70,45 @@ describe("Sessions", () => {
     });
   });
 
+  it("creates managed child sessions", async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(200, {
+      session_id: "ses_child",
+      agent_id: "agt_child",
+      harness_id: "openclaw",
+      environment_id: null,
+      status: "idle",
+      output: null,
+      tokens: { input: 0, output: 0 },
+      cost_usd: 0,
+      error: null,
+      created_at: 1,
+      last_event_at: null,
+      turns: 0,
+      boot_ms: null,
+      pool_source: null,
+      container_id: null,
+      container_name: null,
+      parent_session_id: "ses_parent",
+    }));
+    const http = new HttpClient({ baseUrl: "http://o", timeoutMs: 1000, fetch: fetchFn });
+    const sessions = new Sessions(http);
+
+    const child = await sessions.createChild("ses_parent", {
+      agentId: "agt_child",
+      environmentId: "env_1",
+      vaultId: "vlt_1",
+    });
+
+    expect(child.parent_session_id).toBe("ses_parent");
+    expect(fetchFn.mock.calls[0]?.[0]).toBe("http://o/v1/sessions/ses_parent/children");
+    expect(fetchFn.mock.calls[0]?.[1]?.method).toBe("POST");
+    expect(fetchFn.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({
+      agentId: "agt_child",
+      environmentId: "env_1",
+      vaultId: "vlt_1",
+    }));
+  });
+
   it("reads managed session lineage", async () => {
     const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();

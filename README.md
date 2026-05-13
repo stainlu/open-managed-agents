@@ -115,6 +115,9 @@ Working today:
 - Managed subagent/session lineage is now inspectable through direct child
   listing and recursive session-tree APIs. This is OMA-owned session topology,
   separate from harness-local task/run lineage.
+- Managed child sessions can be created explicitly from a parent session with
+  the same callable-agent allowlist and remaining-depth rules as delegated
+  subagents.
 - Managed session trees can be cancelled explicitly, with aggregate per-session
   results for cancelled, skipped, and failed descendants.
 - Managed session trees can be deleted explicitly, with child-first aggregate

@@ -421,6 +421,21 @@ paths:
   /v1/sessions/{sessionId}/children:
     parameters:
       - $ref: "#/components/parameters/SessionId"
+    post:
+      summary: Create a managed child session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSessionRequest"
+      responses:
+        "200":
+          description: Child session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
     get:
       summary: List direct managed child sessions
       responses:

@@ -186,6 +186,24 @@ class Sessions:
         resp.raise_for_status()
         return [_parse_session(s) for s in resp.json()["children"]]
 
+    def create_child(
+        self,
+        parent_session_id: str,
+        *,
+        agent_id: str,
+        environment_id: Optional[str] = None,
+        vault_id: Optional[str] = None,
+    ) -> Session:
+        """Create a managed child session under an existing parent session."""
+        body: Dict[str, Any] = {"agentId": agent_id}
+        if environment_id is not None:
+            body["environmentId"] = environment_id
+        if vault_id is not None:
+            body["vaultId"] = vault_id
+        resp = self._client.post(f"/v1/sessions/{parent_session_id}/children", json=body)
+        resp.raise_for_status()
+        return _parse_session(resp.json())
+
     def session_tree(self, session_id: str) -> SessionTree:
         """Read the recursive managed session lineage tree."""
         resp = self._client.get(f"/v1/sessions/{session_id}/session-tree")

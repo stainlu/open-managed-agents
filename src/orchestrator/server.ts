@@ -1032,6 +1032,7 @@ export function buildApp(deps: ServerDeps): Hono {
           list_runs: "GET /v1/sessions/:sessionId/runs",
           run_tree: "GET /v1/sessions/:sessionId/run-tree",
           list_children: "GET /v1/sessions/:sessionId/children",
+          create_child: "POST /v1/sessions/:sessionId/children",
           session_tree: "GET /v1/sessions/:sessionId/session-tree",
           delete_tree: "DELETE /v1/sessions/:sessionId/session-tree",
           get_run: "GET /v1/sessions/:sessionId/runs/:runId",
@@ -1724,6 +1725,110 @@ export function buildApp(deps: ServerDeps): Hono {
         )),
       ),
     });
+  });
+
+  app.post("/v1/sessions/:sessionId/children", async (c) => {
+    const parentSessionId = c.req.param("sessionId");
+    const parent = getScopedSession(c, parentSessionId);
+    if (!parent) {
+      writeAudit(deps.audit, c, {
+        action: "session.create_child",
+        target: parentSessionId,
+        outcome: "session_not_found",
+      });
+      return c.json({ error: "session_not_found" }, 404);
+    }
+
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = CreateSessionRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "invalid_request", details: parsed.error.format() }, 400);
+    }
+
+    const parentAgent = deps.agents.get(parent.agentId);
+    if (!parentAgent) {
+      writeAudit(deps.audit, c, {
+        action: "session.create_child",
+        target: parentSessionId,
+        outcome: "parent_agent_not_found",
+      });
+      return c.json({
+        error: "agent_not_found",
+        message: `parent agent ${parent.agentId} does not exist`,
+      }, 404);
+    }
+
+    if (!parentAgent.callableAgents.includes(parsed.data.agentId)) {
+      writeAudit(deps.audit, c, {
+        action: "session.create_child",
+        target: parentSessionId,
+        outcome: "agent_not_in_allowlist",
+        metadata: { agent_id: parsed.data.agentId },
+      });
+      return c.json(
+        {
+          error: "agent_not_in_allowlist",
+          message: `parent agent ${parentAgent.agentId} is not permitted to spawn ${parsed.data.agentId}`,
+        },
+        403,
+      );
+    }
+    if (parent.remainingSubagentDepth <= 0) {
+      writeAudit(deps.audit, c, {
+        action: "session.create_child",
+        target: parentSessionId,
+        outcome: "max_subagent_depth_reached",
+        metadata: { agent_id: parsed.data.agentId },
+      });
+      return c.json(
+        {
+          error: "max_subagent_depth_reached",
+          message: `parent session ${parent.sessionId} has no remaining subagent depth`,
+        },
+        403,
+      );
+    }
+
+    if (parsed.data.environmentId) {
+      const env = deps.environments.get(parsed.data.environmentId);
+      if (!env) {
+        return c.json({ error: "environment_not_found", message: `environment ${parsed.data.environmentId} does not exist` }, 404);
+      }
+    }
+
+    try {
+      const session = deps.router.createSession(parsed.data.agentId, {
+        environmentId: parsed.data.environmentId,
+        remainingSubagentDepth: parent.remainingSubagentDepth - 1,
+        vaultId: parsed.data.vaultId,
+        parentSessionId: parent.sessionId,
+        userId: parent.userId ?? getUserId(c) ?? undefined,
+      });
+      addContext({ agentId: parsed.data.agentId, sessionId: session.sessionId });
+      writeAudit(deps.audit, c, {
+        action: "session.create_child",
+        target: session.sessionId,
+        outcome: "ok",
+        metadata: {
+          agent_id: session.agentId,
+          parent_session_id: parent.sessionId,
+          environment_id: session.environmentId,
+          remaining_subagent_depth: session.remainingSubagentDepth,
+        },
+      });
+      void deps.router.warmSession(session.sessionId).catch((err) => {
+        log.warn({ err, session_id: session.sessionId }, "background child warm-up failed (non-fatal)");
+      });
+      return c.json(await sessionResponse(session, deps.events, deps.passthroughEnv, deps.sessionContainers));
+    } catch (err) {
+      writeAudit(deps.audit, c, {
+        action: "session.create_child",
+        target: parentSessionId,
+        outcome: err instanceof RouterError ? err.code : "error",
+        metadata: { agent_id: parsed.data.agentId },
+      });
+      return handleRouterError(err, c);
+    }
   });
 
   app.get("/v1/sessions/:sessionId/session-tree", async (c) => {

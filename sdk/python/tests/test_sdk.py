@@ -461,6 +461,17 @@ def test_sessions_resource_and_sse_stream() -> None:
                     ],
                 },
             )
+        if request.method == "POST" and request.url.path == "/v1/sessions/ses_123/children":
+            assert _json(request) == {
+                "agentId": "agt_child",
+                "environmentId": "env_123",
+                "vaultId": "vlt_123",
+            }
+            return httpx.Response(200, json=_session(
+                session_id="ses_child",
+                agent_id="agt_child",
+                parent_session_id="ses_123",
+            ))
         if request.method == "GET" and request.url.path == "/v1/sessions/ses_123/session-tree":
             return httpx.Response(
                 200,
@@ -626,6 +637,14 @@ def test_sessions_resource_and_sse_stream() -> None:
         assert client.sessions.list()[0].status == "idle"
         assert client.sessions.get("ses_123").output == "done"
         assert client.sessions.children("ses_123")[0].parent_session_id == "ses_123"
+        created_child = client.sessions.create_child(
+            "ses_123",
+            agent_id="agt_child",
+            environment_id="env_123",
+            vault_id="vlt_123",
+        )
+        assert created_child.session_id == "ses_child"
+        assert created_child.parent_session_id == "ses_123"
         tree = client.sessions.session_tree("ses_123")
         assert tree.count == 2
         assert tree.root.children[0].session.session_id == "ses_child"

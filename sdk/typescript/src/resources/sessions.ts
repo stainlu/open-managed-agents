@@ -79,6 +79,17 @@ export class Sessions {
     return resp.children;
   }
 
+  createChild(parentSessionId: string, params: CreateSessionParams): Promise<Session> {
+    const body: Record<string, unknown> = { agentId: params.agentId };
+    if (params.environmentId !== undefined) body["environmentId"] = params.environmentId;
+    if (params.vaultId !== undefined) body["vaultId"] = params.vaultId;
+    return this.http.request<Session>(
+      "POST",
+      `/v1/sessions/${encodeURIComponent(parentSessionId)}/children`,
+      body,
+    );
+  }
+
   sessionTree(sessionId: string): Promise<SessionTree> {
     return this.http.request<SessionTree>(
       "GET",

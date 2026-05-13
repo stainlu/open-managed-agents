@@ -1235,6 +1235,69 @@ describe("session ownership in the HTTP API", () => {
     expect(hidden.status).toBe(404);
   });
 
+  it("creates managed child sessions through the parent session control plane", async () => {
+    const { app, store } = makeApp();
+    const childAgent = createAgent(store);
+    const otherAgent = createAgent(store);
+    const parentAgent = store.agents.create({
+      model: "moonshot/kimi-k2.5",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [childAgent.agentId],
+      maxSubagentDepth: 2,
+    });
+    const alice = store.users.create({ tier: "github" });
+    const parent = store.sessions.create({
+      sessionId: "ses_parent",
+      agentId: parentAgent.agentId,
+      remainingSubagentDepth: 2,
+      userId: alice.userId,
+    });
+
+    const created = await req(app, "/v1/sessions/ses_parent/children", {
+      method: "POST",
+      token: alice.apiToken,
+      body: { agentId: childAgent.agentId },
+    });
+
+    expect(created.status).toBe(200);
+    expect(created.body).toMatchObject({
+      agent_id: childAgent.agentId,
+      parent_session_id: parent.sessionId,
+      status: "idle",
+    });
+    const child = store.sessions.get(created.body.session_id);
+    expect(child).toMatchObject({
+      agentId: childAgent.agentId,
+      parentSessionId: parent.sessionId,
+      remainingSubagentDepth: 1,
+      userId: alice.userId,
+    });
+
+    const disallowed = await req(app, "/v1/sessions/ses_parent/children", {
+      method: "POST",
+      token: alice.apiToken,
+      body: { agentId: otherAgent.agentId },
+    });
+    expect(disallowed.status).toBe(403);
+    expect(disallowed.body).toMatchObject({ error: "agent_not_in_allowlist" });
+
+    store.sessions.create({
+      sessionId: "ses_exhausted",
+      agentId: parentAgent.agentId,
+      remainingSubagentDepth: 0,
+      userId: alice.userId,
+    });
+    const exhausted = await req(app, "/v1/sessions/ses_exhausted/children", {
+      method: "POST",
+      token: alice.apiToken,
+      body: { agentId: childAgent.agentId },
+    });
+    expect(exhausted.status).toBe(403);
+    expect(exhausted.body).toMatchObject({ error: "max_subagent_depth_reached" });
+  });
+
   it("cancels a managed session tree without touching another user's descendants", async () => {
     const cancelled: Array<{ sessionId: string; reason?: string }> = [];
     const { app, store } = makeApp({
