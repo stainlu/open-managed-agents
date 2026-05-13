@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
+
 const TERMINAL_RUN_STATUSES = new Set(["succeeded", "failed", "cancelled", "skipped"]);
 
 const opts = parseArgs(process.argv.slice(2));
@@ -19,11 +22,36 @@ const checkActiveAbort = promotion || boolOpt(opts["check-active-abort"] ?? proc
 const checkSandboxExec = promotion || boolOpt(opts["check-sandbox-exec"] ?? process.env.OMA_SMOKE_CHECK_SANDBOX_EXEC);
 const checkFlueTask = promotion || boolOpt(opts["check-flue-task"] ?? process.env.OMA_SMOKE_CHECK_FLUE_TASK);
 const keep = boolOpt(opts.keep ?? process.env.OMA_SMOKE_KEEP);
+const reportPath = opts.report ?? process.env.OMA_SMOKE_REPORT_PATH;
 const smokeId = `oma-smoke-${Date.now().toString(36)}`;
 const createdAgentIds = new Set();
 const createdSessionIds = new Set();
+const report = {
+  schema_version: 1,
+  mode: promotion ? "promotion" : "smoke",
+  target: baseUrl,
+  model,
+  smoke_id: smokeId,
+  started_at: new Date().toISOString(),
+  finished_at: undefined,
+  status: "running",
+  checks: [],
+  resources: {
+    agent_ids: [],
+    session_ids: [],
+    run_ids: [],
+  },
+  cleanup: [],
+};
 
-main().catch((err) => {
+main().then(async () => {
+  await writeSmokeReport("passed");
+}).catch(async (err) => {
+  try {
+    await writeSmokeReport("failed", err);
+  } catch (reportErr) {
+    console.error(`warn failed to write smoke report: ${errorMessage(reportErr)}`);
+  }
   console.error(`FAIL ${err instanceof Error ? err.message : String(err)}`);
   process.exitCode = 1;
 });
@@ -42,6 +70,7 @@ async function main() {
   try {
     const health = await request("GET", "/healthz", { auth: false });
     assert(health.ok === true, "/healthz did not return ok=true");
+    recordCheck("health", { version: health.version ?? "unknown" });
     console.log(`ok health version=${health.version ?? "unknown"}`);
 
     const harnesses = await request("GET", "/v1/harnesses");
@@ -50,6 +79,7 @@ async function main() {
         && harnesses.harnesses.some((harness) => harness.harness_id === "flue"),
       "GET /v1/harnesses does not include flue",
     );
+    recordCheck("harness_catalog", { harness_id: "flue" });
     console.log("ok harness catalog includes flue");
 
     const agent = await request("POST", "/v1/agents", {
@@ -65,13 +95,20 @@ async function main() {
     });
     assertString(agent.agent_id, "agent_id");
     createdAgentIds.add(agent.agent_id);
+    report.resources.agent_ids.push(agent.agent_id);
     assertNoPlatformIds(agent, "agent response");
+    recordCheck("agent_create", { agent_id: agent.agent_id });
     console.log(`ok created flue agent ${agent.agent_id}`);
 
     const promptRun = await startRun(agent.agent_id, `Reply with exactly: ${smokeId}`);
     const terminalRun = await waitForRun(promptRun.session_id, promptRun.run_id);
     assert(terminalRun.status === "succeeded", `prompt run ended with ${terminalRun.status}`);
     assertNoPlatformIds(terminalRun, "run response");
+    recordCheck("prompt_run", {
+      session_id: promptRun.session_id,
+      run_id: promptRun.run_id,
+      status: terminalRun.status,
+    });
     console.log(`ok prompt run ${promptRun.run_id} succeeded`);
 
     const runEvents = await request(
@@ -81,6 +118,11 @@ async function main() {
     assert(Array.isArray(runEvents.events), "run event response is missing events[]");
     assert(runEvents.events.length > 0, "run event response is empty");
     assertNoPlatformIds(runEvents, "filtered events response");
+    recordCheck("event_filter", {
+      session_id: promptRun.session_id,
+      run_id: promptRun.run_id,
+      event_count: runEvents.events.length,
+    });
     console.log(`ok run event filter returned ${runEvents.events.length} event(s)`);
 
     const tree = await request(
@@ -91,29 +133,34 @@ async function main() {
     assert(treeNode, `run tree did not include ${promptRun.run_id}`);
     assert(treeNode.source?.managed_run === true, "run tree node is not linked to managed run record");
     assertNoPlatformIds(tree, "run tree response");
+    recordCheck("run_tree", { session_id: promptRun.session_id, run_id: promptRun.run_id });
     console.log(`ok run tree includes managed run ${promptRun.run_id}`);
 
     if (checkSandboxExec) {
       await runSandboxExecSmoke(agent.agent_id, promptRun.session_id);
     } else {
+      recordCheck("sandbox_exec", { status: "skipped", reason: "not requested" });
       console.log("skip sandbox exec smoke; pass --check-sandbox-exec to require it");
     }
 
     if (checkFlueTask) {
       await runFlueTaskSmoke(agent.agent_id, promptRun.session_id);
     } else {
+      recordCheck("flue_task", { status: "skipped", reason: "not requested" });
       console.log("skip Flue task smoke; pass --check-flue-task to require it");
     }
 
     if (checkQueueAbort) {
       await runQueueAbortSmoke(agent.agent_id);
     } else {
+      recordCheck("queued_abort", { status: "skipped", reason: "not requested" });
       console.log("skip queued abort smoke; pass --check-queue-abort to require it");
     }
 
     if (checkActiveAbort) {
       await runActiveAbortSmoke(agent.agent_id);
     } else {
+      recordCheck("active_abort", { status: "skipped", reason: "not requested" });
       console.log("skip active abort smoke; pass --check-active-abort to require it");
     }
 
@@ -148,6 +195,12 @@ async function runQueueAbortSmoke(agentId) {
   );
   assert(aborted.aborted === true, "queued run abort did not report aborted=true");
   assert(aborted.run?.status === "cancelled", `queued run status is ${aborted.run?.status}`);
+  recordCheck("queued_abort", {
+    session_id: first.session_id,
+    active_run_id: first.run_id,
+    queued_run_id: queued.run_id,
+    status: aborted.run.status,
+  });
   console.log(`ok queued run ${queued.run_id} cancelled`);
 
   await waitForRun(first.session_id, first.run_id);
@@ -169,6 +222,11 @@ async function runActiveAbortSmoke(agentId) {
     terminal.status === "cancelled" || terminal.status === "failed" || terminal.status === "skipped",
     `active run abort left terminal status ${terminal.status}`,
   );
+  recordCheck("active_abort", {
+    session_id: active.session_id,
+    run_id: active.run_id,
+    status: terminal.status,
+  });
   console.log(`ok active run ${active.run_id} abort reached terminal status ${terminal.status}`);
 }
 
@@ -211,6 +269,12 @@ async function runSandboxExecSmoke(agentId, sessionId) {
   const output = await getFileText(agentId, sessionId, "dist/result.txt");
   assert(output === `built:${smokeId}`, `sandbox output mismatch: ${JSON.stringify(output)}`);
   assert(!await fileExists(agentId, sessionId, "obsolete.txt"), "sandbox deletion did not sync back");
+  recordCheck("sandbox_exec", {
+    session_id: sessionId,
+    output_path: "dist/result.txt",
+    deleted_path: "obsolete.txt",
+    run_kinds: result.run_kinds,
+  });
   console.log("ok sandbox exec wrote dist/result.txt and synced deletion");
 }
 
@@ -239,6 +303,11 @@ async function runFlueTaskSmoke(agentId, sessionId) {
     `Flue task did not expose task run kind: ${JSON.stringify(result.run_kinds)}`,
   );
   assertNoPlatformIds(result, "Flue task smoke response");
+  recordCheck("flue_task", {
+    session_id: sessionId,
+    run_kinds: result.run_kinds,
+    text_length: result.text.length,
+  });
   console.log("ok Flue task run emitted task lineage");
 }
 
@@ -249,28 +318,47 @@ async function startRun(agentId, task) {
   assertString(result.session_id, "session_id");
   assertString(result.run_id, "run_id");
   createdSessionIds.add(result.session_id);
+  if (!report.resources.session_ids.includes(result.session_id)) {
+    report.resources.session_ids.push(result.session_id);
+  }
+  report.resources.run_ids.push(result.run_id);
   assertNoPlatformIds(result, "run start response");
   return result;
 }
 
 async function cleanupCreated() {
   if (keep) {
+    report.cleanup.push({ type: "all", status: "skipped", reason: "keep" });
     console.log("skip cleanup because --keep or OMA_SMOKE_KEEP is set");
     return;
   }
   for (const sessionId of Array.from(createdSessionIds).reverse()) {
     try {
       await request("DELETE", `/v1/sessions/${encodeURIComponent(sessionId)}`);
+      report.cleanup.push({ type: "session", id: sessionId, status: "deleted" });
       console.log(`ok deleted smoke session ${sessionId}`);
     } catch (err) {
+      report.cleanup.push({
+        type: "session",
+        id: sessionId,
+        status: "failed",
+        error: errorMessage(err),
+      });
       console.warn(`warn failed to delete smoke session ${sessionId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
   for (const agentId of Array.from(createdAgentIds).reverse()) {
     try {
       await request("DELETE", `/v1/agents/${encodeURIComponent(agentId)}`);
+      report.cleanup.push({ type: "agent", id: agentId, status: "deleted" });
       console.log(`ok deleted smoke agent ${agentId}`);
     } catch (err) {
+      report.cleanup.push({
+        type: "agent",
+        id: agentId,
+        status: "failed",
+        error: errorMessage(err),
+      });
       console.warn(`warn failed to delete smoke agent ${agentId}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
@@ -359,6 +447,32 @@ function authHeaders(extra = {}) {
   const headers = { ...extra };
   if (token) headers.authorization = `Bearer ${token}`;
   return headers;
+}
+
+function recordCheck(name, details = {}) {
+  const { status = "passed", ...rest } = details;
+  report.checks.push({
+    name,
+    status,
+    at: new Date().toISOString(),
+    ...rest,
+  });
+}
+
+async function writeSmokeReport(status, err) {
+  if (!reportPath) return;
+  report.status = status;
+  report.finished_at = new Date().toISOString();
+  if (err) {
+    report.error = { message: errorMessage(err) };
+  }
+  await mkdir(dirname(reportPath), { recursive: true });
+  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+  console.log(`wrote smoke report ${reportPath}`);
+}
+
+function errorMessage(err) {
+  return err instanceof Error ? err.message : String(err);
 }
 
 async function parseResponseBody(response) {

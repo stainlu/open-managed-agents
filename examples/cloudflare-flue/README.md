@@ -221,6 +221,14 @@ pnpm smoke:promotion
 sandbox, Flue task, queued-abort, and active-abort checks. For local rehearsal
 only, pass `-- --allow-local-promotion`.
 
+To capture promotion evidence as JSON without leaking the bearer token:
+
+```bash
+OMA_CLOUDFLARE_FLUE_BASE_URL=https://oma-cloudflare-flue.<account>.workers.dev \
+OMA_API_TOKEN=replace-with-token-if-configured \
+pnpm smoke:promotion -- --report ./promotion-report.json
+```
+
 If your model answers too quickly, the promotion smoke will fail at the queue
 or active-abort gate. That is expected: the script is a promotion verifier, not
 a flaky green badge.
