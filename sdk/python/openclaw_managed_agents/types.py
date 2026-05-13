@@ -27,6 +27,18 @@ class HarnessCatalog:
 
 
 @dataclass
+class AuditEvent:
+    id: int
+    ts: int
+    actor: str
+    action: str
+    outcome: str
+    request_id: Optional[str] = None
+    target: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+@dataclass
 class Agent:
     agent_id: str
     harness_id: str

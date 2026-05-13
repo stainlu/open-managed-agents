@@ -62,6 +62,22 @@ export interface HarnessCatalog {
   count: number;
 }
 
+export interface AuditEvent {
+  id: number;
+  ts: number;
+  request_id?: string | null;
+  actor: string;
+  action: string;
+  target?: string | null;
+  outcome: string;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface AuditEventList {
+  events: AuditEvent[];
+  count: number;
+}
+
 export interface Quota {
   maxCostUsdPerSession?: number;
   maxTokensPerSession?: number;

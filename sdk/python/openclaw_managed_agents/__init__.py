@@ -21,6 +21,7 @@ import httpx
 from typing import Optional
 
 from .resources.agents import Agents
+from .resources.audit import Audit
 from .resources.environments import Environments
 from .resources.harnesses import Harnesses
 from .resources.sessions import Sessions
@@ -28,6 +29,7 @@ from .resources.vaults import Vaults
 from .types import (
     Agent,
     Approval,
+    AuditEvent,
     Environment,
     Event,
     Harness,
@@ -44,6 +46,7 @@ __all__ = [
     "OpenClawClient",
     "Agent",
     "Approval",
+    "AuditEvent",
     "Environment",
     "Harness",
     "HarnessCapability",
@@ -91,6 +94,7 @@ class OpenClawClient:
             transport=transport,
         )
         self.agents = Agents(self._client)
+        self.audit = Audit(self._client)
         self.environments = Environments(self._client)
         self.harnesses = Harnesses(self._client)
         self.sessions = Sessions(self._client)

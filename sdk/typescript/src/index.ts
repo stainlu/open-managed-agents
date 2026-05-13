@@ -1,5 +1,6 @@
 import { HttpClient } from "./http.js";
 import { Agents } from "./resources/agents.js";
+import { Audit } from "./resources/audit.js";
 import { Environments } from "./resources/environments.js";
 import { Harnesses } from "./resources/harnesses.js";
 import { Sessions } from "./resources/sessions.js";
@@ -15,6 +16,7 @@ export type {
   WorkspaceFileParams,
   WriteWorkspaceFileParams,
 } from "./resources/agents.js";
+export type { AuditListParams } from "./resources/audit.js";
 export type { CreateEnvironmentParams } from "./resources/environments.js";
 export type {
   CreateSessionParams,
@@ -68,6 +70,7 @@ export interface OpenClawClientConfig {
  */
 export class OpenClawClient {
   readonly agents: Agents;
+  readonly audit: Audit;
   readonly environments: Environments;
   readonly harnesses: Harnesses;
   readonly sessions: Sessions;
@@ -81,6 +84,7 @@ export class OpenClawClient {
       fetch: config.fetch,
     });
     this.agents = new Agents(http);
+    this.audit = new Audit(http);
     this.environments = new Environments(http);
     this.harnesses = new Harnesses(http);
     this.sessions = new Sessions(http);

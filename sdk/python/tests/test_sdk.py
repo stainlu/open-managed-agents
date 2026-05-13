@@ -116,6 +116,21 @@ def _run(**overrides: Any) -> Dict[str, Any]:
     return data
 
 
+def _audit_event(**overrides: Any) -> Dict[str, Any]:
+    data: Dict[str, Any] = {
+        "id": 1,
+        "ts": 12,
+        "request_id": "req_123",
+        "actor": "token:abcdef12",
+        "action": "session.create",
+        "target": "ses_123",
+        "outcome": "ok",
+        "metadata": {"agent_id": "agt_123"},
+    }
+    data.update(overrides)
+    return data
+
+
 def test_client_sends_bearer_token() -> None:
     seen: Dict[str, str] = {}
 
@@ -127,6 +142,50 @@ def test_client_sends_bearer_token() -> None:
         assert client.agents.list() == []
 
     assert seen["authorization"] == "Bearer secret"
+
+
+def test_audit_resource_queries_events() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/v1/audit"
+        if request.url.params.get("action") == "agent.delete":
+            return httpx.Response(
+                200,
+                json={
+                    "events": [
+                        _audit_event(
+                            id=2,
+                            ts=30,
+                            request_id=None,
+                            actor="anonymous",
+                            action="agent.delete",
+                            target="agt_123",
+                            metadata=None,
+                        )
+                    ],
+                    "count": 1,
+                },
+            )
+        assert request.url.params["since"] == "10"
+        assert request.url.params["until"] == "20"
+        assert request.url.params["action"] == "session.create"
+        assert request.url.params["target"] == "ses_123"
+        assert request.url.params["limit"] == "5"
+        return httpx.Response(200, json={"events": [_audit_event()], "count": 1})
+
+    with _client(handler) as client:
+        result = client.audit.query(
+            since=10,
+            until=20,
+            action="session.create",
+            target="ses_123",
+            limit=5,
+        )
+        assert result["count"] == 1
+        assert result["events"][0].metadata == {"agent_id": "agt_123"}
+        events = client.audit.list(action="agent.delete")
+        assert events[0].action == "agent.delete"
+        assert events[0].target == "agt_123"
 
 
 def test_harnesses_resource_exposes_capabilities() -> None:
