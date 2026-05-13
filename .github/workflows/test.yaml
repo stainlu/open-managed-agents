@@ -116,6 +116,39 @@ jobs:
           EGRESS_PROXY_IMAGE: openclaw-egress-proxy:e2e
           SKIP_BUILD: "1"
 
+  cloudflare-example:
+    name: Cloudflare Flue example
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: examples/cloudflare-flue/pnpm-lock.yaml
+
+      - name: Install Cloudflare example dependencies
+        working-directory: examples/cloudflare-flue
+        run: pnpm install --frozen-lockfile
+
+      - name: Cloudflare example typecheck
+        working-directory: examples/cloudflare-flue
+        run: pnpm check
+
+      - name: Cloudflare example preflight
+        working-directory: examples/cloudflare-flue
+        run: pnpm preflight --skip-docker --skip-secrets --allow-placeholder-d1
+
   typescript-sdk:
     name: TypeScript SDK
     runs-on: ubuntu-latest
