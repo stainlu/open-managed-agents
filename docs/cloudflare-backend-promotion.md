@@ -152,13 +152,15 @@ real deployed Worker URL:
    pnpm smoke:replay:verify -- --state ./replay-state.json --report ./replay-report.json \
      --restart-evidence "wrangler deploy completed at 2026-05-14T00:00:00Z"
    pnpm smoke:verify-replay-report -- ./replay-report.json
+   pnpm smoke:verify-evidence -- --promotion ./promotion-report.json --replay ./replay-report.json
    ```
 
    The seed state and verify report are promotion evidence only if the operator
    or CI records the actual restart/hibernation action between those commands.
    The replay report verifier requires that recorded action as
-   `restart_evidence`. Running seed and verify back-to-back is only a
-   rehearsal.
+   `restart_evidence`. The bundle verifier requires the promotion and replay
+   reports to target the same deployed Worker URL. Running seed and verify
+   back-to-back is only a rehearsal.
 
    Local fake-Durable-Object tests do not count for this gate.
 
