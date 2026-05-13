@@ -452,6 +452,15 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SessionTree"
+    delete:
+      summary: Delete a managed session tree
+      responses:
+        "200":
+          description: Aggregate deletion result for the root session and descendants
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteTreeResult"
   /v1/sessions/{sessionId}/events:
     parameters:
       - $ref: "#/components/parameters/SessionId"
@@ -1578,6 +1587,46 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/CancelTreeSessionResult"
+    DeleteTreeSessionResult:
+      type: object
+      required:
+        - session_id
+        - parent_session_id
+        - status_before
+        - deleted
+        - error
+      properties:
+        session_id:
+          type: string
+        parent_session_id:
+          type: [string, "null"]
+        status_before:
+          type: string
+        deleted:
+          type: boolean
+        error:
+          type: [string, "null"]
+    DeleteTreeResult:
+      type: object
+      required:
+        - session_id
+        - count
+        - deleted_count
+        - failed_count
+        - results
+      properties:
+        session_id:
+          type: string
+        count:
+          type: integer
+        deleted_count:
+          type: integer
+        failed_count:
+          type: integer
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/DeleteTreeSessionResult"
     CompactResult:
       type: object
       required: [session_id, session_status, compacted]

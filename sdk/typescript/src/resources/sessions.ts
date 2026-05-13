@@ -6,6 +6,7 @@ import type {
   CancelResult,
   CancelTreeResult,
   CompactResult,
+  DeleteTreeResult,
   Event,
   ManagedRun,
   ResolveApprovalResult,
@@ -89,6 +90,13 @@ export class Sessions {
     await this.http.request<void>(
       "DELETE",
       `/v1/sessions/${encodeURIComponent(sessionId)}`,
+    );
+  }
+
+  deleteTree(sessionId: string): Promise<DeleteTreeResult> {
+    return this.http.request<DeleteTreeResult>(
+      "DELETE",
+      `/v1/sessions/${encodeURIComponent(sessionId)}/session-tree`,
     );
   }
 

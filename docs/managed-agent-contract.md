@@ -102,6 +102,8 @@ Rules:
   lineage for clients, operators, and recovery tools.
 - `POST /v1/sessions/:id/cancel-tree` cancels in-flight work across the
   visible managed session tree and returns per-session aggregate results.
+- `DELETE /v1/sessions/:id/session-tree` deletes the visible managed session
+  tree child-first and returns per-session aggregate cleanup results.
 - A run against an `idle` session starts immediately.
 - A user event posted while the session is `starting` or `running` is queued by
   default.

@@ -346,6 +346,22 @@ export interface CancelTreeResult {
   results: CancelTreeSessionResult[];
 }
 
+export interface DeleteTreeSessionResult {
+  session_id: string;
+  parent_session_id?: string | null;
+  status_before: string;
+  deleted: boolean;
+  error?: string | null;
+}
+
+export interface DeleteTreeResult {
+  session_id: string;
+  count: number;
+  deleted_count: number;
+  failed_count: number;
+  results: DeleteTreeSessionResult[];
+}
+
 export interface CompactResult {
   session_id: string;
   session_status: Session["status"];

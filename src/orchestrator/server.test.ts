@@ -1321,6 +1321,92 @@ describe("session ownership in the HTTP API", () => {
     expect(store.sessions.get("ses_hidden_running")?.status).toBe("running");
   });
 
+  it("deletes a managed session tree without touching another user's descendants", async () => {
+    const {
+      app,
+      store,
+      routerCalls,
+      harnessStateDeletes,
+      eventsBySession,
+      appendEvent,
+    } = makeApp();
+    const agent = createAgent(store);
+    const alice = store.users.create({ tier: "github" });
+    const bob = store.users.create({ tier: "github" });
+    for (const args of [
+      { sessionId: "ses_parent", userId: alice.userId },
+      { sessionId: "ses_child", parentSessionId: "ses_parent", userId: alice.userId },
+      { sessionId: "ses_grandchild", parentSessionId: "ses_child", userId: alice.userId },
+      { sessionId: "ses_hidden", parentSessionId: "ses_parent", userId: bob.userId },
+    ]) {
+      store.sessions.create({
+        agentId: agent.agentId,
+        ...args,
+      });
+      appendEvent({
+        eventId: `evt_${args.sessionId}`,
+        sessionId: args.sessionId,
+        type: "agent.message",
+        content: "stored",
+        createdAt: Date.now(),
+      });
+    }
+
+    const res = await req(app, "/v1/sessions/ses_parent/session-tree", {
+      method: "DELETE",
+      token: alice.apiToken,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      session_id: "ses_parent",
+      count: 3,
+      deleted_count: 3,
+      failed_count: 0,
+      results: [
+        {
+          session_id: "ses_grandchild",
+          parent_session_id: "ses_child",
+          status_before: "idle",
+          deleted: true,
+          error: null,
+        },
+        {
+          session_id: "ses_child",
+          parent_session_id: "ses_parent",
+          status_before: "idle",
+          deleted: true,
+          error: null,
+        },
+        {
+          session_id: "ses_parent",
+          parent_session_id: null,
+          status_before: "idle",
+          deleted: true,
+          error: null,
+        },
+      ],
+    });
+    expect(routerCalls.disposeSessionRuntime).toEqual([
+      "ses_grandchild",
+      "ses_child",
+      "ses_parent",
+    ]);
+    expect(harnessStateDeletes).toEqual([
+      { agentId: agent.agentId, sessionId: "ses_grandchild" },
+      { agentId: agent.agentId, sessionId: "ses_child" },
+      { agentId: agent.agentId, sessionId: "ses_parent" },
+    ]);
+    expect(store.sessions.get("ses_parent")).toBeUndefined();
+    expect(store.sessions.get("ses_child")).toBeUndefined();
+    expect(store.sessions.get("ses_grandchild")).toBeUndefined();
+    expect(store.sessions.get("ses_hidden")?.userId).toBe(bob.userId);
+    expect(eventsBySession.has("ses_parent")).toBe(false);
+    expect(eventsBySession.has("ses_child")).toBe(false);
+    expect(eventsBySession.has("ses_grandchild")).toBe(false);
+    expect(eventsBySession.has("ses_hidden")).toBe(true);
+  });
+
   it("binds legacy /run sessions to the authenticated user", async () => {
     const { app, store } = makeApp();
     const agent = createAgent(store);

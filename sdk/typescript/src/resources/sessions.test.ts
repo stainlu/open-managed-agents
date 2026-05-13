@@ -153,6 +153,30 @@ describe("Sessions", () => {
           ],
         });
       }
+      if (url.endsWith("/v1/sessions/ses_1/session-tree") && init?.method === "DELETE") {
+        return jsonResponse(200, {
+          session_id: "ses_1",
+          count: 2,
+          deleted_count: 2,
+          failed_count: 0,
+          results: [
+            {
+              session_id: "ses_child",
+              parent_session_id: "ses_1",
+              status_before: "idle",
+              deleted: true,
+              error: null,
+            },
+            {
+              session_id: "ses_1",
+              parent_session_id: null,
+              status_before: "idle",
+              deleted: true,
+              error: null,
+            },
+          ],
+        });
+      }
       return jsonResponse(404, { error: "not_found" });
     });
     const http = new HttpClient({ baseUrl: "http://o", timeoutMs: 1000, fetch: fetchFn });
@@ -163,6 +187,7 @@ describe("Sessions", () => {
     const cancelled = await sessions.cancelTree("ses_1", {
       reason: "operator stop",
     });
+    const deleted = await sessions.deleteTree("ses_1");
 
     expect(children).toMatchObject([
       {
@@ -187,10 +212,17 @@ describe("Sessions", () => {
       cancelled_count: 1,
       skipped_count: 1,
     });
+    expect(deleted).toMatchObject({
+      session_id: "ses_1",
+      deleted_count: 2,
+      failed_count: 0,
+    });
     expect(fetchFn.mock.calls[0]?.[0]).toBe("http://o/v1/sessions/ses_1/children");
     expect(fetchFn.mock.calls[1]?.[0]).toBe("http://o/v1/sessions/ses_1/session-tree");
     expect(fetchFn.mock.calls[2]?.[0]).toBe("http://o/v1/sessions/ses_1/cancel-tree");
     expect(fetchFn.mock.calls[2]?.[1]?.body).toBe(JSON.stringify({ reason: "operator stop" }));
+    expect(fetchFn.mock.calls[3]?.[0]).toBe("http://o/v1/sessions/ses_1/session-tree");
+    expect(fetchFn.mock.calls[3]?.[1]?.method).toBe("DELETE");
   });
 
   it("lists and resolves pending approvals", async () => {

@@ -117,6 +117,8 @@ Working today:
   separate from harness-local task/run lineage.
 - Managed session trees can be cancelled explicitly, with aggregate per-session
   results for cancelled, skipped, and failed descendants.
+- Managed session trees can be deleted explicitly, with child-first aggregate
+  cleanup results instead of orphaning known descendants.
 - `/healthz` exposes sanitized runtime readiness for both the default
   self-hosted container path and the Cloudflare/Flue path, so operators can see
   the active substrate without exposing platform ids or secrets.

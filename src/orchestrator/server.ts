@@ -698,6 +698,14 @@ type CancelTreeSessionResult = {
   error: string | null;
 };
 
+type DeleteTreeSessionResult = {
+  session_id: string;
+  parent_session_id: string | null;
+  status_before: string;
+  deleted: boolean;
+  error: string | null;
+};
+
 function directChildSessions(parentSessionId: string, sessions: Session[]): Session[] {
   return sessions
     .filter((session) => session.parentSessionId === parentSessionId)
@@ -829,6 +837,13 @@ export function buildApp(deps: ServerDeps): Hono {
     for (const [key, value] of eventReplyCache.entries()) {
       if (value.expiresAt <= now) eventReplyCache.delete(key);
     }
+  }
+
+  async function deleteManagedSession(session: Session): Promise<void> {
+    await deps.router.disposeSessionRuntime(session.sessionId);
+    await deps.events.deleteBySession(session.agentId, session.sessionId);
+    await deps.harnessState?.deleteBySession(session.agentId, session.sessionId);
+    deps.sessions.delete(session.sessionId);
   }
 
   // Register the observability middleware first so every downstream
@@ -1018,6 +1033,7 @@ export function buildApp(deps: ServerDeps): Hono {
           run_tree: "GET /v1/sessions/:sessionId/run-tree",
           list_children: "GET /v1/sessions/:sessionId/children",
           session_tree: "GET /v1/sessions/:sessionId/session-tree",
+          delete_tree: "DELETE /v1/sessions/:sessionId/session-tree",
           get_run: "GET /v1/sessions/:sessionId/runs/:runId",
           abort_run: "POST /v1/sessions/:sessionId/runs/:runId/abort",
           list_approvals: "GET /v1/sessions/:sessionId/approvals",
@@ -1739,7 +1755,7 @@ export function buildApp(deps: ServerDeps): Hono {
     // not outlive their session row. Only once the container is gone do
     // we delete the persisted JSONL / metadata.
     try {
-      await deps.router.disposeSessionRuntime(sessionId);
+      await deleteManagedSession(session);
     } catch (err) {
       writeAudit(deps.audit, c, {
         action: "session.delete",
@@ -1748,9 +1764,6 @@ export function buildApp(deps: ServerDeps): Hono {
       });
       return handleRouterError(err, c);
     }
-    await deps.events.deleteBySession(session.agentId, session.sessionId);
-    await deps.harnessState?.deleteBySession(session.agentId, session.sessionId);
-    deps.sessions.delete(sessionId);
     writeAudit(deps.audit, c, {
       action: "session.delete",
       target: sessionId,
@@ -1758,6 +1771,75 @@ export function buildApp(deps: ServerDeps): Hono {
       metadata: { agent_id: session.agentId },
     });
     return c.json({ deleted: true });
+  });
+
+  app.delete("/v1/sessions/:sessionId/session-tree", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const session = getScopedSession(c, sessionId);
+    if (!session) {
+      writeAudit(deps.audit, c, {
+        action: "session.delete_tree",
+        target: sessionId,
+        outcome: "session_not_found",
+      });
+      return c.json({ error: "session_not_found" }, 404);
+    }
+
+    const tree = buildSessionTree(session, listScopedSessions(c));
+    const targets = flattenSessionTree(tree).reverse();
+    const results: DeleteTreeSessionResult[] = [];
+    for (const target of targets) {
+      const current = deps.sessions.get(target.sessionId);
+      if (!current) {
+        results.push({
+          session_id: target.sessionId,
+          parent_session_id: target.parentSessionId,
+          status_before: "missing",
+          deleted: false,
+          error: "session_missing",
+        });
+        continue;
+      }
+      const statusBefore = current.status;
+      try {
+        await deleteManagedSession(current);
+        results.push({
+          session_id: current.sessionId,
+          parent_session_id: current.parentSessionId,
+          status_before: statusBefore,
+          deleted: true,
+          error: null,
+        });
+      } catch (err) {
+        results.push({
+          session_id: current.sessionId,
+          parent_session_id: current.parentSessionId,
+          status_before: statusBefore,
+          deleted: false,
+          error: err instanceof RouterError ? err.code : "delete_failed",
+        });
+      }
+    }
+
+    const deletedCount = results.filter((result) => result.deleted).length;
+    const failedCount = results.filter((result) => result.error).length;
+    writeAudit(deps.audit, c, {
+      action: "session.delete_tree",
+      target: sessionId,
+      outcome: failedCount > 0 ? "partial_error" : "ok",
+      metadata: {
+        count: results.length,
+        deleted_count: deletedCount,
+        failed_count: failedCount,
+      },
+    });
+    return c.json({
+      session_id: sessionId,
+      count: results.length,
+      deleted_count: deletedCount,
+      failed_count: failedCount,
+      results,
+    });
   });
 
   // ---------- Events (read from Pi's JSONL) ----------

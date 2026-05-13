@@ -12,6 +12,8 @@ from ..types import (
     Approval,
     CancelTreeResult,
     CancelTreeSessionResult,
+    DeleteTreeResult,
+    DeleteTreeSessionResult,
     Event,
     ManagedRun,
     Session,
@@ -129,6 +131,25 @@ def _parse_cancel_tree_result(data: Dict[str, Any]) -> CancelTreeResult:
     )
 
 
+def _parse_delete_tree_result(data: Dict[str, Any]) -> DeleteTreeResult:
+    return DeleteTreeResult(
+        session_id=data["session_id"],
+        count=data["count"],
+        deleted_count=data["deleted_count"],
+        failed_count=data["failed_count"],
+        results=[
+            DeleteTreeSessionResult(
+                session_id=item["session_id"],
+                parent_session_id=item.get("parent_session_id"),
+                status_before=item["status_before"],
+                deleted=item["deleted"],
+                error=item.get("error"),
+            )
+            for item in data.get("results", [])
+        ],
+    )
+
+
 class Sessions:
     def __init__(self, client: httpx.Client) -> None:
         self._client = client
@@ -174,6 +195,12 @@ class Sessions:
     def delete(self, session_id: str) -> None:
         resp = self._client.delete(f"/v1/sessions/{session_id}")
         resp.raise_for_status()
+
+    def delete_tree(self, session_id: str) -> DeleteTreeResult:
+        """Delete a managed session tree."""
+        resp = self._client.delete(f"/v1/sessions/{session_id}/session-tree")
+        resp.raise_for_status()
+        return _parse_delete_tree_result(resp.json())
 
     def send(
         self,

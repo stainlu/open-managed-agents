@@ -44,5 +44,5 @@ for event in client.sessions.stream(session.session_id):
 - `client.chat.completions` — create, stream
 - `client.environments` — create, get, list, delete
 - `client.harnesses` — catalog, list
-- `client.sessions` — create, get, list, delete, send, cancel, compact, runs, run, abort_run, logs, events, stream, confirm_tool, approvals, resolve_approval
+- `client.sessions` — create, get, list, children, session_tree, delete, delete_tree, send, cancel, cancel_tree, compact, runs, run, abort_run, logs, events, stream, confirm_tool, approvals, resolve_approval
 - `client.vaults` — create, get, list, delete, add_static_bearer_credential, add_mcp_oauth_credential, list_credentials, delete_credential

@@ -481,6 +481,32 @@ def test_sessions_resource_and_sse_stream() -> None:
                     },
                 },
             )
+        if request.method == "DELETE" and request.url.path == "/v1/sessions/ses_123/session-tree":
+            return httpx.Response(
+                200,
+                json={
+                    "session_id": "ses_123",
+                    "count": 2,
+                    "deleted_count": 2,
+                    "failed_count": 0,
+                    "results": [
+                        {
+                            "session_id": "ses_child",
+                            "parent_session_id": "ses_123",
+                            "status_before": "idle",
+                            "deleted": True,
+                            "error": None,
+                        },
+                        {
+                            "session_id": "ses_123",
+                            "parent_session_id": None,
+                            "status_before": "idle",
+                            "deleted": True,
+                            "error": None,
+                        },
+                    ],
+                },
+            )
         if request.method == "POST" and request.url.path == "/v1/sessions/ses_123/events":
             body = _json(request)
             if body.get("type") == "user.tool_confirmation":
@@ -603,6 +629,9 @@ def test_sessions_resource_and_sse_stream() -> None:
         tree = client.sessions.session_tree("ses_123")
         assert tree.count == 2
         assert tree.root.children[0].session.session_id == "ses_child"
+        deleted_tree = client.sessions.delete_tree("ses_123")
+        assert deleted_tree.deleted_count == 2
+        assert deleted_tree.results[0].session_id == "ses_child"
         assert client.sessions.send(
             "ses_123",
             content="hi",
