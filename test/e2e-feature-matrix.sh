@@ -4,9 +4,9 @@
 #
 # This complements test/e2e-harnesses.sh:
 #   - e2e-harnesses proves two-turn managed-session recall.
-#   - this script proves capability catalog entries are enforced by the
-#     managed API and that supported live paths still work through real
-#     providers.
+#   - this script proves harness runtime modes and capability catalog entries
+#     are exposed/enforced by the managed API and that supported live paths
+#     still work through real providers.
 #
 # Prerequisites when a harness is enabled:
 #   - docker compose up -d (orchestrator on localhost:8080 by default)

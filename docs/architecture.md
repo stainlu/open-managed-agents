@@ -80,7 +80,8 @@ Native harness concepts stay behind adapter metadata:
 
 The registry is runtime-authoritative. Public schemas accept any valid harness
 identifier, and `HarnessRegistry` decides whether the adapter is installed.
-`GET /v1/harnesses` exposes the concrete capability matrix to clients.
+`GET /v1/harnesses` exposes each adapter's runtime mode and concrete
+capability matrix to clients.
 Container adapters still expose Docker spawn options and receive `baseUrl` /
 bearer-token runtime endpoints at turn invocation. Native adapters do not need
 spawn options and receive the same managed `Agent`, `Session`, `Environment`,
@@ -427,8 +428,8 @@ The OpenClaw `always_ask` flow uses a plugin installed in the runtime container 
 The Python SDK is publishable to PyPI as `open-managed-agents`; the TypeScript
 SDK is publishable as `@stainlu/open-managed-agents`. Both expose the managed
 resources: agents, environments, harnesses, sessions, and vaults. Streaming is
-SSE-based. Harness capability discovery lives at `client.harnesses.catalog()` /
-`client.harnesses.list()`.
+SSE-based. Harness runtime-mode and capability discovery lives at
+`client.harnesses.catalog()` / `client.harnesses.list()`.
 
 ### DockerContainerRuntime (`src/runtime/docker.ts`)
 

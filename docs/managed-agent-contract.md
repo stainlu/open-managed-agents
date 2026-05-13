@@ -360,7 +360,7 @@ Every adapter must have:
 
 - spawn-option unit tests when it uses a container runtime;
 - adapter-server conformance if it uses `oma.adapter.v1`;
-- capability catalog coverage;
+- capability and runtime-mode catalog coverage;
 - router capability-gate coverage for unsupported features;
 - no-key skip path for live scripts;
 - provider-backed live two-turn recall before being promoted beyond

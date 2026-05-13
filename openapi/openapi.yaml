@@ -71,7 +71,7 @@ paths:
           description: Model catalog
   /v1/harnesses:
     get:
-      summary: List registered harness adapters and capability support
+      summary: List registered harness adapters, runtime modes, and capability support
       responses:
         "200":
           description: Harness catalog
