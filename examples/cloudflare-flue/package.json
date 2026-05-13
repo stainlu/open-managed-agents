@@ -7,6 +7,7 @@
     "dry-run": "wrangler deploy --dry-run",
     "dev": "wrangler dev",
     "preflight": "node scripts/preflight.mjs",
+    "preflight:secrets": "node scripts/preflight.mjs --require-secrets",
     "smoke": "node scripts/smoke.mjs",
     "smoke:state": "node scripts/smoke.mjs --check-state-readback",
     "smoke:sandbox": "node scripts/smoke.mjs --check-sandbox-exec",

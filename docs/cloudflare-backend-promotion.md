@@ -73,12 +73,16 @@ real deployed Worker URL:
    ```bash
    cd examples/cloudflare-flue
    pnpm preflight
+   pnpm preflight:secrets
    pnpm dry-run
    ```
 
    Evidence must show preflight passed and the Worker bundle sees the
    coordinator Durable Object, Workflow, D1 database, R2 workspace bucket,
-   Workers AI binding, and Sandbox binding.
+   Workers AI binding, and Sandbox binding. Secret preflight must show
+   `OMA_WORKFLOW_INTERNAL_TOKEN` and a canonical 32-byte
+   `OMA_PARENT_TOKEN_SECRET_BASE64` were validated from local promotion inputs
+   or the shell environment before those values are pushed to Wrangler.
 
 2. Basic live smoke.
 

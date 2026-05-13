@@ -56,8 +56,9 @@ pnpm preflight
 ```
 
 The preflight checks Node, the required Wrangler binding sections, replacement
-of the placeholder D1 id, the Sandbox Dockerfile, and Docker CLI readiness for
-Wrangler's container build. For local docs rehearsal only, use
+of the placeholder D1 id, the Sandbox Dockerfile, Docker CLI readiness for
+Wrangler's container build, and local `.dev.vars` secrets when that file
+exists. For local docs rehearsal only, use
 `pnpm preflight -- --allow-placeholder-d1 --skip-docker`.
 
 Create local secrets for development:
@@ -71,6 +72,16 @@ Paste the generated 32-byte base64 value into
 `OMA_PARENT_TOKEN_SECRET_BASE64`. The Durable Object rejects placeholder,
 non-canonical, or short decoded values because parent-token signing must be
 stable across restart and deploy.
+
+After editing `.dev.vars`, run:
+
+```bash
+pnpm preflight:secrets -- --allow-placeholder-d1 --skip-docker
+```
+
+For deployed Workers, Wrangler secrets are remote and not readable from the
+bundle. This check validates the local values you intend to push or the same
+variables supplied through the shell.
 
 For deployed environments, set the same secrets through Wrangler:
 

@@ -11,7 +11,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const exampleRoot = join(here, "..");
 const wranglerTomlPath = join(exampleRoot, "wrangler.toml");
 const dockerfilePath = join(exampleRoot, "Dockerfile");
+const devVarsPath = opts["dev-vars-path"] ?? process.env.OMA_PREFLIGHT_DEV_VARS_PATH ?? join(exampleRoot, ".dev.vars");
 const skipDocker = boolOpt(opts["skip-docker"] ?? process.env.OMA_PREFLIGHT_SKIP_DOCKER);
+const skipSecrets = boolOpt(opts["skip-secrets"] ?? process.env.OMA_PREFLIGHT_SKIP_SECRETS);
+const requireSecrets = boolOpt(opts["require-secrets"] ?? process.env.OMA_PREFLIGHT_REQUIRE_SECRETS);
 const allowPlaceholderD1 = boolOpt(
   opts["allow-placeholder-d1"] ?? process.env.OMA_PREFLIGHT_ALLOW_PLACEHOLDER_D1,
 );
@@ -31,6 +34,11 @@ async function main() {
   checkNodeVersion(failures);
   await checkFile(dockerfilePath, "Dockerfile", failures);
   await checkWranglerToml(failures);
+  if (skipSecrets) {
+    console.log("skip secret check because --skip-secrets or OMA_PREFLIGHT_SKIP_SECRETS is set");
+  } else {
+    await checkSecrets(failures);
+  }
 
   if (skipDocker) {
     console.log("skip Docker check because --skip-docker or OMA_PREFLIGHT_SKIP_DOCKER is set");
@@ -92,6 +100,152 @@ async function checkWranglerToml(failures) {
   ]) {
     if (!source.includes(required)) failures.push(`wrangler.toml is missing ${required}`);
   }
+}
+
+async function checkSecrets(failures) {
+  const fileEnv = await readDevVars(devVarsPath, failures);
+  const env = { ...fileEnv, ...process.env };
+  const hasSecretInput = Object.keys(fileEnv).length > 0
+    || env.OMA_WORKFLOW_INTERNAL_TOKEN !== undefined
+    || env.OMA_PARENT_TOKEN_SECRET_BASE64 !== undefined
+    || env.OMA_API_TOKEN !== undefined
+    || env.OMA_PASSTHROUGH_ENV_JSON !== undefined
+    || env.OMA_FLUE_PROVIDER_CONFIG_JSON !== undefined;
+
+  if (!hasSecretInput && !requireSecrets) {
+    console.log("skip secret check because no .dev.vars or secret env vars were found");
+    return;
+  }
+
+  checkRequiredSecret(env, "OMA_WORKFLOW_INTERNAL_TOKEN", failures);
+  checkParentTokenSecret(env.OMA_PARENT_TOKEN_SECRET_BASE64, failures);
+  checkOptionalSecret(env, "OMA_API_TOKEN", failures);
+  checkOptionalJsonObject(env, "OMA_PASSTHROUGH_ENV_JSON", "string", failures);
+  checkOptionalJsonObject(env, "OMA_FLUE_PROVIDER_CONFIG_JSON", "object", failures);
+
+  if (failures.length === 0) {
+    console.log("ok Cloudflare local secrets are configured");
+  }
+}
+
+async function readDevVars(path, failures) {
+  let source;
+  try {
+    source = await readFile(path, "utf8");
+  } catch (err) {
+    if (err && typeof err === "object" && err.code === "ENOENT") return {};
+    failures.push(`.dev.vars is unreadable at ${path}`);
+    return {};
+  }
+
+  const parsed = {};
+  for (const [index, rawLine] of source.split(/\r?\n/).entries()) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) {
+      failures.push(`.dev.vars:${index + 1} must use KEY=value syntax`);
+      continue;
+    }
+    const key = line.slice(0, eq).trim();
+    const value = stripOptionalQuotes(line.slice(eq + 1).trim());
+    parsed[key] = value;
+  }
+  console.log(`ok loaded local secrets from ${path}`);
+  return parsed;
+}
+
+function checkRequiredSecret(env, key, failures) {
+  const value = env[key];
+  if (typeof value !== "string" || value.length === 0) {
+    failures.push(`${key} is required`);
+    return;
+  }
+  if (looksLikePlaceholder(value)) {
+    failures.push(`${key} still looks like a placeholder`);
+  }
+}
+
+function checkOptionalSecret(env, key, failures) {
+  const value = env[key];
+  if (value === undefined || value === "") return;
+  if (typeof value !== "string") {
+    failures.push(`${key} must be a string`);
+    return;
+  }
+  if (looksLikePlaceholder(value)) {
+    failures.push(`${key} still looks like a placeholder`);
+  }
+}
+
+function checkParentTokenSecret(value, failures) {
+  if (typeof value !== "string" || value.length === 0) {
+    failures.push("OMA_PARENT_TOKEN_SECRET_BASE64 is required");
+    return;
+  }
+  if (looksLikePlaceholder(value)) {
+    failures.push("OMA_PARENT_TOKEN_SECRET_BASE64 still looks like a placeholder");
+    return;
+  }
+  const trimmed = value.trim();
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(trimmed) || trimmed.length % 4 !== 0) {
+    failures.push("OMA_PARENT_TOKEN_SECRET_BASE64 must be standard padded base64");
+    return;
+  }
+  const decoded = Buffer.from(trimmed, "base64");
+  if (decoded.toString("base64") !== trimmed) {
+    failures.push("OMA_PARENT_TOKEN_SECRET_BASE64 must be canonical base64");
+    return;
+  }
+  if (decoded.byteLength !== 32) {
+    failures.push(`OMA_PARENT_TOKEN_SECRET_BASE64 must decode to exactly 32 bytes, got ${decoded.byteLength}`);
+  }
+}
+
+function checkOptionalJsonObject(env, key, valueKind, failures) {
+  const raw = env[key];
+  if (raw === undefined || raw === "") return;
+  if (typeof raw !== "string") {
+    failures.push(`${key} must be a JSON object string`);
+    return;
+  }
+  if (looksLikePlaceholder(raw)) {
+    failures.push(`${key} still looks like a placeholder`);
+    return;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    failures.push(`${key} must be valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    failures.push(`${key} must be a JSON object`);
+    return;
+  }
+  for (const [name, value] of Object.entries(parsed)) {
+    if (valueKind === "string" && typeof value !== "string") {
+      failures.push(`${key}.${name} must be a string`);
+    }
+    if (valueKind === "object" && (typeof value !== "object" || value === null || Array.isArray(value))) {
+      failures.push(`${key}.${name} must be an object`);
+    }
+  }
+}
+
+function stripOptionalQuotes(value) {
+  if (value.length < 2) return value;
+  const first = value[0];
+  const last = value[value.length - 1];
+  if ((first === "\"" && last === "\"") || (first === "'" && last === "'")) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
+function looksLikePlaceholder(value) {
+  return /replace[-_ ]?with|placeholder/i.test(value);
 }
 
 async function checkDocker(failures) {
