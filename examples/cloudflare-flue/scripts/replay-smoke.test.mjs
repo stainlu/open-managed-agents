@@ -91,6 +91,7 @@ describe("replay-smoke", () => {
     });
     expect(report.checks.map((check) => check.name)).toEqual([
       "health",
+      "runtime_profile",
       "harness_catalog",
       "state_readback",
       "replay_verified",
@@ -146,6 +147,24 @@ globalThis.fetch = async function fakeFetch(input, init = {}) {
     return json({
       ok: true,
       version: "test",
+      runtime: {
+        platform: "cloudflare",
+        stack: "cloudflare-flue",
+        mode: "native",
+        default_harness: "flue",
+        bindings: {
+          metadata: true,
+          database: true,
+          workspace: true,
+          workflow: true,
+          workers_ai: true,
+          sandbox: true,
+        },
+      },
+    });
+  }
+  if (method === "GET" && url.pathname === "/v1/runtime") {
+    return json({
       runtime: {
         platform: "cloudflare",
         stack: "cloudflare-flue",

@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 
 const REQUIRED_CHECKS = [
   "health",
+  "runtime_profile",
   "harness_catalog",
   "agent_create",
   "prompt_run",
@@ -56,7 +57,8 @@ async function main() {
   for (const check of checks) {
     if (check?.status === "skipped") failures.push(`check ${check.name} was skipped`);
   }
-  requireCloudflareRuntimeEvidence(checksByName.get("health"), failures);
+  requireCloudflareRuntimeEvidence(checksByName.get("health"), "health", failures);
+  requireCloudflareRuntimeEvidence(checksByName.get("runtime_profile"), "runtime_profile", failures);
   requireFlueHarnessCatalogEvidence(checksByName.get("harness_catalog"), failures);
 
   const resources = report.resources ?? {};
@@ -148,30 +150,30 @@ function nonEmptyString(value) {
   return typeof value === "string" && value.length > 0;
 }
 
-function requireCloudflareRuntimeEvidence(healthCheck, failures) {
-  const runtime = healthCheck?.runtime;
+function requireCloudflareRuntimeEvidence(check, label, failures) {
+  const runtime = check?.runtime;
   if (!runtime || typeof runtime !== "object" || Array.isArray(runtime)) {
-    failures.push("health check must include runtime evidence");
+    failures.push(`${label} check must include runtime evidence`);
     return;
   }
   if (runtime.platform !== "cloudflare") {
-    failures.push(`health runtime platform must be cloudflare, got ${runtime.platform}`);
+    failures.push(`${label} runtime platform must be cloudflare, got ${runtime.platform}`);
   }
   if (runtime.stack !== "cloudflare-flue") {
-    failures.push(`health runtime stack must be cloudflare-flue, got ${runtime.stack}`);
+    failures.push(`${label} runtime stack must be cloudflare-flue, got ${runtime.stack}`);
   }
   if (runtime.mode !== "native") {
-    failures.push(`health runtime mode must be native, got ${runtime.mode}`);
+    failures.push(`${label} runtime mode must be native, got ${runtime.mode}`);
   }
   if (runtime.default_harness !== "flue") {
-    failures.push(`health runtime default_harness must be flue, got ${runtime.default_harness}`);
+    failures.push(`${label} runtime default_harness must be flue, got ${runtime.default_harness}`);
   }
   const bindings = runtime.bindings && typeof runtime.bindings === "object"
     ? runtime.bindings
     : {};
   for (const name of ["metadata", "database", "workspace", "workflow", "workers_ai", "sandbox"]) {
     if (bindings[name] !== true) {
-      failures.push(`health runtime binding ${name} must be configured`);
+      failures.push(`${label} runtime binding ${name} must be configured`);
     }
   }
 }

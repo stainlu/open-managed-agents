@@ -25,6 +25,7 @@ from .resources.audit import Audit
 from .resources.chat import Chat
 from .resources.environments import Environments
 from .resources.harnesses import Harnesses
+from .resources.runtime import Runtime
 from .resources.sessions import Sessions
 from .resources.vaults import Vaults
 from .types import (
@@ -41,6 +42,8 @@ from .types import (
     HarnessCapability,
     HarnessCatalog,
     ManagedRun,
+    RuntimeHealth,
+    RuntimeProfile,
     Session,
     SessionTree,
     SessionTreeNode,
@@ -63,6 +66,8 @@ __all__ = [
     "HarnessCapability",
     "HarnessCatalog",
     "ManagedRun",
+    "RuntimeHealth",
+    "RuntimeProfile",
     "Session",
     "SessionTree",
     "SessionTreeNode",
@@ -111,6 +116,7 @@ class OpenClawClient:
         self.chat = Chat(self._client)
         self.environments = Environments(self._client)
         self.harnesses = Harnesses(self._client)
+        self.runtime = Runtime(self._client)
         self.sessions = Sessions(self._client)
         self.vaults = Vaults(self._client)
 

@@ -69,6 +69,19 @@ export interface HarnessCatalog {
   count: number;
 }
 
+export interface RuntimeHealth {
+  platform: string;
+  stack?: string;
+  mode?: string;
+  default_harness?: HarnessId;
+  bindings?: Record<string, boolean>;
+  features?: Record<string, boolean>;
+}
+
+export interface RuntimeProfile {
+  runtime: RuntimeHealth;
+}
+
 export interface AuditEvent {
   id: number;
   ts: number;

@@ -125,6 +125,9 @@ Working today:
 - `/healthz` exposes sanitized runtime readiness for both the default
   self-hosted container path and the Cloudflare/Flue path, so operators can see
   the active substrate without exposing platform ids or secrets.
+- `GET /v1/runtime` exposes the same sanitized runtime-substrate profile as an
+  authenticated OMA control-plane resource, separating liveness from managed
+  runtime introspection.
 - Experimental Flue native harness driver, opt-in via
   `OMA_ENABLE_FLUE_HARNESS=1`, including prompt turns, real Flue
   `session.task()` and `session.shell()` operations over OMA-managed

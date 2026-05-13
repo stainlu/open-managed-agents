@@ -276,6 +276,14 @@ Harness catalog entries also include `runtime_mode`:
 - `native`: the harness runs through the orchestrator or platform runtime; OMA
   must not fake Docker spawn options or container control clients for it.
 
+The managed runtime substrate itself is exposed separately at `GET /v1/runtime`.
+That response is sanitized control-plane evidence: platform,
+stack, mode, default harness, configured binding booleans, and feature booleans.
+It must not contain provider resource ids, host paths, bearer tokens, or
+cloud-specific object names. `/healthz` may mirror the same profile for
+liveness, but clients should use `/v1/runtime` when they need authenticated
+managed-runtime introspection.
+
 Current capability keys:
 
 - `start_turn`

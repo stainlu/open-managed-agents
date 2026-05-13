@@ -150,6 +150,11 @@ the same shape for its native Worker/Durable Object/Workflow/D1/R2/Sandbox
 composition. This keeps OMA's managed contract explicit while still making the
 runtime layer inspectable.
 
+`GET /v1/runtime` returns that same sanitized substrate profile behind the
+normal OMA API auth boundary. `/healthz` stays a liveness probe; `/v1/runtime`
+is the control-plane introspection surface clients and promotion checks should
+use when they need to reason about the managed runtime.
+
 ## Default Adapter Constraint: OpenClaw Is Single-User
 
 OpenClaw is fundamentally designed as one instance per user. The config,

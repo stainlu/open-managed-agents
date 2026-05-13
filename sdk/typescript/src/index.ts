@@ -4,6 +4,7 @@ import { Audit } from "./resources/audit.js";
 import { Chat } from "./resources/chat.js";
 import { Environments } from "./resources/environments.js";
 import { Harnesses } from "./resources/harnesses.js";
+import { Runtime } from "./resources/runtime.js";
 import { Sessions } from "./resources/sessions.js";
 import { Vaults } from "./resources/vaults.js";
 
@@ -80,6 +81,7 @@ export class OpenClawClient {
   readonly chat: Chat;
   readonly environments: Environments;
   readonly harnesses: Harnesses;
+  readonly runtime: Runtime;
   readonly sessions: Sessions;
   readonly vaults: Vaults;
 
@@ -95,6 +97,7 @@ export class OpenClawClient {
     this.chat = new Chat(http);
     this.environments = new Environments(http);
     this.harnesses = new Harnesses(http);
+    this.runtime = new Runtime(http);
     this.sessions = new Sessions(http);
     this.vaults = new Vaults(http);
   }

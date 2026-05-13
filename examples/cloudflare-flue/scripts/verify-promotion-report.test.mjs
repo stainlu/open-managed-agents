@@ -10,6 +10,7 @@ const execFileAsync = promisify(execFile);
 const scriptPath = fileURLToPath(new URL("./verify-promotion-report.mjs", import.meta.url));
 const requiredChecks = [
   "health",
+  "runtime_profile",
   "harness_catalog",
   "agent_create",
   "prompt_run",
@@ -117,6 +118,7 @@ function passingReport() {
 
 function passedCheck(name, now) {
   if (name === "health") return cloudflareHealthCheck(now);
+  if (name === "runtime_profile") return cloudflareRuntimeProfileCheck(now);
   if (name === "harness_catalog") {
     return {
       name,
@@ -148,6 +150,13 @@ function cloudflareHealthCheck(now) {
         sandbox: true,
       },
     },
+  };
+}
+
+function cloudflareRuntimeProfileCheck(now) {
+  return {
+    ...cloudflareHealthCheck(now),
+    name: "runtime_profile",
   };
 }
 

@@ -49,6 +49,7 @@ for await (const event of client.sessions.stream(session.session_id)) {
 | `client.chat.completions` | `create`, `stream` |
 | `client.environments` | `create`, `get`, `list`, `delete` |
 | `client.harnesses` | `catalog`, `list` |
+| `client.runtime` | `profile` |
 | `client.sessions` | `create`, `createChild`, `get`, `list`, `children`, `sessionTree`, `delete`, `deleteTree`, `send`, `cancel`, `cancelTree`, `compact`, `runs`, `run`, `abortRun`, `logs`, `events`, `stream`, `confirmTool`, `approvals`, `resolveApproval` |
 | `client.vaults` | `create`, `get`, `list`, `delete`, `addCredential`, `listCredentials`, `deleteCredential` |
 

@@ -159,6 +159,14 @@ async function checkHealthAndCatalog() {
     runtime: runtimeEvidence(health.runtime),
   });
 
+  const runtimeProfile = await request("GET", "/v1/runtime");
+  assert(runtimeProfile.runtime && typeof runtimeProfile.runtime === "object", "/v1/runtime is missing runtime");
+  assertNoPlatformIds(runtimeProfile, "runtime profile response");
+  if (!allowLocalReplay) assertCloudflareRuntimeReady(runtimeProfile.runtime, "runtime profile");
+  recordCheck("runtime_profile", {
+    runtime: runtimeEvidence(runtimeProfile.runtime),
+  });
+
   const harnesses = await request("GET", "/v1/harnesses");
   const flueHarness = Array.isArray(harnesses.harnesses)
     ? harnesses.harnesses.find((harness) => harness.harness_id === "flue")
@@ -441,15 +449,15 @@ function assertNoPlatformIds(value, label) {
   assert(!bad, `${label} leaks platform id key ${bad}`);
 }
 
-function assertCloudflareRuntimeReady(runtime) {
-  assert(runtime && typeof runtime === "object", "health runtime block is missing");
-  assert(runtime.platform === "cloudflare", `health runtime platform is ${runtime.platform}`);
-  assert(runtime.stack === "cloudflare-flue", `health runtime stack is ${runtime.stack}`);
-  assert(runtime.mode === "native", `health runtime mode is ${runtime.mode}`);
-  assert(runtime.default_harness === "flue", `health runtime default_harness is ${runtime.default_harness}`);
+function assertCloudflareRuntimeReady(runtime, label = "health runtime") {
+  assert(runtime && typeof runtime === "object", `${label} block is missing`);
+  assert(runtime.platform === "cloudflare", `${label} platform is ${runtime.platform}`);
+  assert(runtime.stack === "cloudflare-flue", `${label} stack is ${runtime.stack}`);
+  assert(runtime.mode === "native", `${label} mode is ${runtime.mode}`);
+  assert(runtime.default_harness === "flue", `${label} default_harness is ${runtime.default_harness}`);
   const bindings = runtime.bindings ?? {};
   for (const name of ["metadata", "database", "workspace", "workflow", "workers_ai", "sandbox"]) {
-    assert(bindings[name] === true, `health runtime binding ${name} is not configured`);
+    assert(bindings[name] === true, `${label} binding ${name} is not configured`);
   }
 }
 

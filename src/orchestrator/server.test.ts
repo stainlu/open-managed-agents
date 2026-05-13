@@ -37,6 +37,7 @@ const TEST_HERMES_CAPABILITIES = {
 
 function makeApp(opts: {
   passthroughEnv?: Record<string, string>;
+  runtimeHealth?: ServerDeps["runtimeHealth"];
   routerOverrides?: Partial<ServerDeps["router"]>;
   harnessAdapters?: HarnessAdapter[];
 } = {}) {
@@ -290,6 +291,7 @@ function makeApp(opts: {
     maxWarmContainers: 0,
     maxActiveContainers: 0,
     passthroughEnv: opts.passthroughEnv,
+    runtimeHealth: opts.runtimeHealth,
   };
 
   return {
@@ -345,6 +347,51 @@ describe("harness catalog API", () => {
     expect(hermes?.capabilities.mcp).toEqual({
       support: "unsupported",
       detail: "test hermes mcp",
+    });
+  });
+});
+
+describe("runtime profile API", () => {
+  it("surfaces the sanitized managed runtime substrate profile", async () => {
+    const { app } = makeApp({
+      runtimeHealth: {
+        platform: "cloudflare",
+        stack: "cloudflare-flue",
+        mode: "native",
+        default_harness: "flue",
+        bindings: {
+          metadata: true,
+          database: true,
+          workspace: true,
+          workflow: true,
+        },
+        features: {
+          workflow_runs: true,
+          sandbox_shell: false,
+        },
+      },
+    });
+
+    const res = await req(app, "/v1/runtime", { token: "admin-secret" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      runtime: {
+        platform: "cloudflare",
+        stack: "cloudflare-flue",
+        mode: "native",
+        default_harness: "flue",
+        bindings: {
+          metadata: true,
+          database: true,
+          workspace: true,
+          workflow: true,
+        },
+        features: {
+          workflow_runs: true,
+          sandbox_shell: false,
+        },
+      },
     });
   });
 });

@@ -89,6 +89,16 @@ paths:
                       $ref: "#/components/schemas/Harness"
                   count:
                     type: integer
+  /v1/runtime:
+    get:
+      summary: Inspect the sanitized managed runtime substrate profile
+      responses:
+        "200":
+          description: Runtime substrate profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeProfile"
   /v1/agents:
     post:
       summary: Create agent
@@ -1055,6 +1065,36 @@ components:
     HarnessRuntimeMode:
       type: string
       enum: [container, native]
+    RuntimeHealth:
+      type: object
+      required: [platform]
+      description: Sanitized runtime substrate readiness. Never contains platform ids or secrets.
+      properties:
+        platform:
+          type: string
+          examples: [self-hosted, cloudflare]
+        stack:
+          type: string
+          examples: [container-docker, cloudflare-flue]
+        mode:
+          type: string
+          examples: [container, native]
+        default_harness:
+          $ref: "#/components/schemas/HarnessId"
+        bindings:
+          type: object
+          additionalProperties:
+            type: boolean
+        features:
+          type: object
+          additionalProperties:
+            type: boolean
+    RuntimeProfile:
+      type: object
+      required: [runtime]
+      properties:
+        runtime:
+          $ref: "#/components/schemas/RuntimeHealth"
     Quota:
       type: object
       properties:

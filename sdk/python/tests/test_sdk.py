@@ -299,6 +299,40 @@ def test_harnesses_resource_exposes_capabilities() -> None:
         assert catalog.harnesses[1].capabilities["mcp"].support == "unsupported"
 
 
+def test_runtime_resource_exposes_substrate_profile() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/v1/runtime"
+        return httpx.Response(
+            200,
+            json={
+                "runtime": {
+                    "platform": "cloudflare",
+                    "stack": "cloudflare-flue",
+                    "mode": "native",
+                    "default_harness": "flue",
+                    "bindings": {
+                        "metadata": True,
+                        "database": True,
+                        "workspace": True,
+                    },
+                    "features": {
+                        "workflow_runs": True,
+                    },
+                },
+            },
+        )
+
+    with _client(handler) as client:
+        profile = client.runtime.profile()
+        assert profile.runtime.platform == "cloudflare"
+        assert profile.runtime.stack == "cloudflare-flue"
+        assert profile.runtime.mode == "native"
+        assert profile.runtime.default_harness == "flue"
+        assert profile.runtime.bindings["workspace"] is True
+        assert profile.runtime.features["workflow_runs"] is True
+
+
 def test_agents_resource_round_trips_payloads() -> None:
     calls = []
 

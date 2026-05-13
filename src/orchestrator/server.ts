@@ -201,6 +201,10 @@ export type RuntimeHealth = {
   features?: Record<string, boolean>;
 };
 
+export type RuntimeProfile = {
+  runtime: RuntimeHealth;
+};
+
 function agentResponse(agent: AgentConfig) {
   return {
     agent_id: agent.agentId,
@@ -279,6 +283,12 @@ function harnessResponse(harness: HarnessAdapter) {
     name: harness.displayName,
     runtime_mode: harnessRuntimeMode(harness),
     capabilities: harness.capabilities,
+  };
+}
+
+function runtimeProfile(runtimeHealth: RuntimeHealth | undefined): RuntimeProfile {
+  return {
+    runtime: runtimeHealth ?? { platform: "unknown" },
   };
 }
 
@@ -1095,6 +1105,9 @@ export function buildApp(deps: ServerDeps): Hono {
         harnesses: {
           list: "GET /v1/harnesses",
         },
+        runtime: {
+          profile: "GET /v1/runtime",
+        },
         openai_compat: {
           models: "GET /v1/models",
           chat_completions: "POST /v1/chat/completions",
@@ -1145,6 +1158,10 @@ export function buildApp(deps: ServerDeps): Hono {
       harnesses,
       count: harnesses.length,
     });
+  });
+
+  app.get("/v1/runtime", (c) => {
+    return c.json(runtimeProfile(deps.runtimeHealth));
   });
 
   app.get("/v1/models", async (c) => {

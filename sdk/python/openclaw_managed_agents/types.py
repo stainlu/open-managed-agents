@@ -28,6 +28,21 @@ class HarnessCatalog:
 
 
 @dataclass
+class RuntimeHealth:
+    platform: str
+    stack: Optional[str] = None
+    mode: Optional[str] = None
+    default_harness: Optional[str] = None
+    bindings: Dict[str, bool] = field(default_factory=dict)
+    features: Dict[str, bool] = field(default_factory=dict)
+
+
+@dataclass
+class RuntimeProfile:
+    runtime: RuntimeHealth
+
+
+@dataclass
 class AuditEvent:
     id: int
     ts: int

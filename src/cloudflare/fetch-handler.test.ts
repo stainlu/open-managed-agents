@@ -53,6 +53,21 @@ describe("createCloudflareFlueFetchHandler", () => {
       },
     });
 
+    const runtime = await handler.fetch(new Request("https://oma.example/v1/runtime"));
+    await expect(runtime.json()).resolves.toMatchObject({
+      runtime: {
+        platform: "cloudflare",
+        stack: "cloudflare-flue",
+        mode: "native",
+        default_harness: "flue",
+        bindings: {
+          metadata: true,
+          database: true,
+          workspace: true,
+        },
+      },
+    });
+
     const created = await handler.fetch(new Request("https://oma.example/v1/agents", {
       method: "POST",
       headers: { "content-type": "application/json" },
