@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ADAPTER_SERVER_PROTOCOL_VERSION,
+  AdapterServerLogsResponseSchema,
   AdapterServerReadyResponseSchema,
   AdapterServerRoutes,
   AdapterServerStartTurnRequestSchema,
@@ -32,6 +33,7 @@ describe("adapter-server protocol", () => {
     expect(AdapterServerRoutes.listApprovals).toBe(
       "/sessions/:session_id/approvals",
     );
+    expect(AdapterServerRoutes.logs).toBe("/logs");
   });
 
   it("validates ready responses with explicit capabilities", () => {
@@ -111,6 +113,15 @@ describe("adapter-server protocol", () => {
 
     expect(parsed.native?.native_thread_id).toBe("thread-1");
     expect(parsed.events[0]?.type).toBe("agent.message");
+  });
+
+  it("validates adapter-local logs responses", () => {
+    const parsed = AdapterServerLogsResponseSchema.parse({
+      protocol_version: ADAPTER_SERVER_PROTOCOL_VERSION,
+      logs: "adapter=hermes\nsessions=1",
+    });
+
+    expect(parsed.logs).toContain("adapter=hermes");
   });
 
   it("validates stream frames for deltas, approvals, state, and completion", () => {

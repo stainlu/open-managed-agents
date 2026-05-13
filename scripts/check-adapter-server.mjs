@@ -33,6 +33,8 @@ const MANAGED_EVENT_TYPES = new Set([
   "session.thinking_level_change",
   "session.compaction",
   "session.runtime_notice",
+  "session.run_start",
+  "session.run_end",
 ]);
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -421,6 +423,11 @@ function assertOutcomeResponse(response, route) {
   assertNativeMaybe(response.data.native, route);
 }
 
+function assertLogsResponse(response, route) {
+  assertProtocolEnvelope(response, route);
+  assert(typeof response.data.logs === "string", `${route} logs must be string`);
+}
+
 async function assertNonStreamingTurn(baseUrl, token, sessionId, harnessId) {
   const marker = `turn-conformance-${harnessId}`;
   const route = `POST /sessions/${sessionId}/turns`;
@@ -539,6 +546,11 @@ async function runChecks({ baseUrl, harnessId, token, readyResponse }) {
   assertProtocolEnvelope(approvals, "GET /approvals");
   assert(Array.isArray(approvals.data.approvals), "approvals must be an array");
   assertNativeMaybe(approvals.data.native, "GET /approvals");
+
+  assertLogsResponse(
+    await requestJson(baseUrl, "GET", "/logs", token),
+    "GET /logs",
+  );
 
   await assertNonStreamingTurn(baseUrl, token, sessionId, harnessId);
 

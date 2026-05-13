@@ -879,6 +879,21 @@ class CodexAdapterRuntime:
                 payload["usage"] = usage
             return payload
 
+    def logs(self) -> dict[str, Any]:
+        with self.lock:
+            session_ids = sorted(self.sessions.keys())
+        lines = [
+            f"adapter=codex protocol={PROTOCOL_VERSION} version={ADAPTER_VERSION}",
+            f"sessions={len(session_ids)}",
+        ]
+        if session_ids:
+            lines.append(f"session_ids={','.join(session_ids)}")
+        lines.append("native stdout/stderr is emitted on the container log stream")
+        return {
+            "protocol_version": PROTOCOL_VERSION,
+            "logs": "\n".join(lines),
+        }
+
 
 class AdapterHttpError(Exception):
     def __init__(self, status: int, payload: dict[str, Any]) -> None:
@@ -953,6 +968,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if not self._auth_ok():
                 self._write_error(*_error_payload("bad_request", "unauthorized", HTTPStatus.UNAUTHORIZED))
+                return
+            if path == "/logs":
+                self._write_json(HTTPStatus.OK, RUNTIME.logs())
                 return
             session_id = self._session_id_from_path("events")
             if session_id:

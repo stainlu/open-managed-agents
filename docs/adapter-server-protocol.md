@@ -235,6 +235,22 @@ Example:
 Adapters must emit normalized managed events. Native logs can be preserved under
 adapter-owned storage, but the public API reads managed events.
 
+## Logs
+
+`GET /logs` returns an adapter-local diagnostics envelope:
+
+```json
+{
+  "protocol_version": "oma.adapter.v1",
+  "logs": "adapter=hermes protocol=oma.adapter.v1\nsessions=1"
+}
+```
+
+Adapters that do not keep an in-process log buffer should still implement this
+route and return useful diagnostics or a pointer to the container stdout/stderr
+stream. The container log stream remains the canonical source for full native
+harness output.
+
 Supported event types:
 
 - `user.message`

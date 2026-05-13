@@ -294,6 +294,15 @@ export const AdapterServerOutcomeResponseSchema = z
 
 export type AdapterServerOutcomeResponse = z.infer<typeof AdapterServerOutcomeResponseSchema>;
 
+export const AdapterServerLogsResponseSchema = z
+  .object({
+    protocol_version: z.literal(ADAPTER_SERVER_PROTOCOL_VERSION),
+    logs: z.string(),
+  })
+  .strict();
+
+export type AdapterServerLogsResponse = z.infer<typeof AdapterServerLogsResponseSchema>;
+
 export const AdapterServerStreamFrameSchema = z.discriminatedUnion("type", [
   z
     .object({

@@ -940,6 +940,20 @@ class ClaudeAgentSdkAdapterRuntime {
     }
     return payload;
   }
+
+  logs() {
+    const sessionIds = [...this.sessions.keys()].sort();
+    const lines = [
+      `adapter=claude-agent-sdk protocol=${PROTOCOL_VERSION} version=${ADAPTER_VERSION}`,
+      `sessions=${sessionIds.length}`,
+    ];
+    if (sessionIds.length > 0) lines.push(`session_ids=${sessionIds.join(",")}`);
+    lines.push("native stdout/stderr is emitted on the container log stream");
+    return {
+      protocol_version: PROTOCOL_VERSION,
+      logs: lines.join("\n"),
+    };
+  }
 }
 
 const RUNTIME = new ClaudeAgentSdkAdapterRuntime();
@@ -1023,6 +1037,10 @@ async function handle(req, res) {
     }
 
     if (req.method === "GET") {
+      if (parts.join("/") === "logs") {
+        writeJson(res, 200, RUNTIME.logs());
+        return;
+      }
       const eventsSession = sessionRoute(req, "events");
       if (eventsSession) {
         writeJson(res, 200, RUNTIME.listEvents(eventsSession));
