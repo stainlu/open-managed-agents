@@ -154,6 +154,76 @@ paths:
       responses:
         "200":
           description: Run started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunAgentResult"
+  /v1/agents/{agentId}/files:
+    parameters:
+      - $ref: "#/components/parameters/AgentId"
+      - in: query
+        name: session_id
+        required: true
+        schema:
+          type: string
+      - in: query
+        name: path
+        schema:
+          type: string
+        description: Relative workspace directory to list. Defaults to the workspace root.
+    get:
+      summary: List files in an agent session workspace
+      responses:
+        "200":
+          description: Workspace directory listing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentFileList"
+  /v1/agents/{agentId}/files/{filePath}:
+    parameters:
+      - $ref: "#/components/parameters/AgentId"
+      - $ref: "#/components/parameters/FilePath"
+      - in: query
+        name: session_id
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Read a file from an agent session workspace
+      responses:
+        "200":
+          description: File bytes
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+    put:
+      summary: Write a file into an agent session workspace
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: File write result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentFileWriteResult"
+    delete:
+      summary: Delete a file from an agent session workspace
+      responses:
+        "200":
+          description: File delete result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentFileDeleteResult"
   /v1/environments:
     post:
       summary: Create environment
@@ -509,6 +579,84 @@ paths:
             text/plain:
               schema:
                 type: string
+  /v1/chat/completions:
+    post:
+      summary: OpenAI-compatible chat completions adapter
+      parameters:
+        - in: header
+          name: x-openclaw-agent-id
+          required: true
+          schema:
+            type: string
+          description: Agent id to run behind the OpenAI-compatible API.
+        - in: header
+          name: x-openclaw-session-key
+          schema:
+            type: string
+          description: Optional stable OMA session id/key for named-session resume.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OpenAIChatCompletionRequest"
+      responses:
+        "200":
+          description: Chat completion or streaming SSE chunks
+          headers:
+            x-oma-run-id:
+              schema:
+                type: string
+              description: Managed run id for the accepted turn.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenAIChatCompletion"
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          description: Invalid OpenAI-compatible request
+  /v1/audit:
+    get:
+      summary: List audit events
+      parameters:
+        - in: query
+          name: since
+          schema:
+            type: integer
+        - in: query
+          name: until
+          schema:
+            type: integer
+        - in: query
+          name: action
+          schema:
+            type: string
+        - in: query
+          name: target
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Audit events
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events, count]
+                properties:
+                  events:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AuditEvent"
+                  count:
+                    type: integer
 components:
   securitySchemes:
     bearerAuth:
@@ -533,6 +681,13 @@ components:
       required: true
       schema:
         type: string
+    FilePath:
+      in: path
+      name: filePath
+      required: true
+      schema:
+        type: string
+      description: Relative workspace path. Slash-containing paths are handled by the server wildcard route.
     RunId:
       in: path
       name: runId
@@ -960,6 +1115,67 @@ components:
           enum: [allow, deny]
         denyMessage:
           type: string
+    RunAgentResult:
+      type: object
+      required: [session_id, run_id, agent_id, status, started_at]
+      properties:
+        session_id:
+          type: string
+        run_id:
+          type: string
+        agent_id:
+          type: string
+        status:
+          type: string
+        started_at:
+          type: integer
+    AgentFileEntry:
+      type: object
+      required: [name, path, type, size, mtime]
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        type:
+          type: string
+          enum: [file, dir]
+        size:
+          type: integer
+        mtime:
+          type: integer
+    AgentFileList:
+      type: object
+      required: [agent_id, path, entries]
+      properties:
+        agent_id:
+          type: string
+        path:
+          type: string
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentFileEntry"
+    AgentFileWriteResult:
+      type: object
+      required: [agent_id, path, size]
+      properties:
+        agent_id:
+          type: string
+        path:
+          type: string
+        size:
+          type: integer
+    AgentFileDeleteResult:
+      type: object
+      required: [agent_id, path, deleted]
+      properties:
+        agent_id:
+          type: string
+        path:
+          type: string
+        deleted:
+          const: true
     SendEventResult:
       type: object
       required: [session_id]
@@ -1201,3 +1417,88 @@ components:
           type: string
         compacted:
           const: true
+    OpenAIChatMessage:
+      type: object
+      required: [role]
+      additionalProperties: true
+      properties:
+        role:
+          type: string
+        content:
+          description: The compatibility handler uses the newest user message with non-empty string content; other content shapes pass schema validation but are ignored.
+    OpenAIChatCompletionRequest:
+      type: object
+      required: [messages]
+      additionalProperties: true
+      properties:
+        model:
+          type: string
+          description: Accepted for OpenAI compatibility; the OMA agent template controls the real model unless the harness supports overrides.
+        messages:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/OpenAIChatMessage"
+        stream:
+          type: boolean
+          default: false
+        user:
+          type: string
+          description: Optional named OMA session key when x-openclaw-session-key is absent.
+    OpenAIChatCompletion:
+      type: object
+      required: [id, object, created, model, choices, usage]
+      properties:
+        id:
+          type: string
+        object:
+          const: chat.completion
+        created:
+          type: integer
+        model:
+          type: string
+        choices:
+          type: array
+          items:
+            type: object
+            required: [index, message, finish_reason]
+            properties:
+              index:
+                type: integer
+              message:
+                $ref: "#/components/schemas/OpenAIChatMessage"
+              finish_reason:
+                type: string
+        usage:
+          type: object
+          required: [prompt_tokens, completion_tokens, total_tokens]
+          properties:
+            prompt_tokens:
+              type: integer
+            completion_tokens:
+              type: integer
+            total_tokens:
+              type: integer
+    AuditEvent:
+      type: object
+      required: [id, ts, action, outcome]
+      properties:
+        id:
+          type: string
+        ts:
+          type: integer
+        request_id:
+          type: [string, "null"]
+        actor:
+          type: [string, "null"]
+        action:
+          type: string
+        target:
+          type: [string, "null"]
+        outcome:
+          type: string
+        metadata:
+          anyOf:
+            - type: object
+              additionalProperties: true
+            - type: "null"
