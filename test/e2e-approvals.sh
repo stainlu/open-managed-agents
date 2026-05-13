@@ -9,6 +9,12 @@
 #   4. Client posts user.tool_confirmation.
 #   5. The blocked tool resumes and the session completes.
 #
+# With OMA_APPROVAL_RESTART_BEFORE_CONFIRM=1, the script restarts the
+# orchestrator after the approval request is observed but before confirmation.
+# That proves the managed approval row survives restart, is re-emitted on a new
+# SSE connection, and can still be resolved through the adopted OpenClaw
+# container.
+#
 # Prerequisites:
 #   - docker compose up -d
 #   - provider credentials injected into the orchestrator before compose start
@@ -16,6 +22,7 @@
 # Useful overrides:
 #   BASE_URL=http://localhost:8081 ./test/e2e-approvals.sh
 #   OMA_APPROVAL_REQUIRE=1 ./test/e2e-approvals.sh
+#   OMA_APPROVAL_RESTART_BEFORE_CONFIRM=1 ./test/e2e-approvals.sh
 #   OMA_APPROVAL_MODEL=moonshot/kimi-k2.6 ./test/e2e-approvals.sh
 
 set -euo pipefail
@@ -28,6 +35,9 @@ POLL_INTERVAL_SEC="${OMA_APPROVAL_POLL_INTERVAL_SEC:-2}"
 MAX_POLL_SEC="${OMA_APPROVAL_MAX_POLL_SEC:-600}"
 HEALTH_MAX_SEC="${OMA_APPROVAL_HEALTH_MAX_SEC:-120}"
 ORCHESTRATOR_CONTAINER="${OMA_ORCHESTRATOR_CONTAINER:-open-managed-agents-orchestrator}"
+COMPOSE_SERVICE="${OMA_APPROVAL_COMPOSE_SERVICE:-orchestrator}"
+RESTART_BEFORE_CONFIRM="${OMA_APPROVAL_RESTART_BEFORE_CONFIRM:-0}"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/oma-approvals.XXXXXX")"
 SSE_OUT="${SCRATCH}/events.sse"
@@ -41,10 +51,7 @@ die() { echo "[e2e-approvals] FATAL: $*" >&2; exit 1; }
 cleanup() {
   local ec=$?
   set +u
-  if [[ -n "${SSE_PID}" ]]; then
-    kill "${SSE_PID}" >/dev/null 2>&1 || true
-    wait "${SSE_PID}" >/dev/null 2>&1 || true
-  fi
+  stop_sse
   if [[ -n "${SESSION_ID}" ]]; then
     delete_resource "/v1/sessions/${SESSION_ID}" || true
   fi
@@ -101,6 +108,14 @@ start_sse() {
   SSE_PID=$!
 }
 
+stop_sse() {
+  if [[ -n "${SSE_PID}" ]]; then
+    kill "${SSE_PID}" >/dev/null 2>&1 || true
+    wait "${SSE_PID}" >/dev/null 2>&1 || true
+    SSE_PID=""
+  fi
+}
+
 wait_for_health() {
   local elapsed=0
   local last_error=""
@@ -116,6 +131,10 @@ wait_for_health() {
     say "last health error: ${last_error}"
   fi
   return 1
+}
+
+compose_restart_orchestrator() {
+  (cd "${REPO_ROOT}" && docker compose restart "${COMPOSE_SERVICE}" >/dev/null)
 }
 
 poll_session() {
@@ -275,7 +294,27 @@ post_message \
 say "waiting for agent.tool_confirmation_request"
 APPROVAL_ID="$(wait_for_approval)" \
   || die "never received agent.tool_confirmation_request"
-say "received approval ${APPROVAL_ID}; allowing once"
+say "received approval ${APPROVAL_ID}"
+
+if [[ "${RESTART_BEFORE_CONFIRM}" == "1" ]]; then
+  say "restarting orchestrator before confirming approval ${APPROVAL_ID}"
+  stop_sse
+  : >"${SSE_OUT}"
+  compose_restart_orchestrator
+  wait_for_health \
+    || die "orchestrator did not become healthy after approval restart"
+  start_sse "/v1/sessions/${SESSION_ID}/events?stream=true" "${SSE_OUT}"
+  sleep 1
+  REEMITTED_APPROVAL_ID="$(wait_for_approval)" \
+    || die "pending approval was not re-emitted after orchestrator restart"
+  if [[ "${REEMITTED_APPROVAL_ID}" != "${APPROVAL_ID}" ]]; then
+    print_diagnostics
+    die "re-emitted approval id ${REEMITTED_APPROVAL_ID} did not match original ${APPROVAL_ID}"
+  fi
+  say "approval ${APPROVAL_ID} survived restart and was re-emitted"
+fi
+
+say "allowing approval ${APPROVAL_ID} once"
 confirm_tool "${SESSION_ID}" "${APPROVAL_ID}"
 
 poll_session "${SESSION_ID}" "after-approval" >/dev/null \
