@@ -32,9 +32,11 @@ describe("VaultCrypto", () => {
     const crypto = new VaultCrypto(VaultCrypto.generateKey());
     const encrypted = crypto.encrypt("secret");
     const parts = encrypted.split(":");
-    // Flip one bit in the ciphertext portion — GCM auth tag rejects it.
-    const ct = parts[2]!;
-    const flipped = `${parts[0]}:${parts[1]}:${"A" + ct.slice(1)}`;
+    // Flip one decoded byte in the ciphertext portion. Mutating the base64url
+    // text directly can be a no-op for some encodings.
+    const ct = Buffer.from(parts[2]!, "base64url");
+    ct[0] ^= 0x01;
+    const flipped = `${parts[0]}:${parts[1]}:${ct.toString("base64url")}`;
     expect(() => crypto.decrypt(flipped)).toThrow();
   });
 
