@@ -1,9 +1,11 @@
 import type { HttpClient } from "../http.js";
 import { parseSse } from "../sse.js";
 import type {
+  Approval,
   CancelResult,
   CompactResult,
   Event,
+  ResolveApprovalResult,
   RunTree,
   SendEventResult,
   Session,
@@ -26,6 +28,10 @@ export interface ConfirmToolParams {
   toolUseId: string;
   result: "allow" | "deny";
   denyMessage?: string;
+}
+
+export interface ResolveApprovalParams {
+  decision: "allow" | "deny";
 }
 
 export interface EventQueryParams {
@@ -81,6 +87,26 @@ export class Sessions {
       "POST",
       `/v1/sessions/${encodeURIComponent(sessionId)}/events`,
       body,
+    );
+  }
+
+  async approvals(sessionId: string): Promise<Approval[]> {
+    const resp = await this.http.request<{ approvals: Approval[] }>(
+      "GET",
+      `/v1/sessions/${encodeURIComponent(sessionId)}/approvals`,
+    );
+    return resp.approvals;
+  }
+
+  resolveApproval(
+    sessionId: string,
+    approvalId: string,
+    params: ResolveApprovalParams,
+  ): Promise<ResolveApprovalResult> {
+    return this.http.request<ResolveApprovalResult>(
+      "POST",
+      `/v1/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`,
+      { decision: params.decision },
     );
   }
 

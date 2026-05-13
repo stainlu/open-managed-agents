@@ -342,6 +342,98 @@ describe("harness catalog API", () => {
   });
 });
 
+describe("approval API", () => {
+  it("lists and resolves pending managed approvals without requiring SSE", async () => {
+    let approvalSessionId = "";
+    const confirmations: Array<{
+      sessionId: string;
+      approvalId: string;
+      decision: "allow" | "deny";
+    }> = [];
+    const { app, store } = makeApp({
+      routerOverrides: {
+        getPendingApprovals(sessionId: string) {
+          if (sessionId !== approvalSessionId) return [];
+          return [
+            {
+              approvalId: "appr_123",
+              sessionId,
+              toolName: "bash",
+              toolCallId: "tool_123",
+              description: "Flue tool bash with command npm test",
+              arrivedAt: 1234,
+            },
+          ];
+        },
+        async confirmTool(
+          sessionId: string,
+          approvalId: string,
+          decision: "allow" | "deny",
+        ) {
+          confirmations.push({ sessionId, approvalId, decision });
+        },
+      },
+    });
+    const agent = createAgent(store);
+    const session = store.sessions.create({ agentId: agent.agentId });
+    approvalSessionId = session.sessionId;
+
+    const list = await req(app, `/v1/sessions/${session.sessionId}/approvals`, {
+      token: "admin-secret",
+    });
+    expect(list.status).toBe(200);
+    expect(list.body).toEqual({
+      session_id: session.sessionId,
+      approvals: [
+        {
+          approval_id: "appr_123",
+          session_id: session.sessionId,
+          tool_name: "bash",
+          tool_call_id: "tool_123",
+          description: "Flue tool bash with command npm test",
+          arrived_at: 1234,
+        },
+      ],
+    });
+
+    const invalid = await req(app, `/v1/sessions/${session.sessionId}/approvals/appr_123`, {
+      method: "POST",
+      token: "admin-secret",
+      body: { decision: "maybe" },
+    });
+    expect(invalid.status).toBe(400);
+    expect((invalid.body as { error?: string }).error).toBe("invalid_request");
+
+    const missing = await req(app, `/v1/sessions/${session.sessionId}/approvals/appr_missing`, {
+      method: "POST",
+      token: "admin-secret",
+      body: { decision: "allow" },
+    });
+    expect(missing.status).toBe(404);
+    expect(missing.body).toEqual({ error: "approval_not_found" });
+
+    const resolved = await req(app, `/v1/sessions/${session.sessionId}/approvals/appr_123`, {
+      method: "POST",
+      token: "admin-secret",
+      body: { decision: "allow" },
+    });
+    expect(resolved.status).toBe(200);
+    expect(resolved.body).toEqual({
+      session_id: session.sessionId,
+      approval_id: "appr_123",
+      decision: "allow",
+      resolved: true,
+    });
+    expect(confirmations).toEqual([
+      {
+        sessionId: session.sessionId,
+        approvalId: "appr_123",
+        decision: "allow",
+      },
+    ]);
+  });
+});
+
 async function req(
   app: ReturnType<typeof buildApp>,
   path: string,

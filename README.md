@@ -60,7 +60,8 @@ Working today:
 - OpenAI-compatible `/v1/chat/completions` shim.
 - Tool permission policies and approvals for the OpenClaw adapter.
 - Pending tool approval records are owned by the managed store, with SQLite
-  durability across orchestrator restarts and in-memory behavior for tests.
+  durability across orchestrator restarts, direct public list/resolve APIs, and
+  in-memory behavior for tests.
 - Generic `HarnessAdapter` interface.
 - Public `/v1/harnesses` capability catalog.
 - Managed JSONL event log abstraction.

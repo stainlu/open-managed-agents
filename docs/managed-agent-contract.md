@@ -137,6 +137,13 @@ Rules:
   specific managed or harness-native run id.
 - `GET /v1/sessions/:id/events?parent_run_id=:runId` reads direct child-run
   events, for harnesses that expose nested run lineage.
+- `GET /v1/sessions/:id/approvals` lists currently pending tool approvals from
+  OMA's managed approval store, so clients can recover approval state after
+  reconnecting without depending on a live SSE stream.
+- `POST /v1/sessions/:id/approvals/:approvalId` resolves a pending approval
+  with `{ "decision": "allow" | "deny" }`. Posting
+  `user.tool_confirmation` to `/events` remains supported for event-shaped
+  clients.
 - `POST /v1/sessions/:id/runs/:runId/abort` cancels a queued run without
   stopping the active session. For the currently active run, it maps to the
   harness/runtime cancellation path and marks non-terminal work cancelled.

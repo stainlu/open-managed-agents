@@ -152,6 +152,15 @@ export interface Event {
   event_index?: number | null;
 }
 
+export interface Approval {
+  approval_id: string;
+  session_id: string;
+  tool_name: string;
+  tool_call_id?: string | null;
+  description: string;
+  arrived_at: number;
+}
+
 export interface RunTreeSource {
   managed_run: boolean;
   event_log: boolean;
@@ -188,6 +197,13 @@ export interface SendEventResult {
   session_id: string;
   status: string;
   queued?: boolean;
+}
+
+export interface ResolveApprovalResult {
+  session_id: string;
+  approval_id: string;
+  decision: "allow" | "deny";
+  resolved: true;
 }
 
 export interface CancelResult {

@@ -21,6 +21,7 @@ import type {
   AuditStore,
   EnvironmentStore,
   ManagedRun,
+  PendingApprovalRecord,
   SessionContainerStore,
   SessionStore,
   Vault,
@@ -44,6 +45,7 @@ import {
   CreateVaultRequestSchema,
   OpenAIChatCompletionRequestSchema,
   PostEventRequestSchema,
+  ResolveApprovalRequestSchema,
   RunAgentRequestSchema,
   UpdateAgentRequestSchema,
   type AgentConfig,
@@ -585,6 +587,17 @@ function eventResponse(event: Event) {
   };
 }
 
+function approvalResponse(approval: PendingApprovalRecord) {
+  return {
+    approval_id: approval.approvalId,
+    session_id: approval.sessionId,
+    tool_name: approval.toolName,
+    tool_call_id: approval.toolCallId,
+    description: approval.description,
+    arrived_at: approval.arrivedAt,
+  };
+}
+
 type EventFilter = {
   runId?: string;
   parentRunId?: string;
@@ -909,6 +922,8 @@ export function buildApp(deps: ServerDeps): Hono {
           run_tree: "GET /v1/sessions/:sessionId/run-tree",
           get_run: "GET /v1/sessions/:sessionId/runs/:runId",
           abort_run: "POST /v1/sessions/:sessionId/runs/:runId/abort",
+          list_approvals: "GET /v1/sessions/:sessionId/approvals",
+          resolve_approval: "POST /v1/sessions/:sessionId/approvals/:approvalId",
           compact: "POST /v1/sessions/:sessionId/compact",
           logs: "GET /v1/sessions/:sessionId/logs?tail=<n>",
         },
@@ -1723,6 +1738,68 @@ export function buildApp(deps: ServerDeps): Hono {
       writeAudit(deps.audit, c, {
         action: "session.cancel",
         target: sessionId,
+        outcome: err instanceof RouterError ? err.code : "error",
+      });
+      return handleRouterError(err, c);
+    }
+  });
+
+  app.get("/v1/sessions/:sessionId/approvals", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    if (!getScopedSession(c, sessionId)) {
+      return c.json({ error: "session_not_found" }, 404);
+    }
+    return c.json({
+      session_id: sessionId,
+      approvals: deps.router.getPendingApprovals(sessionId).map(approvalResponse),
+    });
+  });
+
+  app.post("/v1/sessions/:sessionId/approvals/:approvalId", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const approvalId = c.req.param("approvalId");
+    if (!getScopedSession(c, sessionId)) {
+      writeAudit(deps.audit, c, {
+        action: "approval.resolve",
+        target: approvalId,
+        outcome: "session_not_found",
+      });
+      return c.json({ error: "session_not_found" }, 404);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = ResolveApprovalRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "invalid_request", details: parsed.error.format() }, 400);
+    }
+    const pending = deps.router
+      .getPendingApprovals(sessionId)
+      .some((approval) => approval.approvalId === approvalId);
+    if (!pending) {
+      writeAudit(deps.audit, c, {
+        action: "approval.resolve",
+        target: approvalId,
+        outcome: "approval_not_found",
+      });
+      return c.json({ error: "approval_not_found" }, 404);
+    }
+    try {
+      await deps.router.confirmTool(sessionId, approvalId, parsed.data.decision);
+      writeAudit(deps.audit, c, {
+        action: "approval.resolve",
+        target: approvalId,
+        outcome: "ok",
+        metadata: { decision: parsed.data.decision },
+      });
+      return c.json({
+        session_id: sessionId,
+        approval_id: approvalId,
+        decision: parsed.data.decision,
+        resolved: true,
+      });
+    } catch (err) {
+      writeAudit(deps.audit, c, {
+        action: "approval.resolve",
+        target: approvalId,
         outcome: err instanceof RouterError ? err.code : "error",
       });
       return handleRouterError(err, c);

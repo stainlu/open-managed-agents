@@ -69,4 +69,56 @@ describe("Sessions", () => {
       runs: [{ run_id: "run_parent" }],
     });
   });
+
+  it("lists and resolves pending approvals", async () => {
+    const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/v1/sessions/ses_1/approvals") && init?.method === "GET") {
+        return jsonResponse(200, {
+          approvals: [
+            {
+              approval_id: "appr_1",
+              session_id: "ses_1",
+              tool_name: "bash",
+              description: "approve bash",
+              arrived_at: 1234,
+            },
+          ],
+        });
+      }
+      if (url.endsWith("/v1/sessions/ses_1/approvals/appr_1") && init?.method === "POST") {
+        return jsonResponse(200, {
+          session_id: "ses_1",
+          approval_id: "appr_1",
+          decision: "allow",
+          resolved: true,
+        });
+      }
+      return jsonResponse(404, { error: "not_found" });
+    });
+    const http = new HttpClient({ baseUrl: "http://o", timeoutMs: 1000, fetch: fetchFn });
+    const sessions = new Sessions(http);
+
+    const approvals = await sessions.approvals("ses_1");
+    const resolved = await sessions.resolveApproval("ses_1", "appr_1", {
+      decision: "allow",
+    });
+
+    expect(approvals).toEqual([
+      {
+        approval_id: "appr_1",
+        session_id: "ses_1",
+        tool_name: "bash",
+        description: "approve bash",
+        arrived_at: 1234,
+      },
+    ]);
+    expect(resolved).toEqual({
+      session_id: "ses_1",
+      approval_id: "appr_1",
+      decision: "allow",
+      resolved: true,
+    });
+    expect(fetchFn.mock.calls[1]?.[1]?.body).toBe(JSON.stringify({ decision: "allow" }));
+  });
 });

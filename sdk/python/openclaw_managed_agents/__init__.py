@@ -27,6 +27,7 @@ from .resources.sessions import Sessions
 from .resources.vaults import Vaults
 from .types import (
     Agent,
+    Approval,
     Environment,
     Event,
     Harness,
@@ -40,6 +41,7 @@ from .types import (
 __all__ = [
     "OpenClawClient",
     "Agent",
+    "Approval",
     "Environment",
     "Harness",
     "HarnessCapability",

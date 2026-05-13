@@ -265,6 +265,25 @@ def test_sessions_resource_and_sse_stream() -> None:
                 "thinkingLevel": "off",
             }
             return httpx.Response(202, json={"status": "running", "queued": False})
+        if request.method == "GET" and request.url.path == "/v1/sessions/ses_123/approvals":
+            return httpx.Response(200, json={
+                "approvals": [{
+                    "approval_id": "appr_123",
+                    "session_id": "ses_123",
+                    "tool_name": "bash",
+                    "tool_call_id": "tool_123",
+                    "description": "approve bash",
+                    "arrived_at": 1234,
+                }],
+            })
+        if request.method == "POST" and request.url.path == "/v1/sessions/ses_123/approvals/appr_123":
+            assert _json(request) == {"decision": "allow"}
+            return httpx.Response(200, json={
+                "session_id": "ses_123",
+                "approval_id": "appr_123",
+                "decision": "allow",
+                "resolved": True,
+            })
         if request.method == "POST" and request.url.path == "/v1/sessions/ses_123/cancel":
             return httpx.Response(200, json={"status": "cancelled"})
         if request.method == "POST" and request.url.path == "/v1/sessions/ses_123/compact":
@@ -312,6 +331,19 @@ def test_sessions_resource_and_sse_stream() -> None:
             result="deny",
             deny_message="not allowed",
         ) == {"queued": False}
+        approvals = client.sessions.approvals("ses_123")
+        assert approvals[0].approval_id == "appr_123"
+        assert approvals[0].tool_name == "bash"
+        assert client.sessions.resolve_approval(
+            "ses_123",
+            "appr_123",
+            decision="allow",
+        ) == {
+            "session_id": "ses_123",
+            "approval_id": "appr_123",
+            "decision": "allow",
+            "resolved": True,
+        }
         assert client.sessions.cancel("ses_123") == {"status": "cancelled"}
         assert client.sessions.compact("ses_123") == {"status": "queued"}
         assert client.sessions.logs("ses_123", tail=50) == "container logs"

@@ -8,7 +8,7 @@ from typing import Any, Dict, Iterator, List, Optional
 import httpx
 from httpx_sse import connect_sse
 
-from ..types import Event, Session
+from ..types import Approval, Event, Session
 
 
 def _parse_session(data: Dict[str, Any]) -> Session:
@@ -48,6 +48,17 @@ def _parse_event(data: Dict[str, Any]) -> Event:
         tool_arguments=data.get("tool_arguments"),
         is_error=data.get("is_error"),
         approval_id=data.get("approval_id"),
+    )
+
+
+def _parse_approval(data: Dict[str, Any]) -> Approval:
+    return Approval(
+        approval_id=data["approval_id"],
+        session_id=data["session_id"],
+        tool_name=data["tool_name"],
+        description=data["description"],
+        arrived_at=data["arrived_at"],
+        tool_call_id=data.get("tool_call_id"),
     )
 
 
@@ -120,6 +131,27 @@ class Sessions:
         if deny_message is not None:
             body["denyMessage"] = deny_message
         resp = self._client.post(f"/v1/sessions/{session_id}/events", json=body)
+        resp.raise_for_status()
+        return resp.json()
+
+    def approvals(self, session_id: str) -> List[Approval]:
+        """List currently pending tool approvals for a session."""
+        resp = self._client.get(f"/v1/sessions/{session_id}/approvals")
+        resp.raise_for_status()
+        return [_parse_approval(a) for a in resp.json()["approvals"]]
+
+    def resolve_approval(
+        self,
+        session_id: str,
+        approval_id: str,
+        *,
+        decision: str,
+    ) -> Dict[str, Any]:
+        """Resolve a pending approval through the direct managed API."""
+        resp = self._client.post(
+            f"/v1/sessions/{session_id}/approvals/{approval_id}",
+            json={"decision": decision},
+        )
         resp.raise_for_status()
         return resp.json()
 

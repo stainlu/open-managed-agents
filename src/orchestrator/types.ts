@@ -555,6 +555,11 @@ export const PostToolConfirmationSchema = z.object({
   // user.message once the session flips back to idle.
 });
 
+export const ResolveApprovalRequestSchema = z.object({
+  /** "allow" proceeds with execution; "deny" blocks it. */
+  decision: z.enum(["allow", "deny"]),
+});
+
 // Parse with .default() so that a bare `{ content }` is treated as user.message.
 export const PostEventRequestSchema = z.union([
   PostUserMessageSchema,

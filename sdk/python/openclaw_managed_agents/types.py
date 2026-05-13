@@ -96,6 +96,16 @@ class Event:
 
 
 @dataclass
+class Approval:
+    approval_id: str
+    session_id: str
+    tool_name: str
+    description: str
+    arrived_at: int
+    tool_call_id: Optional[str] = None
+
+
+@dataclass
 class Vault:
     vault_id: str
     user_id: str

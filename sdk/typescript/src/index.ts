@@ -13,6 +13,7 @@ export type {
   CreateSessionParams,
   SendParams,
   ConfirmToolParams,
+  ResolveApprovalParams,
 } from "./resources/sessions.js";
 export type {
   AddCredentialParams,
