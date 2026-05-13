@@ -9,10 +9,14 @@ import type { UserStore } from "./store/types.js";
 //      no user_id scoping. Used by operators and deploy scripts.
 //   2. User token (tok_xxx) — looked up in the users table. Scopes all
 //      resource queries to the user's user_id. Expired anonymous tokens → 401.
-//   3. No token → 401 (unless auth is disabled or route is bypassed).
+//   3. Parent token (X-OpenClaw-Parent-Token) — admitted only on the
+//      narrow in-container delegation paths. The orchestrator verifies
+//      and scopes the token after auth because verification needs the
+//      ParentTokenMinter owned by server.ts.
+//   4. No token → 401 (unless auth is disabled or route is bypassed).
 //
 // The resolved identity is injected into Hono's context:
-//   c.get('authRole')  → 'admin' | 'user'
+//   c.get('authRole')  → 'admin' | 'user' | 'parent-token'
 //   c.get('userId')    → string | undefined (undefined for admin)
 
 export type AuthConfig = {
@@ -22,6 +26,14 @@ export type AuthConfig = {
 
 const BYPASS_PATHS = new Set(["/healthz", "/metrics", "/v2", "/"]);
 const AUTH_PATHS = new Set(["/auth/anonymous", "/auth/github", "/auth/github/callback"]);
+
+function isParentTokenRoute(method: string, path: string): boolean {
+  if (method === "POST" && path === "/v1/sessions") return true;
+  if (method === "GET" && /^\/v1\/sessions\/[^/]+$/.test(path)) return true;
+  if (method === "POST" && /^\/v1\/sessions\/[^/]+\/events$/.test(path)) return true;
+  if (method === "GET" && /^\/v1\/sessions\/[^/]+\/events$/.test(path)) return true;
+  return false;
+}
 
 export function createAuthMiddleware(cfg: AuthConfig): MiddlewareHandler {
   const expected = cfg.token?.trim();
@@ -43,6 +55,12 @@ export function createAuthMiddleware(cfg: AuthConfig): MiddlewareHandler {
     const header = c.req.header("authorization") ?? c.req.header("Authorization");
     const queryToken = c.req.query("token");
     if (!header && !queryToken) {
+      const parentToken = c.req.header("x-openclaw-parent-token");
+      if (parentToken && isParentTokenRoute(c.req.method, c.req.path)) {
+        c.set("authRole", "parent-token");
+        await next();
+        return;
+      }
       return c.json(
         { error: "unauthorized", message: "missing Authorization header (expected: Bearer <token>)" },
         401,

@@ -107,6 +107,10 @@ Rules:
   visible managed session tree and returns per-session aggregate results.
 - `DELETE /v1/sessions/:id/session-tree` deletes the visible managed session
   tree child-first and returns per-session aggregate cleanup results.
+- `X-OpenClaw-Parent-Token` is accepted as a scoped runtime credential on the
+  in-container delegation paths only: create a permitted child session, post its
+  first event, poll that child, and read its events. It must not grant general
+  API, parent-session, sibling-session, or operator access.
 - A run against an `idle` session starts immediately.
 - A user event posted while the session is `starting` or `running` is queued by
   default.

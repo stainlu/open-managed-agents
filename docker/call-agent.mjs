@@ -123,6 +123,7 @@ async function main() {
   const token = process.env.OPENCLAW_ORCHESTRATOR_TOKEN;
   if (!url) die("OPENCLAW_ORCHESTRATOR_URL is not set in the container env");
   if (!token) die("OPENCLAW_ORCHESTRATOR_TOKEN is not set in the container env");
+  const parentHeaders = { "x-openclaw-parent-token": token };
 
   // 1. Create the subagent session. The orchestrator verifies the parent
   // token, checks the allowlist, and rejects with 403 if the target is
@@ -132,7 +133,7 @@ async function main() {
     createdSession = await httpJson(
       "POST",
       `${url}/v1/sessions`,
-      { "x-openclaw-parent-token": token },
+      parentHeaders,
       { agentId: target },
     );
   } catch (err) {
@@ -148,7 +149,7 @@ async function main() {
     await httpJson(
       "POST",
       `${url}/v1/sessions/${encodeURIComponent(subagentSessionId)}/events`,
-      {},
+      parentHeaders,
       { content: task },
     );
   } catch (err) {
@@ -167,7 +168,10 @@ async function main() {
     await new Promise((resolve) => setTimeout(resolve, POLL_MS));
     let s;
     try {
-      s = await httpGet(`${url}/v1/sessions/${encodeURIComponent(subagentSessionId)}`);
+      s = await httpGet(
+        `${url}/v1/sessions/${encodeURIComponent(subagentSessionId)}`,
+        parentHeaders,
+      );
     } catch (err) {
       die(`failed to poll subagent ${subagentSessionId}: ${err.message}`);
     }
@@ -191,6 +195,7 @@ async function main() {
   try {
     events = await httpGet(
       `${url}/v1/sessions/${encodeURIComponent(subagentSessionId)}/events`,
+      parentHeaders,
     );
   } catch (err) {
     die(`failed to fetch subagent ${subagentSessionId} events: ${err.message}`);

@@ -15,7 +15,7 @@ import {
   registry as metricsRegistry,
   sessionEventsTotal,
 } from "../metrics.js";
-import type { ParentTokenMinter } from "../runtime/parent-token.js";
+import type { ParentTokenMinter, ParentTokenPayload } from "../runtime/parent-token.js";
 import type {
   AgentStore,
   AuditStore,
@@ -857,20 +857,69 @@ export function buildApp(deps: ServerDeps): Hono {
   app.use("*", observabilityMiddleware);
   app.use("*", createRateLimitMiddleware({ rpm: deps.rateLimitRpm ?? 0 }));
   app.use("*", createAuthMiddleware({ token: deps.apiToken, users: deps.users }));
+  app.use("*", async (c, next) => {
+    if ((c as any).get("authRole") !== "parent-token") {
+      await next();
+      return;
+    }
+    const raw = c.req.header("x-openclaw-parent-token");
+    const payload = raw ? deps.tokenMinter.verify(raw) : undefined;
+    if (!payload) {
+      return c.json(
+        { error: "invalid_parent_token", message: "parent token failed verification" },
+        403,
+      );
+    }
+    (c as any).set("parentTokenPayload", payload);
+    await next();
+  });
 
   function getUserId(c: any): string | null {
     return c.get("authRole") === "admin" ? null : (c.get("userId") ?? null);
   }
 
+  function getParentTokenPayload(c: any): ParentTokenPayload | undefined {
+    const cached = c.get("parentTokenPayload") as ParentTokenPayload | undefined;
+    if (cached) return cached;
+    const raw = c.req.header("x-openclaw-parent-token");
+    return raw ? deps.tokenMinter.verify(raw) : undefined;
+  }
+
+  function isDescendantSession(session: Session, ancestorSessionId: string): boolean {
+    const seen = new Set<string>([session.sessionId]);
+    let parentSessionId = session.parentSessionId;
+    while (parentSessionId) {
+      if (parentSessionId === ancestorSessionId) return true;
+      if (seen.has(parentSessionId)) return false;
+      seen.add(parentSessionId);
+      const parent = deps.sessions.get(parentSessionId);
+      if (!parent) return false;
+      parentSessionId = parent.parentSessionId;
+    }
+    return false;
+  }
+
   function getScopedSession(c: any, sessionId: string): Session | undefined {
     const session = deps.sessions.get(sessionId);
     if (!session) return undefined;
+    if (c.get("authRole") === "parent-token") {
+      const payload = getParentTokenPayload(c);
+      if (!payload) return undefined;
+      return isDescendantSession(session, payload.parentSessionId) ? session : undefined;
+    }
     const userId = getUserId(c);
     if (userId && session.userId !== userId) return undefined;
     return session;
   }
 
   function listScopedSessions(c: any): Session[] {
+    if (c.get("authRole") === "parent-token") {
+      const payload = getParentTokenPayload(c);
+      if (!payload) return [];
+      return deps.sessions
+        .list()
+        .filter((session) => isDescendantSession(session, payload.parentSessionId));
+    }
     const userId = getUserId(c);
     const sessions = deps.sessions.list();
     return userId ? sessions.filter((session) => session.userId === userId) : sessions;
@@ -1612,11 +1661,22 @@ export function buildApp(deps: ServerDeps): Hono {
     const parentTokenHeader = c.req.header("x-openclaw-parent-token");
     let remainingSubagentDepthOverride: number | undefined;
     let parentSessionId: string | undefined;
+    let userIdOverride: string | undefined;
     if (parentTokenHeader) {
-      const payload = deps.tokenMinter.verify(parentTokenHeader);
+      const payload = getParentTokenPayload(c);
       if (!payload) {
         return c.json(
           { error: "invalid_parent_token", message: "parent token failed verification" },
+          403,
+        );
+      }
+      const parent = deps.sessions.get(payload.parentSessionId);
+      if (!parent || parent.agentId !== payload.parentAgentId) {
+        return c.json(
+          {
+            error: "invalid_parent_session",
+            message: "parent token references a missing or mismatched parent session",
+          },
           403,
         );
       }
@@ -1640,6 +1700,7 @@ export function buildApp(deps: ServerDeps): Hono {
       }
       remainingSubagentDepthOverride = payload.remainingDepth - 1;
       parentSessionId = payload.parentSessionId;
+      userIdOverride = parent.userId ?? undefined;
     }
 
     if (parsed.data.environmentId) {
@@ -1655,7 +1716,7 @@ export function buildApp(deps: ServerDeps): Hono {
         remainingSubagentDepth: remainingSubagentDepthOverride,
         vaultId: parsed.data.vaultId,
         parentSessionId,
-        userId: getUserId(c) ?? undefined,
+        userId: userIdOverride ?? getUserId(c) ?? undefined,
       });
       // Proactive warm-up for sessions eligible to claim the generic
       // template warm pool. Sessions with dedicated container config

@@ -247,6 +247,7 @@ function makeApp(opts: {
     ...(opts.routerOverrides ?? {}),
   };
 
+  const tokenMinter = new ParentTokenMinter();
   const deps: ServerDeps = {
     agents: store.agents,
     environments: store.environments,
@@ -282,7 +283,7 @@ function makeApp(opts: {
     }),
     apiToken: "admin-secret",
     users: store.users,
-    tokenMinter: new ParentTokenMinter(),
+    tokenMinter,
     version: "test",
     sessionContainers: store.sessionContainers,
     startTs: Date.now(),
@@ -298,6 +299,7 @@ function makeApp(opts: {
     eventsBySession,
     harnessStateDeletes,
     appendEvent,
+    tokenMinter,
   };
 }
 
@@ -1296,6 +1298,105 @@ describe("session ownership in the HTTP API", () => {
     });
     expect(exhausted.status).toBe(403);
     expect(exhausted.body).toMatchObject({ error: "max_subagent_depth_reached" });
+  });
+
+  it("treats parent tokens as scoped runtime credentials for delegated child sessions", async () => {
+    const { app, store, tokenMinter } = makeApp();
+    const childAgent = createAgent(store);
+    const parentAgent = store.agents.create({
+      model: "moonshot/kimi-k2.5",
+      tools: [],
+      instructions: "",
+      permissionPolicy: { type: "always_allow" },
+      callableAgents: [childAgent.agentId],
+      maxSubagentDepth: 2,
+    });
+    const alice = store.users.create({ tier: "github" });
+    const parent = store.sessions.create({
+      sessionId: "ses_parent",
+      agentId: parentAgent.agentId,
+      remainingSubagentDepth: 2,
+      userId: alice.userId,
+    });
+    const sibling = store.sessions.create({
+      sessionId: "ses_sibling",
+      agentId: childAgent.agentId,
+      userId: alice.userId,
+    });
+    const token = tokenMinter.mint({
+      parentSessionId: parent.sessionId,
+      parentAgentId: parentAgent.agentId,
+      allowlist: [childAgent.agentId],
+      remainingDepth: parent.remainingSubagentDepth,
+    });
+    const runtimeHeaders = { "x-openclaw-parent-token": token };
+
+    const created = await req(app, "/v1/sessions", {
+      method: "POST",
+      headers: runtimeHeaders,
+      body: { agentId: childAgent.agentId },
+    });
+    expect(created.status).toBe(200);
+    const childId = (created.body as { session_id: string }).session_id;
+    expect(store.sessions.get(childId)).toMatchObject({
+      parentSessionId: parent.sessionId,
+      userId: alice.userId,
+      remainingSubagentDepth: 1,
+    });
+
+    const posted = await req(app, `/v1/sessions/${childId}/events`, {
+      method: "POST",
+      headers: runtimeHeaders,
+      body: { content: "delegate this" },
+    });
+    expect(posted.status).toBe(200);
+
+    const child = await req(app, `/v1/sessions/${childId}`, {
+      headers: runtimeHeaders,
+    });
+    expect(child.status).toBe(200);
+    expect(child.body).toMatchObject({ session_id: childId });
+
+    const events = await req(app, `/v1/sessions/${childId}/events`, {
+      headers: runtimeHeaders,
+    });
+    expect(events.status).toBe(200);
+    expect((events.body as { count: number }).count).toBe(2);
+
+    const parentRead = await req(app, `/v1/sessions/${parent.sessionId}`, {
+      headers: runtimeHeaders,
+    });
+    expect(parentRead.status).toBe(404);
+
+    const siblingRead = await req(app, `/v1/sessions/${sibling.sessionId}`, {
+      headers: runtimeHeaders,
+    });
+    expect(siblingRead.status).toBe(404);
+
+    const logs = await req(app, `/v1/sessions/${childId}/logs`, {
+      headers: runtimeHeaders,
+    });
+    expect(logs.status).toBe(401);
+  });
+
+  it("rejects parent-token session creation when the parent session no longer matches", async () => {
+    const { app, store, tokenMinter } = makeApp();
+    const childAgent = createAgent(store);
+    const token = tokenMinter.mint({
+      parentSessionId: "ses_missing",
+      parentAgentId: "agt_missing",
+      allowlist: [childAgent.agentId],
+      remainingDepth: 1,
+    });
+
+    const created = await req(app, "/v1/sessions", {
+      method: "POST",
+      headers: { "x-openclaw-parent-token": token },
+      body: { agentId: childAgent.agentId },
+    });
+
+    expect(created.status).toBe(403);
+    expect(created.body).toMatchObject({ error: "invalid_parent_session" });
   });
 
   it("cancels a managed session tree without touching another user's descendants", async () => {
