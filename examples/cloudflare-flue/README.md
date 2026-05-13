@@ -250,6 +250,29 @@ Verify that the report is complete enough to count as promotion evidence:
 pnpm smoke:verify-report -- ./promotion-report.json
 ```
 
+Live replay/hibernation proof is a separate two-phase check because the useful
+part is what happens between the phases:
+
+```bash
+OMA_CLOUDFLARE_FLUE_BASE_URL=https://oma-cloudflare-flue.<account>.workers.dev \
+OMA_API_TOKEN=replace-with-worker-token \
+pnpm smoke:replay:seed -- --state ./replay-state.json
+```
+
+After the seed phase passes, redeploy/restart the Worker or wait for the
+coordinator Durable Object to hibernate. Then verify the same OMA resources:
+
+```bash
+OMA_CLOUDFLARE_FLUE_BASE_URL=https://oma-cloudflare-flue.<account>.workers.dev \
+OMA_API_TOKEN=replace-with-worker-token \
+pnpm smoke:replay:verify -- --state ./replay-state.json --report ./replay-report.json
+```
+
+The verify phase rereads the seeded session metadata, managed run record, event
+history, run-tree projection, workspace listing, and workspace file content
+through the public OMA API, then deletes the seeded resources unless
+`-- --keep` is passed. For local rehearsal only, pass `-- --allow-local-replay`.
+
 If your model answers too quickly, the promotion smoke will fail at the queue
 or active-abort gate. That is expected: the script is a promotion verifier, not
 a flaky green badge.

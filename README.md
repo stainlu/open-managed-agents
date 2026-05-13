@@ -96,6 +96,9 @@ Working today:
 - The Cloudflare/Flue promotion smoke requires OMA state readback through the
   public API: session metadata, managed run records, event history, run-tree
   projection, workspace listings, and workspace file content.
+- The Cloudflare/Flue example includes a two-phase live replay smoke so a real
+  deployment can seed OMA state before an operator/CI-triggered restart or
+  Durable Object hibernation, then verify the same public state afterward.
 - OMA-managed run ids are assigned when a turn is accepted and preserved
   through session queues, Workflow-backed re-entry, server responses, and Flue
   run/event mapping.

@@ -50,13 +50,16 @@ Implemented:
 - Smoke client for deployed or local Worker targets, including promotion-mode
   public OMA state readback across sessions, runs, events, run trees, and
   workspace files.
+- Two-phase replay smoke that can seed deployed OMA state before a real
+  operator/CI restart or Durable Object hibernation, then verify that same
+  state afterward.
 
 Not yet promoted:
 
 - No checked-in live deployment evidence for the full promotion suite.
 - No CI job that provisions or targets a real Cloudflare deployment.
-- No live restart/hibernation replay proof against Cloudflare's actual Durable
-  Object runtime.
+- No checked-in replay report showing the two-phase smoke passing across
+  Cloudflare's actual Durable Object restart/hibernation boundary.
 - No live proof that queueing and active cancellation remain reliable under
   real Workflow re-entry and provider latency.
 
@@ -125,6 +128,28 @@ real deployed Worker URL:
    - event history;
    - run-tree projection;
    - workspace files.
+
+   Use the two-phase replay smoke so the restart/hibernation happens between
+   seed and verify:
+
+   ```bash
+   OMA_CLOUDFLARE_FLUE_BASE_URL=https://oma-cloudflare-flue.<account>.workers.dev \
+   OMA_API_TOKEN=replace-with-worker-token \
+   pnpm smoke:replay:seed -- --state ./replay-state.json
+   ```
+
+   Then redeploy/restart the Worker or wait for the coordinator Durable Object
+   to hibernate. Verify the same public OMA state afterward:
+
+   ```bash
+   OMA_CLOUDFLARE_FLUE_BASE_URL=https://oma-cloudflare-flue.<account>.workers.dev \
+   OMA_API_TOKEN=replace-with-worker-token \
+   pnpm smoke:replay:verify -- --state ./replay-state.json --report ./replay-report.json
+   ```
+
+   The seed state and verify report are promotion evidence only if the operator
+   or CI records the actual restart/hibernation action between those commands.
+   Running seed and verify back-to-back is only a rehearsal.
 
    Local fake-Durable-Object tests do not count for this gate.
 
