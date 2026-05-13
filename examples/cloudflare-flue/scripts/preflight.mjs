@@ -119,7 +119,11 @@ async function checkSecrets(failures) {
 
   checkRequiredSecret(env, "OMA_WORKFLOW_INTERNAL_TOKEN", failures);
   checkParentTokenSecret(env.OMA_PARENT_TOKEN_SECRET_BASE64, failures);
-  checkOptionalSecret(env, "OMA_API_TOKEN", failures);
+  if (requireSecrets) {
+    checkRequiredSecret(env, "OMA_API_TOKEN", failures);
+  } else {
+    checkOptionalSecret(env, "OMA_API_TOKEN", failures);
+  }
   checkOptionalJsonObject(env, "OMA_PASSTHROUGH_ENV_JSON", "string", failures);
   checkOptionalJsonObject(env, "OMA_FLUE_PROVIDER_CONFIG_JSON", "object", failures);
 

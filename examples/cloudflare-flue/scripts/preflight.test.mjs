@@ -93,6 +93,30 @@ describe("cloudflare-flue preflight", () => {
       stderr: expect.stringContaining("OMA_WORKFLOW_INTERNAL_TOKEN is required"),
     });
   });
+
+  it("requires the public OMA API token during required secret preflight", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "oma-cf-preflight-"));
+    try {
+      const devVarsPath = join(dir, ".dev.vars");
+      await writeFile(devVarsPath, [
+        "OMA_WORKFLOW_INTERNAL_TOKEN=workflow-secret",
+        `OMA_PARENT_TOKEN_SECRET_BASE64=${Buffer.alloc(32, 7).toString("base64")}`,
+      ].join("\n"));
+
+      await expect(runPreflight([
+        scriptPath,
+        "--allow-placeholder-d1",
+        "--skip-docker",
+        "--require-secrets",
+        "--dev-vars-path",
+        devVarsPath,
+      ])).rejects.toMatchObject({
+        stderr: expect.stringContaining("OMA_API_TOKEN is required"),
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 function runPreflight(args) {
