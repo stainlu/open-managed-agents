@@ -93,6 +93,9 @@ Working today:
 - The Cloudflare/Flue example also includes an opt-in, token-gated Flue task
   smoke route that invokes real Flue `session.task()` through the OMA Flue
   adapter and verifies normalized task lineage.
+- The Cloudflare/Flue promotion smoke requires OMA state readback through the
+  public API: session metadata, managed run records, event history, run-tree
+  projection, workspace listings, and workspace file content.
 - OMA-managed run ids are assigned when a turn is accepted and preserved
   through session queues, Workflow-backed re-entry, server responses, and Flue
   run/event mapping.

@@ -15,6 +15,7 @@ const requiredChecks = [
   "prompt_run",
   "event_filter",
   "run_tree",
+  "state_readback",
   "sandbox_exec",
   "flue_task",
   "queued_abort",
@@ -50,6 +51,17 @@ describe("verify-promotion-report", () => {
     await expect(execFileAsync(process.execPath, [scriptPath, reportPath]))
       .rejects.toMatchObject({
         stderr: expect.stringContaining("target must be a deployed https URL"),
+      });
+  });
+
+  it("rejects reports without OMA state readback evidence", async () => {
+    const report = passingReport();
+    report.checks = report.checks.filter((check) => check.name !== "state_readback");
+    const reportPath = await writeReport(report);
+
+    await expect(execFileAsync(process.execPath, [scriptPath, reportPath]))
+      .rejects.toMatchObject({
+        stderr: expect.stringContaining("missing required check state_readback"),
       });
   });
 

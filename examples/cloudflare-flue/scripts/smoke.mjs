@@ -21,6 +21,9 @@ const checkQueueAbort = promotion || boolOpt(opts["check-queue-abort"] ?? proces
 const checkActiveAbort = promotion || boolOpt(opts["check-active-abort"] ?? process.env.OMA_SMOKE_CHECK_ACTIVE_ABORT);
 const checkSandboxExec = promotion || boolOpt(opts["check-sandbox-exec"] ?? process.env.OMA_SMOKE_CHECK_SANDBOX_EXEC);
 const checkFlueTask = promotion || boolOpt(opts["check-flue-task"] ?? process.env.OMA_SMOKE_CHECK_FLUE_TASK);
+const checkStateReadback = promotion || boolOpt(
+  opts["check-state-readback"] ?? process.env.OMA_SMOKE_CHECK_STATE_READBACK,
+);
 const keep = boolOpt(opts.keep ?? process.env.OMA_SMOKE_KEEP);
 const reportPath = opts.report ?? process.env.OMA_SMOKE_REPORT_PATH;
 const smokeId = `oma-smoke-${Date.now().toString(36)}`;
@@ -136,6 +139,13 @@ async function main() {
     recordCheck("run_tree", { session_id: promptRun.session_id, run_id: promptRun.run_id });
     console.log(`ok run tree includes managed run ${promptRun.run_id}`);
 
+    if (checkStateReadback) {
+      await runStateReadbackSmoke(agent.agent_id, promptRun.session_id, promptRun.run_id);
+    } else {
+      recordCheck("state_readback", { status: "skipped", reason: "not requested" });
+      console.log("skip OMA state readback smoke; pass --check-state-readback to require it");
+    }
+
     if (checkSandboxExec) {
       await runSandboxExecSmoke(agent.agent_id, promptRun.session_id);
     } else {
@@ -168,6 +178,64 @@ async function main() {
   } finally {
     await cleanupCreated();
   }
+}
+
+async function runStateReadbackSmoke(agentId, sessionId, runId) {
+  const probePath = "replay/probe.txt";
+  const probeContent = `readback:${smokeId}`;
+  await putFile(agentId, sessionId, probePath, probeContent);
+
+  const session = await request("GET", `/v1/sessions/${encodeURIComponent(sessionId)}`);
+  assert(session.session_id === sessionId, "session readback returned the wrong session_id");
+  assert(session.agent_id === agentId, "session readback returned the wrong agent_id");
+  assert(session.harness_id === "flue", `session readback returned harness ${session.harness_id}`);
+  assert(session.status === "idle", `session readback status is ${session.status}`);
+  assert(typeof session.turns === "number" && session.turns >= 1, "session readback did not preserve turns");
+  assert(typeof session.output === "string" && session.output.includes(smokeId), "session output did not preserve smoke token");
+  assertNoPlatformIds(session, "session readback response");
+
+  const run = await request(
+    "GET",
+    `/v1/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}`,
+  );
+  assert(run.run_id === runId, "run readback returned the wrong run_id");
+  assert(run.session_id === sessionId, "run readback returned the wrong session_id");
+  assert(run.status === "succeeded", `run readback status is ${run.status}`);
+  assertNoPlatformIds(run, "run readback response");
+
+  const events = await request("GET", `/v1/sessions/${encodeURIComponent(sessionId)}/events`);
+  assert(Array.isArray(events.events), "event readback response is missing events[]");
+  assert(events.events.some((event) => event.type === "user.message"), "event readback missing user.message");
+  assert(events.events.some((event) => event.type === "agent.message"), "event readback missing agent.message");
+  assert(events.events.some((event) => event.run_id === runId), `event readback missing run_id ${runId}`);
+  assertNoPlatformIds(events, "event readback response");
+
+  const tree = await request("GET", `/v1/sessions/${encodeURIComponent(sessionId)}/run-tree`);
+  const node = findRunNode(tree.runs, runId);
+  assert(node?.source?.managed_run === true, "run-tree readback lost managed run linkage");
+  assertNoPlatformIds(tree, "run-tree readback response");
+
+  const listing = await request(
+    "GET",
+    `/v1/agents/${encodeURIComponent(agentId)}/files?session_id=${encodeURIComponent(sessionId)}&path=${encodeURIComponent("replay")}`,
+  );
+  assert(Array.isArray(listing.entries), "workspace listing readback is missing entries[]");
+  assert(
+    listing.entries.some((entry) => entry?.type === "file" && entry?.path === probePath),
+    `workspace listing did not include ${probePath}`,
+  );
+  assertNoPlatformIds(listing, "workspace listing readback response");
+
+  const fileText = await getFileText(agentId, sessionId, probePath);
+  assert(fileText === probeContent, `workspace file readback mismatch: ${JSON.stringify(fileText)}`);
+
+  recordCheck("state_readback", {
+    session_id: sessionId,
+    run_id: runId,
+    event_count: events.events.length,
+    workspace_path: probePath,
+  });
+  console.log("ok OMA state readback returned session, run, events, run-tree, and workspace file");
 }
 
 async function runQueueAbortSmoke(agentId) {

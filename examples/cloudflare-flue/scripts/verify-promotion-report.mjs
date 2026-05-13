@@ -9,6 +9,7 @@ const REQUIRED_CHECKS = [
   "prompt_run",
   "event_filter",
   "run_tree",
+  "state_readback",
   "sandbox_exec",
   "flue_task",
   "queued_abort",

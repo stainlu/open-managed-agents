@@ -190,6 +190,21 @@ The basic smoke proves:
 The smoke deletes the agent and sessions it creates. Set `OMA_SMOKE_KEEP=1` or
 pass `--keep` if you want to inspect the resources afterward.
 
+OMA state readback smoke is separate in normal smoke mode, and required by
+promotion mode:
+
+```bash
+OMA_CLOUDFLARE_FLUE_BASE_URL=https://oma-cloudflare-flue.<account>.workers.dev \
+OMA_API_TOKEN=replace-with-worker-token \
+pnpm smoke:state
+```
+
+That check writes a workspace probe and then rereads session metadata, the
+managed run record, event history, run-tree projection, workspace listing, and
+workspace file content through the public OMA API. It proves the deployed
+Cloudflare composition is exposing coherent managed state instead of only
+returning a one-shot prompt response.
+
 Sandbox shell/build smoke is separate because it intentionally executes a
 command inside Cloudflare Sandbox. It requires `OMA_API_TOKEN` to be configured
 on the Worker and supplied by the smoke client:
@@ -218,8 +233,8 @@ pnpm smoke:promotion
 
 `pnpm smoke:promotion` enables promotion mode, which requires
 `OMA_API_TOKEN`, requires a deployed `https://` target, and turns on the
-sandbox, Flue task, queued-abort, and active-abort checks. For local rehearsal
-only, pass `-- --allow-local-promotion`.
+state-readback, sandbox, Flue task, queued-abort, and active-abort checks. For
+local rehearsal only, pass `-- --allow-local-promotion`.
 
 To capture promotion evidence as JSON without leaking the bearer token:
 

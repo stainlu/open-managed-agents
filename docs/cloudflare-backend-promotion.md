@@ -47,7 +47,9 @@ Implemented:
 - Local Durable Object tests for replay, queued turns, active/queued run abort,
   run-tree projection, task/shell lineage, R2 workspace visibility, and absence
   of public platform ids.
-- Smoke client for deployed or local Worker targets.
+- Smoke client for deployed or local Worker targets, including promotion-mode
+  public OMA state readback across sessions, runs, events, run trees, and
+  workspace files.
 
 Not yet promoted:
 
@@ -97,14 +99,21 @@ real deployed Worker URL:
    ```
 
    This runs smoke promotion mode. Promotion mode requires `OMA_API_TOKEN`,
-   rejects localhost by default, and adds sandbox-backed shell/build execution,
-   real Flue task execution, queued-run cancellation, and active-run
-   cancellation. `-- --allow-local-promotion` is only for local rehearsal; it
-   cannot be used as promotion evidence. The JSON report records target, mode,
-   model, smoke id, check names, resource ids, cleanup status, and failure
-   message if any. It does not record the bearer token. The verifier rejects
-   failed reports, localhost targets, skipped required checks, incomplete
-   cleanup, public Cloudflare platform-id keys, and bearer-token-looking values.
+   rejects localhost by default, and adds OMA state readback, sandbox-backed
+   shell/build execution, real Flue task execution, queued-run cancellation,
+   and active-run cancellation. `-- --allow-local-promotion` is only for local
+   rehearsal; it cannot be used as promotion evidence. The JSON report records
+   target, mode, model, smoke id, check names, resource ids, cleanup status,
+   and failure message if any. It does not record the bearer token. The
+   verifier rejects failed reports, localhost targets, skipped required checks,
+   incomplete cleanup, public Cloudflare platform-id keys, and
+   bearer-token-looking values.
+
+   The state-readback check rereads session metadata, managed run records,
+   event history, run-tree projection, workspace listings, and workspace file
+   content through the public OMA API after the prompt run succeeds. It does
+   not replace the hibernation/restart gate below; it prevents a deployed
+   smoke from counting when only the one-shot prompt response works.
 
 4. Live replay proof.
 
