@@ -135,7 +135,12 @@ jobs:
         with:
           node-version: "22"
           cache: pnpm
-          cache-dependency-path: examples/cloudflare-flue/pnpm-lock.yaml
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            examples/cloudflare-flue/pnpm-lock.yaml
+
+      - name: Install root dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Install Cloudflare example dependencies
         working-directory: examples/cloudflare-flue
