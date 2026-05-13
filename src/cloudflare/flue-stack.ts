@@ -120,6 +120,7 @@ export function createCloudflareFlueStack(
     workspace,
     runtime,
     opts.store.queue,
+    opts.store.approvals,
     opts.store.vaults,
     routerConfig,
   );

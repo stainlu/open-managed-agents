@@ -507,6 +507,7 @@ async function main(): Promise<void> {
     workspace,
     pool,
     store.queue,
+    store.approvals,
     store.vaults,
     routerCfg,
   );

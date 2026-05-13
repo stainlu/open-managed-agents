@@ -94,6 +94,7 @@ function makeRouter(opts: {
     workspace,
     pool,
     queue,
+    store.approvals,
     store.vaults,
     cfg,
   );
@@ -2670,6 +2671,13 @@ describe("AgentRouter.cancel — pre-abort checks", () => {
       content: "pending work",
       enqueuedAt: Date.now(),
     });
+    store.approvals.upsert({
+      approvalId: "ap_pending",
+      sessionId: session.sessionId,
+      toolName: "write",
+      description: "pending approval",
+      arrivedAt: Date.now(),
+    });
 
     const cancelled = await router.cancel(session.sessionId);
     expect(cancelled.status).toBe("idle");
@@ -2678,6 +2686,7 @@ describe("AgentRouter.cancel — pre-abort checks", () => {
     // keeps our abort idempotent across OpenClaw restarts.
     expect(abortedKey).toBe(`agent:main:${session.sessionId}`);
     expect(queue.shift(session.sessionId)).toBeUndefined();
+    expect(router.getPendingApprovals(session.sessionId)).toEqual([]);
   });
 });
 
@@ -2746,14 +2755,14 @@ describe("AgentRouter approval flow", () => {
       },
     });
     const sessionId = createApprovalSession(router, store);
-    (router as any).pendingApprovals.set(sessionId, [{
+    store.approvals.upsert({
       approvalId: "ap_1",
       sessionId,
       toolName: "write",
       toolCallId: "call_1",
       description: "write file?",
       arrivedAt: 1,
-    }]);
+    });
 
     await expect(router.confirmTool(sessionId, "ap_1", "allow")).rejects.toMatchObject({
       name: "RouterError",
@@ -2854,14 +2863,14 @@ describe("AgentRouter approval flow", () => {
     });
     const session = router.createSession(agent.agentId);
     (agent as { harnessId: string }).harnessId = "missing";
-    (router as any).pendingApprovals.set(session.sessionId, [{
+    store.approvals.upsert({
       approvalId: "ap_1",
       sessionId: session.sessionId,
       toolName: "write",
       toolCallId: "call_1",
       description: "write file?",
       arrivedAt: 1,
-    }]);
+    });
 
     await router.confirmTool(session.sessionId, "ap_1", "allow");
 
@@ -2947,14 +2956,14 @@ describe("AgentRouter approval flow", () => {
       harnessId: "native-test",
     });
     const session = router.createSession(agent.agentId);
-    (router as any).pendingApprovals.set(session.sessionId, [{
+    store.approvals.upsert({
       approvalId: "ap_native",
       sessionId: session.sessionId,
       toolName: "mcp__docs__write",
       toolCallId: "call_native",
       description: "write docs?",
       arrivedAt: 1,
-    }]);
+    });
 
     await router.confirmTool(session.sessionId, "ap_native", "allow");
 

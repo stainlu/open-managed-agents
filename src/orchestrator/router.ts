@@ -40,6 +40,8 @@ import type {
   ManagedRun,
   ManagedRunStatus,
   ManagedRunStore,
+  PendingApprovalRecord,
+  PendingApprovalStore,
   QueuedEvent,
   QueueStore,
   RunUsage,
@@ -149,14 +151,7 @@ export type StreamingRunHandle = {
   finalize(outcome: StreamOutcome): Promise<void>;
 };
 
-export type PendingApproval = {
-  approvalId: string;
-  sessionId: string;
-  toolName: string;
-  toolCallId?: string;
-  description: string;
-  arrivedAt: number;
-};
+export type PendingApproval = PendingApprovalRecord;
 
 type HarnessControlSubscription = {
   controlClient: unknown;
@@ -175,11 +170,6 @@ const DEFAULT_TURN_ADVANCE_WAIT_MS = 2_000;
 const TURN_ADVANCE_POLL_MS = 100;
 
 export class AgentRouter {
-  /** Pending tool-confirmation approvals per session. Populated by WS
-   *  event listeners when the container's confirm-tools plugin fires
-   *  `plugin.approval.requested`. Read by the SSE handler to emit
-   *  `agent.tool_confirmation_request` events. Cleared on confirm/cancel/delete. */
-  private readonly pendingApprovals = new Map<string, PendingApproval[]>();
   /** One plugin-approval WS subscription pair per active session. */
   private readonly approvalSubscriptions = new Map<
     string,
@@ -203,6 +193,7 @@ export class AgentRouter {
     private readonly workspace: ManagedWorkspace,
     private readonly pool: ManagedSessionRuntime,
     private readonly queue: QueueStore,
+    private readonly approvals: PendingApprovalStore,
     private readonly vaults: VaultStore,
     private readonly cfg: RouterConfig,
   ) {
@@ -211,7 +202,7 @@ export class AgentRouter {
 
   /** Return any pending approval requests for a session (non-destructive). */
   getPendingApprovals(sessionId: string): PendingApproval[] {
-    return this.pendingApprovals.get(sessionId) ?? [];
+    return this.approvals.listBySession(sessionId);
   }
 
   listRuns(sessionId: string): ManagedRun[] {
@@ -373,31 +364,19 @@ export class AgentRouter {
   }
 
   private replacePendingApprovals(sessionId: string, approvals: PendingApproval[]): void {
-    if (approvals.length === 0) {
-      this.pendingApprovals.delete(sessionId);
-      return;
-    }
-    const deduped = new Map<string, PendingApproval>();
-    for (const approval of approvals) {
-      deduped.set(approval.approvalId, approval);
-    }
-    this.pendingApprovals.set(sessionId, [...deduped.values()]);
+    this.approvals.replaceForSession(sessionId, approvals);
   }
 
   private upsertPendingApproval(sessionId: string, approval: PendingApproval): void {
-    const pending = this.pendingApprovals.get(sessionId) ?? [];
-    const idx = pending.findIndex((item) => item.approvalId === approval.approvalId);
-    if (idx >= 0) pending[idx] = approval;
-    else pending.push(approval);
-    this.pendingApprovals.set(sessionId, pending);
+    this.approvals.upsert({ ...approval, sessionId });
   }
 
   private removePendingApproval(sessionId: string, approvalId: string): void {
-    const pending = this.pendingApprovals.get(sessionId);
-    if (!pending) return;
-    const next = pending.filter((item) => item.approvalId !== approvalId);
-    if (next.length === 0) this.pendingApprovals.delete(sessionId);
-    else this.pendingApprovals.set(sessionId, next);
+    this.approvals.delete(sessionId, approvalId);
+  }
+
+  private clearPendingApprovals(sessionId: string): void {
+    this.approvals.deleteBySession(sessionId);
   }
 
   private clearApprovalSubscriptions(sessionId: string): void {
@@ -659,7 +638,7 @@ export class AgentRouter {
     this.cancelledDuringAcquire.delete(sessionId);
     this.queue.clear(sessionId);
     this.cancelRunsForSession(sessionId, "session runtime disposed");
-    this.pendingApprovals.delete(sessionId);
+    this.clearPendingApprovals(sessionId);
     this.clearApprovalSubscriptions(sessionId);
     await this.pool.evictSession(sessionId);
   }
@@ -1104,7 +1083,7 @@ export class AgentRouter {
               nativeMetadata: completion.native.nativeMetadata,
             });
           }
-          router.pendingApprovals.delete(args.sessionId);
+          router.clearPendingApprovals(args.sessionId);
           router.sessions.endRunSuccess(args.sessionId, { tokensIn, tokensOut, costUsd });
           router.runs.updateStatus(runId, "succeeded");
           return;
@@ -1114,7 +1093,7 @@ export class AgentRouter {
           { session_id: args.sessionId, error: outcome.error },
           "streaming run failed",
         );
-        router.pendingApprovals.delete(args.sessionId);
+        router.clearPendingApprovals(args.sessionId);
         router.clearApprovalSubscriptions(args.sessionId);
         await router.pool.evictSession(args.sessionId).catch(() => {
           /* best-effort */
@@ -1130,7 +1109,7 @@ export class AgentRouter {
       // WS patch / initial HTTP may have left it in a bad state.
       const msg = err instanceof Error ? err.message : String(err);
       sessionRunFailuresTotal.inc();
-      this.pendingApprovals.delete(args.sessionId);
+      this.clearPendingApprovals(args.sessionId);
       this.clearApprovalSubscriptions(args.sessionId);
       await this.pool.evictSession(args.sessionId).catch(() => {
         /* best-effort */
@@ -1455,7 +1434,7 @@ export class AgentRouter {
       this.cancelledDuringAcquire.add(sessionId);
       this.queue.clear(sessionId);
       this.cancelRunsForSession(sessionId, opts.reason ?? "session cancelled during acquire");
-      this.pendingApprovals.delete(sessionId);
+      this.clearPendingApprovals(sessionId);
       return this.sessions.endRunCancelled(sessionId) ?? session;
     }
     try {
@@ -1465,7 +1444,7 @@ export class AgentRouter {
     }
     this.queue.clear(sessionId);
     this.cancelRunsForSession(sessionId, opts.reason ?? "session cancelled");
-    this.pendingApprovals.delete(sessionId);
+    this.clearPendingApprovals(sessionId);
     return this.sessions.endRunCancelled(sessionId) ?? session;
   }
 
@@ -1786,7 +1765,7 @@ export class AgentRouter {
       return;
     }
 
-    this.pendingApprovals.delete(sessionId);
+    this.clearPendingApprovals(sessionId);
     this.sessions.endRunSuccess(sessionId, usage);
     this.runs.updateStatus(runId, "succeeded");
   }
@@ -1902,7 +1881,7 @@ export class AgentRouter {
         tokensOut,
         latest?.costUsd,
       );
-      this.pendingApprovals.delete(sessionId);
+      this.clearPendingApprovals(sessionId);
       this.sessions.endRunSuccess(sessionId, { tokensIn, tokensOut, costUsd });
       const activeRun = this.activeRunForSession(sessionId);
       if (activeRun) {
@@ -1953,7 +1932,7 @@ export class AgentRouter {
         });
       }
     }
-    this.pendingApprovals.delete(sessionId);
+    this.clearPendingApprovals(sessionId);
     this.clearApprovalSubscriptions(sessionId);
     await this.pool.evictSession(sessionId).catch(() => {
       /* best-effort */
@@ -2112,7 +2091,7 @@ export class AgentRouter {
         });
       }
     }
-    this.pendingApprovals.delete(sessionId);
+    this.clearPendingApprovals(sessionId);
     this.clearApprovalSubscriptions(sessionId);
     if (dropped > 0) {
       log.warn(

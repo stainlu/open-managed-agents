@@ -402,6 +402,36 @@ export interface UserStore {
   updateGithub(userId: string, args: { githubId: number; githubUsername: string; avatarUrl: string }): User | undefined;
 }
 
+/**
+ * Durable record of an in-flight tool approval request.
+ *
+ * The harness owns the mechanics of pausing/resuming its tool call. The
+ * managed layer owns the public API surface and recovery-visible state: if an
+ * approval was observed and emitted to clients, it should not disappear just
+ * because the orchestrator process restarted.
+ */
+export type PendingApprovalRecord = {
+  approvalId: string;
+  sessionId: string;
+  toolName: string;
+  toolCallId?: string;
+  description: string;
+  arrivedAt: number;
+};
+
+export interface PendingApprovalStore {
+  /** Return the currently pending approvals for a session. */
+  listBySession(sessionId: string): PendingApprovalRecord[];
+  /** Replace a session's observed approvals with a fresh harness snapshot. */
+  replaceForSession(sessionId: string, approvals: PendingApprovalRecord[]): void;
+  /** Insert or update a single approval request. */
+  upsert(approval: PendingApprovalRecord): void;
+  /** Remove a resolved approval request. Idempotent. */
+  delete(sessionId: string, approvalId: string): void;
+  /** Remove every pending approval for a session. Returns the number removed. */
+  deleteBySession(sessionId: string): number;
+}
+
 export interface Store {
   readonly agents: AgentStore;
   readonly environments: EnvironmentStore;
@@ -411,6 +441,8 @@ export interface Store {
   readonly vaults: VaultStore;
   /** Queue backend — durable on SQLite, in-memory on memory. */
   readonly queue: QueueStore;
+  /** Pending tool approvals — durable on SQLite, in-memory on memory. */
+  readonly approvals: PendingApprovalStore;
   readonly audit: AuditStore;
   /** Persistent session ↔ container mapping for restart-safe reattach. */
   readonly sessionContainers: SessionContainerStore;

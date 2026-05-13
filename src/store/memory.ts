@@ -21,6 +21,8 @@ import type {
   ManagedRun,
   ManagedRunStatus,
   ManagedRunStore,
+  PendingApprovalRecord,
+  PendingApprovalStore,
   QueuedEvent,
   QueueStore,
   RunUsage,
@@ -490,6 +492,49 @@ class InMemoryQueueStore implements QueueStore {
   }
 }
 
+// ---------- Pending approvals ----------
+
+class InMemoryPendingApprovalStore implements PendingApprovalStore {
+  private readonly bySession = new Map<string, Map<string, PendingApprovalRecord>>();
+
+  listBySession(sessionId: string): PendingApprovalRecord[] {
+    return Array.from(this.bySession.get(sessionId)?.values() ?? [])
+      .sort((a, b) => a.arrivedAt - b.arrivedAt || a.approvalId.localeCompare(b.approvalId))
+      .map((approval) => ({ ...approval }));
+  }
+
+  replaceForSession(sessionId: string, approvals: PendingApprovalRecord[]): void {
+    if (approvals.length === 0) {
+      this.bySession.delete(sessionId);
+      return;
+    }
+    const next = new Map<string, PendingApprovalRecord>();
+    for (const approval of approvals) {
+      next.set(approval.approvalId, { ...approval, sessionId });
+    }
+    this.bySession.set(sessionId, next);
+  }
+
+  upsert(approval: PendingApprovalRecord): void {
+    const current = this.bySession.get(approval.sessionId) ?? new Map<string, PendingApprovalRecord>();
+    current.set(approval.approvalId, { ...approval });
+    this.bySession.set(approval.sessionId, current);
+  }
+
+  delete(sessionId: string, approvalId: string): void {
+    const current = this.bySession.get(sessionId);
+    if (!current) return;
+    current.delete(approvalId);
+    if (current.size === 0) this.bySession.delete(sessionId);
+  }
+
+  deleteBySession(sessionId: string): number {
+    const count = this.bySession.get(sessionId)?.size ?? 0;
+    this.bySession.delete(sessionId);
+    return count;
+  }
+}
+
 // ---------- Audit ----------
 
 class InMemoryAuditStore implements AuditStore {
@@ -745,6 +790,7 @@ export class InMemoryStore implements Store {
   readonly audit: AuditStore;
   readonly vaults: VaultStore;
   readonly sessionContainers: SessionContainerStore;
+  readonly approvals: PendingApprovalStore;
   readonly users: UserStore;
 
   constructor() {
@@ -757,6 +803,7 @@ export class InMemoryStore implements Store {
     this.audit = new InMemoryAuditStore();
     this.vaults = new InMemoryVaultStore();
     this.sessionContainers = new InMemorySessionContainerStore();
+    this.approvals = new InMemoryPendingApprovalStore();
     this.users = new InMemoryUserStore();
   }
 

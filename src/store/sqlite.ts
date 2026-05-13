@@ -28,6 +28,8 @@ import type {
   ManagedRun,
   ManagedRunStatus,
   ManagedRunStore,
+  PendingApprovalRecord,
+  PendingApprovalStore,
   QueuedEvent,
   QueueStore,
   RunUsage,
@@ -151,6 +153,15 @@ type ManagedRunRow = {
   completed_at: number | null;
 };
 
+type PendingApprovalRow = {
+  approval_id: string;
+  session_id: string;
+  tool_name: string;
+  tool_call_id: string | null;
+  description: string;
+  arrived_at: number;
+};
+
 /** True when at least one channel is enabled on the agent — used to
  *  decide whether to persist a row in `channels_json` or leave it NULL
  *  (NULL = "all channels disabled", the default agent shape). */
@@ -239,6 +250,17 @@ function rowToManagedRun(r: ManagedRunRow): ManagedRun {
     createdAt: r.created_at,
     startedAt: r.started_at,
     completedAt: r.completed_at,
+  };
+}
+
+function rowToPendingApproval(r: PendingApprovalRow): PendingApprovalRecord {
+  return {
+    approvalId: r.approval_id,
+    sessionId: r.session_id,
+    toolName: r.tool_name,
+    toolCallId: r.tool_call_id ?? undefined,
+    description: r.description,
+    arrivedAt: r.arrived_at,
   };
 }
 
@@ -427,6 +449,22 @@ CREATE INDEX IF NOT EXISTS idx_managed_runs_session_created
   ON managed_runs(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_managed_runs_status
   ON managed_runs(status);
+
+-- In-flight tool approvals observed by the managed layer. The harness still
+-- owns the live pause/resume mechanics, but the orchestrator must not lose the
+-- public approval state on process restart.
+CREATE TABLE IF NOT EXISTS pending_approvals (
+  session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+  approval_id TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  tool_call_id TEXT,
+  description TEXT NOT NULL,
+  arrived_at INTEGER NOT NULL,
+  PRIMARY KEY (session_id, approval_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pending_approvals_session
+  ON pending_approvals(session_id, arrived_at);
 
 -- Multi-tenant user accounts. Anonymous users auto-expire after 24h;
 -- GitHub-authenticated users persist. api_token is the bearer token
@@ -1677,6 +1715,85 @@ class SqliteQueueStore implements QueueStore {
   }
 }
 
+// ---------- Pending approvals ----------
+
+class SqlitePendingApprovalStore implements PendingApprovalStore {
+  private readonly listBySessionStmt: SqlStatementLike;
+  private readonly upsertStmt: SqlStatementLike;
+  private readonly deleteStmt: SqlStatementLike;
+  private readonly deleteBySessionStmt: SqlStatementLike;
+  private readonly replaceForSessionTx: (sessionId: string, approvals: PendingApprovalRecord[]) => void;
+
+  constructor(db: SyncSqlDatabaseLike) {
+    this.listBySessionStmt = db.prepare(
+      `SELECT approval_id, session_id, tool_name, tool_call_id, description, arrived_at
+       FROM pending_approvals
+       WHERE session_id = ?
+       ORDER BY arrived_at ASC, approval_id ASC`,
+    );
+    this.upsertStmt = db.prepare(
+      `INSERT INTO pending_approvals (
+         approval_id, session_id, tool_name, tool_call_id, description, arrived_at
+       ) VALUES (
+         @approval_id, @session_id, @tool_name, @tool_call_id, @description, @arrived_at
+       )
+       ON CONFLICT(session_id, approval_id) DO UPDATE SET
+         tool_name = excluded.tool_name,
+         tool_call_id = excluded.tool_call_id,
+         description = excluded.description,
+         arrived_at = excluded.arrived_at`,
+    );
+    this.deleteStmt = db.prepare(
+      `DELETE FROM pending_approvals WHERE session_id = ? AND approval_id = ?`,
+    );
+    this.deleteBySessionStmt = db.prepare(
+      `DELETE FROM pending_approvals WHERE session_id = ?`,
+    );
+    this.replaceForSessionTx = db.transaction(
+      (...args: unknown[]) => {
+        const [sessionId, approvals] = args as [string, PendingApprovalRecord[]];
+        this.deleteBySessionStmt.run(sessionId);
+        const deduped = new Map<string, PendingApprovalRecord>();
+        for (const approval of approvals) {
+          deduped.set(approval.approvalId, { ...approval, sessionId });
+        }
+        for (const approval of deduped.values()) {
+          this.upsert(approval);
+        }
+      },
+    ) as (sessionId: string, approvals: PendingApprovalRecord[]) => void;
+  }
+
+  listBySession(sessionId: string): PendingApprovalRecord[] {
+    const rows = this.listBySessionStmt.all(sessionId) as PendingApprovalRow[];
+    return rows.map(rowToPendingApproval);
+  }
+
+  replaceForSession(sessionId: string, approvals: PendingApprovalRecord[]): void {
+    this.replaceForSessionTx(sessionId, approvals);
+  }
+
+  upsert(approval: PendingApprovalRecord): void {
+    this.upsertStmt.run({
+      approval_id: approval.approvalId,
+      session_id: approval.sessionId,
+      tool_name: approval.toolName,
+      tool_call_id: approval.toolCallId ?? null,
+      description: approval.description,
+      arrived_at: approval.arrivedAt,
+    });
+  }
+
+  delete(sessionId: string, approvalId: string): void {
+    this.deleteStmt.run(sessionId, approvalId);
+  }
+
+  deleteBySession(sessionId: string): number {
+    const info = this.deleteBySessionStmt.run(sessionId);
+    return info.changes;
+  }
+}
+
 // ---------- Session-container mapping store ----------
 
 class SqliteSessionContainerStore implements SessionContainerStore {
@@ -2033,6 +2150,7 @@ export class SqliteStore implements Store {
   readonly audit: AuditStore;
   readonly vaults: VaultStore;
   readonly sessionContainers: SessionContainerStore;
+  readonly approvals: PendingApprovalStore;
   readonly users: UserStore;
   /** Number of vault credentials re-encrypted during boot migration.
    *  Surfaced via src/index.ts startup log when > 0. */
@@ -2262,6 +2380,7 @@ export class SqliteStore implements Store {
     this.runs = new SqliteManagedRunStore(this.db);
     this.secrets = new SqliteSecretStore(this.db);
     this.queue = new SqliteQueueStore(this.db);
+    this.approvals = new SqlitePendingApprovalStore(this.db);
     this.audit = new SqliteAuditStore(this.db);
     this.sessionContainers = new SqliteSessionContainerStore(this.db);
     this.users = new SqliteUserStore(this.db);
