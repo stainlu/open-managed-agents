@@ -835,6 +835,7 @@ function asDesignEvent(e, anchorTs) {
       ...base,
       actor: 'orchestrator',
       approvalId: e.approval_id,
+      toolName: e.tool_name,
       toolCallId: e.tool_call_id,
       toolUseId: e.approval_id || e.tool_call_id,
       policy: 'always_ask',
@@ -856,6 +857,19 @@ function asDesignEvent(e, anchorTs) {
   }
   if (e.type.startsWith('session.')) return { ...base, actor: 'orchestrator' };
   return { ...base, actor: 'system', text: contentStr };
+}
+
+function approvalAsEvent(a) {
+  return {
+    event_id: a.approval_id,
+    session_id: a.session_id,
+    type: 'agent.tool_confirmation_request',
+    content: a.description,
+    created_at: a.arrived_at,
+    tool_name: a.tool_name,
+    tool_call_id: a.tool_call_id,
+    approval_id: a.approval_id,
+  };
 }
 
 const AGENTS = [];
@@ -1047,13 +1061,24 @@ async function pumpEventsPoll() {
     if (!res.ok) return;
     const body = await res.json();
     const list = body.events || [];
-    // Empty list = no events yet OR transient JSONL read failure.
+    let approvals = [];
+    try {
+      const approvalRes = await fetch('/v1/sessions/' + encodeURIComponent(sid) + '/approvals');
+      if (approvalRes.ok) {
+        const approvalBody = await approvalRes.json();
+        approvals = Array.isArray(approvalBody.approvals) ? approvalBody.approvals.map(approvalAsEvent) : [];
+      }
+    } catch {}
+    const combined = [...list, ...approvals]
+      .filter((e) => typeof e.created_at === 'number')
+      .sort((a, b) => a.created_at - b.created_at);
+    // Empty list = no events/approvals yet OR transient JSONL read failure.
     // Keep existing events (stale is better than empty). Only an
     // explicit 404 (session deleted, handled above) clears them.
-    if (list.length === 0) return;
-    const anchor = list[0].created_at;
+    if (combined.length === 0) return;
+    const anchor = combined[0].created_at;
     LIVE_EVENT_ANCHOR = anchor;
-    const next = list.map((e) => asDesignEvent(e, anchor));
+    const next = combined.map((e) => asDesignEvent(e, anchor));
     // Replace with the full server snapshot — the HTTP endpoint
     // always returns the complete ordered event list.
     EVENTS.length = 0;
@@ -1062,7 +1087,7 @@ async function pumpEventsPoll() {
       if (e.id) SEEN_EVENT_IDS.add(e.id);
       EVENTS.push(e);
     }
-    if (_onUserMessageEvent && list.some(e => e.type === 'user.message')) {
+    if (_onUserMessageEvent && combined.some(e => e.type === 'user.message')) {
       _onUserMessageEvent(LIVE_SELECTED_SESSION, null);
     }
     LIVE_BUS.notify();
@@ -2499,9 +2524,9 @@ function SessionDetail({ sessionId, sessionState, streamLen }) {
   const rawStatus = sessionState || s.status;
   // Client-side "awaiting" derivation. The backend only exposes
   // idle | running | failed — there's no awaiting status in the
-  // store. But the SSE stream emits agent.tool_confirmation_request
-  // frames while the confirm-tools plugin holds a pending approval,
-  // and we clear the local approval state once the user resolves.
+  // store. The SSE stream emits agent.tool_confirmation_request frames
+  // while the confirm-tools plugin holds a pending approval; the poll
+  // fallback synthesizes the same row from GET /approvals.
   // Compare against the LATEST request's toolUseId so a second
   // approval in the same session (different tool call) re-triggers
   // awaiting even though the earlier approval was resolved.
@@ -4131,22 +4156,21 @@ function AppProvider({ children }) {
     // the session goes awaiting again without needing a manual reset.
     const pendingReq = EVENTS.slice().reverse().find((e) => e.type === 'agent.tool_confirmation_request');
     if (!pendingReq) {
-      pushToast({ method: 'POST', path: `/v1/sessions/${sid}/events`, status: 0, ms: 0, label: 'no pending approval' });
+      pushToast({ method: 'POST', path: `/v1/sessions/${sid}/approvals`, status: 0, ms: 0, label: 'no pending approval' });
       return;
     }
     setApproval({ status: 'submitting', at: Date.now(), sessionId: sid, toolUseId: pendingReq.toolUseId });
     const startedAt = Date.now();
+    const approvalId = pendingReq.approvalId || pendingReq.toolUseId;
     const tid = pushToast({
-      method: 'POST', path: `/v1/sessions/${sid}/events`,
-      label: `user.tool_confirmation · ${decision}`, status: null, ms: null, pending: true,
+      method: 'POST', path: `/v1/sessions/${sid}/approvals/${approvalId}`,
+      label: `approval.resolve · ${decision}`, status: null, ms: null, pending: true,
     });
     try {
-      const res = await fetch(`/v1/sessions/${encodeURIComponent(sid)}/events`, {
+      const res = await fetch(`/v1/sessions/${encodeURIComponent(sid)}/approvals/${encodeURIComponent(approvalId)}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          type: 'user.tool_confirmation',
-          toolUseId: pendingReq.toolUseId,
-          result: decision === 'approved' ? 'allow' : 'deny',
+          decision: decision === 'approved' ? 'allow' : 'deny',
         }),
       });
       const ms = Date.now() - startedAt;
@@ -4995,7 +5019,7 @@ function ApprovalRow({ e }) {
           </label>
         </div>
         <Mono s={10} c="var(--ink-3)" style={{ marginTop: 8, display: 'block' }}>
-          POST /v1/sessions/{LIVE_SELECTED_SESSION || '—'}/events · user.tool_confirmation · toolUseId {e.toolUseId}
+          POST /v1/sessions/{LIVE_SELECTED_SESSION || '—'}/approvals/{e.approvalId || e.toolUseId} · decision
         </Mono>
       </div>
     </div>
