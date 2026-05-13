@@ -78,6 +78,57 @@ export interface AuditEventList {
   count: number;
 }
 
+export interface OpenAIChatMessage {
+  role: string;
+  content?: unknown;
+  [key: string]: unknown;
+}
+
+export interface OpenAIChatCompletionRequest {
+  model?: string;
+  messages: OpenAIChatMessage[];
+  stream?: boolean;
+  user?: string;
+  [key: string]: unknown;
+}
+
+export interface OpenAIChatCompletionUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+}
+
+export interface OpenAIChatCompletionChoice {
+  index: number;
+  message: OpenAIChatMessage;
+  finish_reason: string;
+}
+
+export interface OpenAIChatCompletion {
+  id: string;
+  object: "chat.completion";
+  created: number;
+  model: string;
+  choices: OpenAIChatCompletionChoice[];
+  usage: OpenAIChatCompletionUsage;
+}
+
+export interface OpenAIChatCompletionChunkChoice {
+  index: number;
+  delta?: OpenAIChatMessage;
+  finish_reason?: string | null;
+  [key: string]: unknown;
+}
+
+export interface OpenAIChatCompletionChunk {
+  id?: string;
+  object?: string;
+  created?: number;
+  model?: string;
+  choices?: OpenAIChatCompletionChunkChoice[];
+  [key: string]: unknown;
+}
+
 export interface Quota {
   maxCostUsdPerSession?: number;
   maxTokensPerSession?: number;

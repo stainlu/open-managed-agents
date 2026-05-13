@@ -22,6 +22,7 @@ from typing import Optional
 
 from .resources.agents import Agents
 from .resources.audit import Audit
+from .resources.chat import Chat
 from .resources.environments import Environments
 from .resources.harnesses import Harnesses
 from .resources.sessions import Sessions
@@ -95,6 +96,7 @@ class OpenClawClient:
         )
         self.agents = Agents(self._client)
         self.audit = Audit(self._client)
+        self.chat = Chat(self._client)
         self.environments = Environments(self._client)
         self.harnesses = Harnesses(self._client)
         self.sessions = Sessions(self._client)

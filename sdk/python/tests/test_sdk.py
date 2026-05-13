@@ -188,6 +188,64 @@ def test_audit_resource_queries_events() -> None:
         assert events[0].target == "agt_123"
 
 
+def test_chat_completions_resource_create_and_stream() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/v1/chat/completions"
+        assert request.headers["x-openclaw-agent-id"] == "agt_123"
+        body = _json(request)
+        if body.get("stream") is True:
+            assert body["messages"] == [{"role": "user", "content": "hi"}]
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=(
+                    'data: {"id":"chunk_1","choices":[{"index":0,"delta":{"content":"he"}}]}\n\n'
+                    'data: {"id":"chunk_2","choices":[{"index":0,"delta":{"content":"llo"}}]}\n\n'
+                    "data: [DONE]\n\n"
+                ).encode("utf-8"),
+            )
+        assert request.headers["x-openclaw-session-key"] == "thread_123"
+        assert body == {
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": False,
+            "model": "ignored-by-oma",
+            "user": "thread_from_body",
+            "temperature": 0.2,
+        }
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl_evt_123",
+                "object": "chat.completion",
+                "created": 123,
+                "model": "openai/gpt-5.5",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "hello"},
+                    "finish_reason": "stop",
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+            },
+        )
+
+    with _client(handler) as client:
+        result = client.chat.completions.create(
+            agent_id="agt_123",
+            session_key="thread_123",
+            model="ignored-by-oma",
+            messages=[{"role": "user", "content": "hi"}],
+            user="thread_from_body",
+            temperature=0.2,
+        )
+        assert result["choices"][0]["message"]["content"] == "hello"
+        chunks = list(client.chat.completions.stream(
+            agent_id="agt_123",
+            messages=[{"role": "user", "content": "hi"}],
+        ))
+        assert [chunk["id"] for chunk in chunks] == ["chunk_1", "chunk_2"]
+
+
 def test_harnesses_resource_exposes_capabilities() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"

@@ -45,13 +45,18 @@ export class HttpClient {
     return `${this.baseUrl}${path}`;
   }
 
-  async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    extraHeaders: Record<string, string> = {},
+  ): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
       const resp = await this.fetchImpl(this.url(path), {
         method,
-        headers: this.headers,
+        headers: { ...this.headers, ...extraHeaders },
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: controller.signal,
       });
@@ -146,18 +151,27 @@ export class HttpClient {
     }
   }
 
-  async streamRequest(path: string): Promise<Response> {
+  async streamRequest(
+    path: string,
+    opts: {
+      method?: string;
+      body?: unknown;
+      headers?: Record<string, string>;
+    } = {},
+  ): Promise<Response> {
     const controller = new AbortController();
     // Deliberately no timeout: streaming connections live for the session.
     // The caller cancels via the returned AsyncIterable.
     const headers: Record<string, string> = {
       ...this.headers,
       accept: "text/event-stream",
+      ...(opts.headers ?? {}),
     };
-    delete headers["content-type"];
+    if (opts.body === undefined) delete headers["content-type"];
     const resp = await this.fetchImpl(this.url(path), {
-      method: "GET",
+      method: opts.method ?? "GET",
       headers,
+      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
       signal: controller.signal,
     });
     if (!resp.ok) {
