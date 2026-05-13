@@ -1,0 +1,136 @@
+name: cloudflare promotion
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: "Deployed OMA Cloudflare/Flue Worker URL"
+        required: true
+        type: string
+      model:
+        description: "Flue model used for live smoke runs"
+        required: false
+        default: "cloudflare/@cf/openai/gpt-oss-20b"
+        type: string
+      run_replay:
+        description: "Seed and verify replay evidence"
+        required: false
+        default: true
+        type: boolean
+      redeploy_for_replay:
+        description: "Run wrangler deploy between replay seed and verify"
+        required: false
+        default: false
+        type: boolean
+      restart_evidence:
+        description: "Manual restart/hibernation evidence when redeploy_for_replay is false"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  promotion:
+    name: live Cloudflare promotion evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      OMA_CLOUDFLARE_FLUE_BASE_URL: ${{ inputs.target_url }}
+      OMA_API_TOKEN: ${{ secrets.OMA_CLOUDFLARE_FLUE_API_TOKEN }}
+      OMA_SMOKE_MODEL: ${{ inputs.model }}
+      OMA_REPLAY_MODEL: ${{ inputs.model }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: examples/cloudflare-flue/pnpm-lock.yaml
+
+      - name: Install Cloudflare example dependencies
+        working-directory: examples/cloudflare-flue
+        run: pnpm install --frozen-lockfile
+
+      - name: Check required smoke token
+        run: |
+          if [ -z "$OMA_API_TOKEN" ]; then
+            echo "::error::Set the OMA_CLOUDFLARE_FLUE_API_TOKEN repository secret to the deployed Worker's OMA_API_TOKEN."
+            exit 1
+          fi
+
+      - name: Full promotion smoke
+        working-directory: examples/cloudflare-flue
+        run: pnpm smoke:promotion -- --report ./promotion-report.json
+
+      - name: Verify promotion report
+        working-directory: examples/cloudflare-flue
+        run: pnpm smoke:verify-report -- ./promotion-report.json
+
+      - name: Seed replay state
+        if: ${{ inputs.run_replay == true }}
+        working-directory: examples/cloudflare-flue
+        run: pnpm smoke:replay:seed -- --state ./replay-state.json
+
+      - name: Require manual replay evidence
+        if: ${{ inputs.run_replay == true && inputs.redeploy_for_replay != true }}
+        env:
+          RESTART_EVIDENCE: ${{ inputs.restart_evidence }}
+        run: |
+          if [ -z "$RESTART_EVIDENCE" ]; then
+            echo "::error::Set restart_evidence or rerun with redeploy_for_replay=true."
+            exit 1
+          fi
+          printf 'OMA_REPLAY_RESTART_EVIDENCE=%s\n' "$RESTART_EVIDENCE" >> "$GITHUB_ENV"
+
+      - name: Redeploy Worker for replay boundary
+        if: ${{ inputs.run_replay == true && inputs.redeploy_for_replay == true }}
+        working-directory: examples/cloudflare-flue
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::Set CLOUDFLARE_API_TOKEN to use redeploy_for_replay."
+            exit 1
+          fi
+          pnpm deploy
+          printf 'OMA_REPLAY_RESTART_EVIDENCE=github-actions wrangler deploy run %s attempt %s sha %s at %s\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_SHA" "$(date -u +%FT%TZ)" >> "$GITHUB_ENV"
+
+      - name: Verify replay state
+        if: ${{ inputs.run_replay == true }}
+        working-directory: examples/cloudflare-flue
+        run: |
+          pnpm smoke:replay:verify -- \
+            --state ./replay-state.json \
+            --report ./replay-report.json \
+            --restart-evidence "$OMA_REPLAY_RESTART_EVIDENCE"
+
+      - name: Verify promotion evidence bundle
+        if: ${{ inputs.run_replay == true }}
+        working-directory: examples/cloudflare-flue
+        run: |
+          pnpm smoke:verify-evidence -- \
+            --promotion ./promotion-report.json \
+            --replay ./replay-report.json
+
+      - name: Upload evidence reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudflare-promotion-evidence
+          path: |
+            examples/cloudflare-flue/promotion-report.json
+            examples/cloudflare-flue/replay-state.json
+            examples/cloudflare-flue/replay-report.json
+          if-no-files-found: ignore

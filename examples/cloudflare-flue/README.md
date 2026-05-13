@@ -288,6 +288,12 @@ pnpm smoke:verify-replay-report -- ./replay-report.json
 pnpm smoke:verify-evidence -- --promotion ./promotion-report.json --replay ./replay-report.json
 ```
 
+The same evidence path is available as the manual GitHub Actions workflow
+`cloudflare promotion`. It targets an already deployed Worker URL, runs the
+promotion smoke, uploads the JSON reports, and can optionally run `wrangler
+deploy` between replay seed and verify to prove replay across a real deployment
+boundary.
+
 The verify phase rereads the seeded session metadata, managed run record, event
 history, run-tree projection, workspace listing, and workspace file content
 through the public OMA API, then deletes the seeded resources unless

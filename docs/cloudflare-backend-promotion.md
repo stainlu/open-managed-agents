@@ -54,11 +54,15 @@ Implemented:
   operator/CI restart or Durable Object hibernation, then verify that same
   state afterward. The replay report verifier requires the restart/hibernation
   action to be recorded before the report can count as evidence.
+- Manual GitHub Actions promotion workflow
+  (`.github/workflows/cloudflare-promotion.yaml`) that runs the live promotion
+  smoke, verifies the report, optionally seeds/verifies replay, and uploads the
+  evidence bundle for a deployed Worker target.
 
 Not yet promoted:
 
 - No checked-in live deployment evidence for the full promotion suite.
-- No CI job that provisions or targets a real Cloudflare deployment.
+- No checked-in successful run of the manual Cloudflare promotion workflow.
 - No checked-in replay report showing the two-phase smoke passing across
   Cloudflare's actual Durable Object restart/hibernation boundary.
 - No live proof that queueing and active cancellation remain reliable under
@@ -163,6 +167,19 @@ real deployed Worker URL:
    back-to-back is only a rehearsal.
 
    Local fake-Durable-Object tests do not count for this gate.
+
+   The same sequence can be run from GitHub Actions with the manual
+   `cloudflare promotion` workflow. Configure:
+
+   - `OMA_CLOUDFLARE_FLUE_API_TOKEN` as the deployed Worker's `OMA_API_TOKEN`.
+   - `CLOUDFLARE_API_TOKEN` and, when your Wrangler account setup requires it,
+     `CLOUDFLARE_ACCOUNT_ID` if `redeploy_for_replay=true`.
+   - `target_url` as the deployed Worker URL.
+
+   If `redeploy_for_replay=false`, provide `restart_evidence` describing the
+   operator action that happened between replay seed and verify. If
+   `redeploy_for_replay=true`, the workflow runs `pnpm deploy` between seed and
+   verify and records that deploy as the restart evidence.
 
 5. Failure semantics proof.
 
