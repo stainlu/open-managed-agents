@@ -24,6 +24,7 @@ def _parse_harness(data: Dict[str, Any]) -> Harness:
     return Harness(
         harness_id=data["harness_id"],
         name=data["name"],
+        runtime_mode=str(data.get("runtime_mode", "container")),
         capabilities=_parse_capabilities(data.get("capabilities", {})),
     )
 

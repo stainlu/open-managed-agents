@@ -7,7 +7,7 @@ import { createRateLimitMiddleware } from "../rate-limit.js";
 import type { ManagedEventLog } from "../events/types.js";
 import type { ManagedHarnessStateStore } from "../harness/state-store.js";
 import type { HarnessRegistry } from "../harness/registry.js";
-import type { HarnessAdapter } from "../harness/types.js";
+import { harnessRuntimeMode, type HarnessAdapter } from "../harness/types.js";
 import {
   agentsCreatedTotal,
   httpRequestDurationSeconds,
@@ -277,6 +277,7 @@ function harnessResponse(harness: HarnessAdapter) {
   return {
     harness_id: harness.id,
     name: harness.displayName,
+    runtime_mode: harnessRuntimeMode(harness),
     capabilities: harness.capabilities,
   };
 }

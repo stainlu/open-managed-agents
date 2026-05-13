@@ -1042,14 +1042,19 @@ components:
           $ref: "#/components/schemas/HarnessCapability"
     Harness:
       type: object
-      required: [harness_id, name, capabilities]
+      required: [harness_id, name, runtime_mode, capabilities]
       properties:
         harness_id:
           $ref: "#/components/schemas/HarnessId"
         name:
           type: string
+        runtime_mode:
+          $ref: "#/components/schemas/HarnessRuntimeMode"
         capabilities:
           $ref: "#/components/schemas/HarnessCapabilities"
+    HarnessRuntimeMode:
+      type: string
+      enum: [container, native]
     Quota:
       type: object
       properties:

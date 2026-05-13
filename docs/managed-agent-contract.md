@@ -13,7 +13,7 @@ Client
   -> Open Managed Agents API
   -> durable Agent / Environment / Session / Event model
   -> HarnessAdapter
-  -> runtime container
+  -> runtime substrate
   -> native harness loop
 ```
 
@@ -30,7 +30,7 @@ Open Managed Agents owns the managed boundary. The harness owns the agent brain.
 | Event | Normalized observable history for the public API | OMA |
 | Harness | Native agent loop: OpenClaw, Codex, Claude Agent SDK, Hermes, etc. | Adapter/native harness |
 | Adapter | Translation layer from one harness to the managed contract | OMA integration code |
-| Runtime | Isolated compute substrate used to run one adapter/harness container | OMA |
+| Runtime | Isolated compute substrate for managed execution: container endpoint, native platform binding, Durable Object, sandbox, or future backend | OMA |
 
 The product is a managed-agent layer, not just a runtime layer. Runtime is one
 implementation detail of the contract.
@@ -47,7 +47,7 @@ OMA must provide these guarantees no matter which harness is underneath:
 - Durable run metadata across orchestrator restarts.
 - Durable event history in normalized managed event shape.
 - Isolation of active agent execution from other sessions.
-- Explicit capability reporting at `GET /v1/harnesses`.
+- Explicit capability and runtime-mode reporting at `GET /v1/harnesses`.
 - Explicit rejection for unsupported features; no silent fallback to another
   harness or fake implementation.
 - Provider credential forwarding only through the configured passthrough/vault
@@ -67,7 +67,7 @@ A harness can be managed if it can satisfy this minimum shape:
    normalize.
 5. Fail loudly when native execution fails.
 6. Declare feature support accurately.
-7. Run inside an OMA-managed runtime container without requiring direct client
+7. Run behind an OMA-managed runtime boundary without requiring direct client
    access to native internals.
 
 If a harness cannot support a feature, that is acceptable. The adapter must mark
@@ -178,9 +178,15 @@ Rules:
 The runtime substrate must provide isolated compute for one managed session or
 one warm agent template.
 
-Current implementation: Docker.
+Current production implementation: Docker endpoint containers.
 
-Required runtime behavior:
+Native harness stacks can run without acquiring a runtime endpoint. In that
+shape, OMA still owns the managed session/run/event lifecycle, while the
+adapter invokes the harness through in-process SDKs, platform bindings, Durable
+Object composition, or another substrate-specific mechanism. Native mode is not
+a shortcut around the managed contract.
+
+Endpoint/container runtime behavior:
 
 - Spawn a container from adapter-provided image, env, mounts, labels, networks,
   and command.
@@ -192,8 +198,17 @@ Required runtime behavior:
 - Stop true orphan containers.
 - Never delete durable session state just because compute was stopped.
 
-Warm containers are optimization only. A correct adapter must work without warm
-pool support.
+Warm containers are optimization only. A correct container adapter must work
+without warm pool support.
+
+Native runtime behavior:
+
+- Invoke the harness without requiring a `baseUrl` or bearer token endpoint.
+- Preserve enough native state to resume the same managed session.
+- Surface cancellation, logs, approvals, and events only where the adapter
+  capability matrix says those operations are supported.
+- Fail loudly if a container-only harness is registered in a native-only
+  composition root.
 
 ## Adapter Contract
 
@@ -201,7 +216,7 @@ Each harness adapter implements `HarnessAdapter` in `src/harness/types.ts`.
 
 Adapter responsibilities:
 
-- Build spawn options for the runtime container.
+- Build spawn options when it uses a runtime container.
 - Invoke non-streaming and streaming turns.
 - Map native usage into `tokensIn`, `tokensOut`, `model`, and cost inputs where
   possible.
@@ -254,6 +269,13 @@ both. The public API must not require clients to know which source was used.
 
 Capabilities are runtime behavior, not marketing flags.
 
+Harness catalog entries also include `runtime_mode`:
+
+- `container`: OMA acquires a managed runtime endpoint before invoking the
+  harness.
+- `native`: the harness runs through the orchestrator or platform runtime; OMA
+  must not fake Docker spawn options or container control clients for it.
+
 Current capability keys:
 
 - `start_turn`
@@ -287,13 +309,13 @@ Examples:
 
 ## Credentials
 
-Credentials enter containers through only two managed paths:
+Credentials enter runtime environments through only two managed paths:
 
 - passthrough environment keys selected by `collectPassthroughEnv()`;
 - vault-bound session credentials mounted/injected by OMA.
 
 Adapters must not scrape arbitrary host environment variables. Adding a provider
-credential means updating the allowlist, compose bridge, docs, and tests.
+credential means updating the allowlist, deployment bridge, docs, and tests.
 
 Credential aliasing must be narrow. Example: mirroring `KIMI_API_KEY` to
 `KIMI_CODING_API_KEY` inside the Hermes adapter container is acceptable because
@@ -336,7 +358,7 @@ This is the difference between a process wrapper and a managed-agent layer.
 
 Every adapter must have:
 
-- spawn-option unit tests;
+- spawn-option unit tests when it uses a container runtime;
 - adapter-server conformance if it uses `oma.adapter.v1`;
 - capability catalog coverage;
 - router capability-gate coverage for unsupported features;
@@ -358,7 +380,8 @@ A harness can move from experimental to production only when:
 
 - two-turn live recall passes with a real provider;
 - restart/resume behavior is proven;
-- container reap/respawn behavior is proven;
+- container reap/respawn behavior is proven for container-backed harnesses, or
+  native lifecycle/replay behavior is proven for native harnesses;
 - failure semantics are loud and tested;
 - event history is complete enough for public clients;
 - capability gaps are documented and rejected correctly;

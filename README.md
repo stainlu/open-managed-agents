@@ -63,7 +63,7 @@ Working today:
   durability across orchestrator restarts, direct public list/resolve APIs, and
   in-memory behavior for tests.
 - Generic `HarnessAdapter` interface.
-- Public `/v1/harnesses` capability catalog.
+- Public `/v1/harnesses` capability and runtime-mode catalog.
 - Managed JSONL event log abstraction.
 - Managed session runtime boundary over the Docker pool.
 - Managed workspace boundary separated from event-log storage.

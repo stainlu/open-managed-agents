@@ -59,6 +59,7 @@ export interface HarnessCapabilities {
 export interface Harness {
   harness_id: HarnessId;
   name: string;
+  runtime_mode: "container" | "native";
   capabilities: HarnessCapabilities;
 }
 

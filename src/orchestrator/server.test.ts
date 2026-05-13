@@ -325,6 +325,7 @@ describe("harness catalog API", () => {
       harnesses?: Array<{
         harness_id: string;
         name: string;
+        runtime_mode: string;
         capabilities: HarnessCapabilities;
       }>;
     };
@@ -335,6 +336,10 @@ describe("harness catalog API", () => {
     expect(body.harnesses?.map((h) => h.harness_id)).toEqual([
       "openclaw",
       "hermes",
+    ]);
+    expect(body.harnesses?.map((h) => h.runtime_mode)).toEqual([
+      "container",
+      "container",
     ]);
     const hermes = body.harnesses?.find((h) => h.harness_id === "hermes");
     expect(hermes?.capabilities.mcp).toEqual({

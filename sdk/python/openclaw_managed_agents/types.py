@@ -16,6 +16,7 @@ class HarnessCapability:
 class Harness:
     harness_id: str
     name: str
+    runtime_mode: str
     capabilities: Dict[str, HarnessCapability]
 
 

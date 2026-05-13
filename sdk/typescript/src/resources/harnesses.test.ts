@@ -14,6 +14,7 @@ describe("Harnesses", () => {
             {
               harness_id: "openclaw",
               name: "OpenClaw",
+              runtime_mode: "container",
               capabilities: {
                 start_turn: { support: "supported", detail: "native OpenAI-compatible turn API" },
                 streaming: { support: "supported", detail: "native SSE" },
@@ -33,6 +34,7 @@ describe("Harnesses", () => {
             {
               harness_id: "hermes",
               name: "Hermes",
+              runtime_mode: "native",
               capabilities: {
                 start_turn: { support: "supported", detail: "adapter server turn API" },
                 streaming: { support: "supported", detail: "adapter server SSE" },
@@ -57,11 +59,17 @@ describe("Harnesses", () => {
     const http = new HttpClient({ baseUrl: "http://o", timeoutMs: 1000, fetch: fetchFn });
     const harnesses = new Harnesses(http);
 
-    await expect(harnesses.catalog()).resolves.toMatchObject({
+    const catalog = await harnesses.catalog();
+    expect(catalog).toMatchObject({
       default_harness_id: "openclaw",
       count: 2,
     });
-    await expect(harnesses.list()).resolves.toHaveLength(2);
+    const list = await harnesses.list();
+    expect(list).toHaveLength(2);
+    expect(list).toMatchObject([
+      { harness_id: "openclaw", runtime_mode: "container" },
+      { harness_id: "hermes", runtime_mode: "native" },
+    ]);
     expect(fetchFn.mock.calls.map((call) => call[0])).toEqual([
       "http://o/v1/harnesses",
       "http://o/v1/harnesses",

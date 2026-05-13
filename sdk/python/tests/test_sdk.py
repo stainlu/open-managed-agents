@@ -259,6 +259,7 @@ def test_harnesses_resource_exposes_capabilities() -> None:
                     {
                         "harness_id": "openclaw",
                         "name": "OpenClaw",
+                        "runtime_mode": "container",
                         "capabilities": {
                             "start_turn": {
                                 "support": "supported",
@@ -273,6 +274,7 @@ def test_harnesses_resource_exposes_capabilities() -> None:
                     {
                         "harness_id": "hermes",
                         "name": "Hermes",
+                        "runtime_mode": "native",
                         "capabilities": {
                             "start_turn": {
                                 "support": "supported",
@@ -293,6 +295,7 @@ def test_harnesses_resource_exposes_capabilities() -> None:
         assert catalog.default_harness_id == "openclaw"
         assert catalog.count == 2
         assert catalog.harnesses[1].harness_id == "hermes"
+        assert catalog.harnesses[1].runtime_mode == "native"
         assert catalog.harnesses[1].capabilities["mcp"].support == "unsupported"
 
 
