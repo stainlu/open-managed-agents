@@ -86,6 +86,51 @@ describe("createCloudflareFlueFetchHandler", () => {
       parentTokenSecretBase64: Buffer.from("0123456789abcdef").toString("base64"),
     })).toThrow(/parentTokenSecret/);
   });
+
+  it("uses an explicit 32-byte base64 parent-token secret without persisting a generated one", () => {
+    const store = new InMemoryStore();
+    createCloudflareFlueFetchHandler({
+      db: unusedD1(),
+      store,
+      workspace: new EmptyWorkspace(),
+      eventLog: new EmptyEventLog(),
+      harnessState: new MemoryHarnessState(),
+      flueEngine: {
+        prompt: async () => ({ text: "unused" }),
+      },
+      parentTokenSecretBase64: Buffer.alloc(32, 7).toString("base64"),
+    });
+
+    expect(store.secrets.get("parent_token_hmac_secret")).toBeUndefined();
+  });
+
+  it("rejects placeholder-looking parent-token base64 secrets", () => {
+    expect(() => createCloudflareFlueFetchHandler({
+      db: unusedD1(),
+      store: new InMemoryStore(),
+      workspace: new EmptyWorkspace(),
+      eventLog: new EmptyEventLog(),
+      harnessState: new MemoryHarnessState(),
+      flueEngine: {
+        prompt: async () => ({ text: "unused" }),
+      },
+      parentTokenSecretBase64: "replace-with-32-random-bytes-base64",
+    })).toThrow(/base64|32 bytes/);
+  });
+
+  it("rejects short decoded parent-token base64 secrets", () => {
+    expect(() => createCloudflareFlueFetchHandler({
+      db: unusedD1(),
+      store: new InMemoryStore(),
+      workspace: new EmptyWorkspace(),
+      eventLog: new EmptyEventLog(),
+      harnessState: new MemoryHarnessState(),
+      flueEngine: {
+        prompt: async () => ({ text: "unused" }),
+      },
+      parentTokenSecretBase64: Buffer.from("0123456789abcdef").toString("base64"),
+    })).toThrow(/32 bytes/);
+  });
 });
 
 function unusedD1(): D1DatabaseLike {

@@ -1,6 +1,7 @@
 OMA_WORKFLOW_INTERNAL_TOKEN=replace-with-a-random-shared-token
 OMA_API_TOKEN=replace-with-an-optional-public-api-token
-OMA_PARENT_TOKEN_SECRET_BASE64=replace-with-32-random-bytes-base64
+# Generate with: openssl rand -base64 32
+OMA_PARENT_TOKEN_SECRET_BASE64=replace-with-the-generated-32-byte-base64-secret
 OMA_CLOUDFLARE_AI_GATEWAY_ID=default
 OMA_PASSTHROUGH_ENV_JSON={"ANTHROPIC_API_KEY":"sk-ant-..."}
 # You can also set provider secrets directly instead of nesting them in JSON.

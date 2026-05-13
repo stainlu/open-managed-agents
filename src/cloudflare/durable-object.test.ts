@@ -41,7 +41,9 @@ import {
 } from "./workflow.js";
 
 let tmpDir: string;
-const TEST_PARENT_TOKEN_SECRET_BASE64 = Buffer.from("0123456789abcdef").toString("base64");
+const TEST_PARENT_TOKEN_SECRET_BASE64 = Buffer.from(
+  "0123456789abcdef0123456789abcdef",
+).toString("base64");
 
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "oma-cf-do-"));

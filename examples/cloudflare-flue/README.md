@@ -64,7 +64,13 @@ Create local secrets for development:
 
 ```bash
 cp .dev.vars.example .dev.vars
+openssl rand -base64 32
 ```
+
+Paste the generated 32-byte base64 value into
+`OMA_PARENT_TOKEN_SECRET_BASE64`. The Durable Object rejects placeholder,
+non-canonical, or short decoded values because parent-token signing must be
+stable across restart and deploy.
 
 For deployed environments, set the same secrets through Wrangler:
 

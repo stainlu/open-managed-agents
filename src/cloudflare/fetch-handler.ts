@@ -86,7 +86,7 @@ function createPersistentParentTokenMinter(
     return new ParentTokenMinter(secretToBuffer(providedSecret));
   }
   if (providedSecretBase64 !== undefined) {
-    return new ParentTokenMinter(Buffer.from(providedSecretBase64, "base64"));
+    return new ParentTokenMinter(decodeParentTokenSecretBase64(providedSecretBase64));
   }
   let secret = store.secrets.get(PARENT_TOKEN_SECRET_KEY);
   if (!secret) {
@@ -98,6 +98,26 @@ function createPersistentParentTokenMinter(
 
 function secretToBuffer(secret: Buffer | Uint8Array): Buffer {
   return Buffer.from(secret);
+}
+
+function decodeParentTokenSecretBase64(secret: string): Buffer {
+  const trimmed = secret.trim();
+  if (trimmed.length === 0) {
+    throw new Error("parentTokenSecretBase64 must be a non-empty base64 string");
+  }
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(trimmed) || trimmed.length % 4 !== 0) {
+    throw new Error("parentTokenSecretBase64 must be standard padded base64");
+  }
+  const decoded = Buffer.from(trimmed, "base64");
+  if (decoded.toString("base64") !== trimmed) {
+    throw new Error("parentTokenSecretBase64 must be canonical base64");
+  }
+  if (decoded.byteLength !== 32) {
+    throw new Error(
+      `parentTokenSecretBase64 must decode to exactly 32 bytes, got ${decoded.byteLength}`,
+    );
+  }
+  return decoded;
 }
 
 function randomSecret(): Buffer {

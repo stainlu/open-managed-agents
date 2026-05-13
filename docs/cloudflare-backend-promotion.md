@@ -163,8 +163,9 @@ real deployed Worker URL:
 
    Deployed smoke routes that can run code must require `OMA_API_TOKEN`.
    Workflow re-entry must require `OMA_WORKFLOW_INTERNAL_TOKEN`. Parent-token
-   signing must use `OMA_PARENT_TOKEN_SECRET_BASE64`. Provider credentials must
-   enter through managed secret mapping, not ambient assumptions.
+   signing must use a canonical 32-byte `OMA_PARENT_TOKEN_SECRET_BASE64`
+   value. Provider credentials must enter through managed secret mapping, not
+   ambient assumptions.
 
 ## What Does Not Count
 
