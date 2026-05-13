@@ -141,6 +141,14 @@ sessions safe and durable:
 This is why "runtime layer" is acceptable internally but incomplete publicly.
 The product category is managed-agent layer.
 
+`/healthz` reports a sanitized runtime profile for the active substrate. The
+default self-hosted path reports `platform: "self-hosted"`,
+`mode: "container"`, and the selected container backend without exposing host
+paths, Docker ids, bearer tokens, or cloud resource ids. Cloudflare/Flue reports
+the same shape for its native Worker/Durable Object/Workflow/D1/R2/Sandbox
+composition. This keeps OMA's managed contract explicit while still making the
+runtime layer inspectable.
+
 ## Default Adapter Constraint: OpenClaw Is Single-User
 
 OpenClaw is fundamentally designed as one instance per user. The config,

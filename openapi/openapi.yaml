@@ -46,13 +46,13 @@ paths:
                     properties:
                       platform:
                         type: string
-                        examples: [cloudflare]
+                        examples: [self-hosted, cloudflare]
                       stack:
                         type: string
-                        examples: [cloudflare-flue]
+                        examples: [container-docker, cloudflare-flue]
                       mode:
                         type: string
-                        examples: [native]
+                        examples: [container, native]
                       default_harness:
                         $ref: "#/components/schemas/HarnessId"
                       bindings:

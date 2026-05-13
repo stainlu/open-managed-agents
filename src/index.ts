@@ -29,6 +29,7 @@ import {
   buildContainerRuntime,
   containerRuntimeBackendFromEnv,
 } from "./runtime/factory.js";
+import { selfHostedRuntimeHealth } from "./runtime/health.js";
 import { ParentTokenMinter } from "./runtime/parent-token.js";
 import {
   limitedNetworkingResourceNames,
@@ -924,6 +925,14 @@ async function main(): Promise<void> {
       maxWarmContainers,
       maxActiveContainers,
       passthroughEnv,
+      runtimeHealth: selfHostedRuntimeHealth({
+        runtimeBackend,
+        storeBackend,
+        defaultHarnessId: harnesses.defaultId,
+        limitedNetworking: Boolean(limitedNetworking),
+        maxWarmContainers,
+        maxActiveContainers,
+      }),
     },
     { port },
   );
