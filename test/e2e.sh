@@ -25,24 +25,38 @@
 #   OPENCLAW_TEST_MODEL=anthropic/claude-sonnet-4-6 ./test/e2e.sh
 #   OPENCLAW_TEST_MODEL=bedrock/anthropic.claude-sonnet-4-6 ./test/e2e.sh
 #
+# Auth-enabled orchestrators:
+#   OPENCLAW_API_TOKEN=... ./test/e2e.sh
+#   OMA_API_TOKEN=... ./test/e2e.sh
+#
 # Exits 0 on success, non-zero on failure.
 
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://localhost:8080}"
 MODEL="${OPENCLAW_TEST_MODEL:-moonshot/kimi-k2.6}"
+API_TOKEN="${OPENCLAW_API_TOKEN:-${OMA_API_TOKEN:-}}"
 POLL_INTERVAL_SEC=2
 MAX_POLL_SEC=300
+AUTH_HEADER_ARGS=()
+if [[ -n "${API_TOKEN}" ]]; then
+  AUTH_HEADER_ARGS=(-H "Authorization: Bearer ${API_TOKEN}")
+  echo "[e2e] using Authorization header from OPENCLAW_API_TOKEN/OMA_API_TOKEN"
+fi
+
+api_curl() {
+  curl --silent --fail "${AUTH_HEADER_ARGS[@]}" "$@"
+}
 
 echo "[e2e] checking orchestrator health at ${BASE_URL}/healthz"
-curl --silent --fail "${BASE_URL}/healthz" >/dev/null || {
+api_curl "${BASE_URL}/healthz" >/dev/null || {
   echo "[e2e] orchestrator is not healthy — is docker compose up?"
   exit 1
 }
 
 echo "[e2e] creating research agent with model ${MODEL}"
 # MVP e2e asks purely-textual questions — no tool allowlist needed.
-CREATE_RESPONSE=$(curl --silent --fail \
+CREATE_RESPONSE=$(api_curl \
   -X POST "${BASE_URL}/v1/agents" \
   -H 'Content-Type: application/json' \
   -d "{
@@ -58,7 +72,7 @@ fi
 echo "[e2e] created agent: ${AGENT_ID}"
 
 echo "[e2e] creating session bound to agent ${AGENT_ID}"
-SESSION_RESPONSE=$(curl --silent --fail \
+SESSION_RESPONSE=$(api_curl \
   -X POST "${BASE_URL}/v1/sessions" \
   -H 'Content-Type: application/json' \
   -d "{\"agentId\": \"${AGENT_ID}\"}")
@@ -81,7 +95,7 @@ poll_session() {
     sleep "${POLL_INTERVAL_SEC}"
     elapsed=$((elapsed + POLL_INTERVAL_SEC))
     local session_json status
-    session_json=$(curl --silent --fail "${BASE_URL}/v1/sessions/${session_id}")
+    session_json=$(api_curl "${BASE_URL}/v1/sessions/${session_id}")
     status=$(echo "${session_json}" | jq -r '.status')
     echo "[e2e] ${label} t=${elapsed}s status=${status}" >&2
     case "${status}" in
@@ -103,7 +117,7 @@ poll_session() {
 post_event() {
   local session_id="$1"
   local content="$2"
-  curl --silent --fail \
+  api_curl \
     -X POST "${BASE_URL}/v1/sessions/${session_id}/events" \
     -H 'Content-Type: application/json' \
     -d "$(jq -n --arg c "${content}" '{type: "user.message", content: $c}')"
@@ -111,7 +125,7 @@ post_event() {
 
 latest_agent_message() {
   local session_id="$1"
-  curl --silent --fail "${BASE_URL}/v1/sessions/${session_id}/events" \
+  api_curl "${BASE_URL}/v1/sessions/${session_id}/events" \
     | jq -r '[.events[] | select(.type=="agent.message")] | last | .content // ""'
 }
 
@@ -168,7 +182,7 @@ fi
 # Updating moonshot's prices in the entrypoint will propagate a non-zero
 # value through this same path with zero code changes.
 
-SESSION_COST_JSON=$(curl --silent --fail "${BASE_URL}/v1/sessions/${SESSION_ID}")
+SESSION_COST_JSON=$(api_curl "${BASE_URL}/v1/sessions/${SESSION_ID}")
 SESSION_COST_USD=$(echo "${SESSION_COST_JSON}" | jq -r '.cost_usd')
 SESSION_COST_TYPE=$(echo "${SESSION_COST_JSON}" | jq -r '.cost_usd | type')
 if [[ "${SESSION_COST_TYPE}" != "number" ]]; then
@@ -186,7 +200,7 @@ echo "[e2e] cost accounting OK: cost_usd=${SESSION_COST_USD} (populated from Pi 
 wait_for_healthz() {
   local elapsed=0
   while [[ ${elapsed} -lt 60 ]]; do
-    if curl --silent --fail "${BASE_URL}/healthz" >/dev/null 2>&1; then
+    if api_curl "${BASE_URL}/healthz" >/dev/null 2>&1; then
       echo "[e2e] orchestrator healthy again (t=${elapsed}s)"
       return 0
     fi
@@ -205,7 +219,7 @@ echo "[e2e] restarting orchestrator to verify persistence"
 wait_for_healthz || exit 1
 
 echo "[e2e] post-restart: GET /v1/sessions/${SESSION_ID}"
-RESTORED_SESSION=$(curl --silent --fail "${BASE_URL}/v1/sessions/${SESSION_ID}")
+RESTORED_SESSION=$(api_curl "${BASE_URL}/v1/sessions/${SESSION_ID}")
 RESTORED_STATUS=$(echo "${RESTORED_SESSION}" | jq -r '.status')
 RESTORED_OUTPUT=$(echo "${RESTORED_SESSION}" | jq -r '.output')
 RESTORED_AGENT_ID=$(echo "${RESTORED_SESSION}" | jq -r '.agent_id')
@@ -226,7 +240,7 @@ fi
 echo "[e2e] post-restart session OK (status=${RESTORED_STATUS}, output contains dragonfruit)"
 
 echo "[e2e] post-restart: GET /v1/sessions/${SESSION_ID}/events"
-RESTORED_EVENTS=$(curl --silent --fail "${BASE_URL}/v1/sessions/${SESSION_ID}/events")
+RESTORED_EVENTS=$(api_curl "${BASE_URL}/v1/sessions/${SESSION_ID}/events")
 # Count conversation events only (user.message + agent.message). Session
 # metadata events (model_change, thinking_level_change) vary per provider.
 CONVO_COUNT=$(echo "${RESTORED_EVENTS}" | jq '[.events[] | select(.type == "user.message" or .type == "agent.message")] | length')
@@ -239,7 +253,7 @@ fi
 echo "[e2e] post-restart events OK (conversation=${CONVO_COUNT}, total=${TOTAL_COUNT})"
 
 echo "[e2e] post-restart: GET /v1/agents/${AGENT_ID}"
-RESTORED_AGENT=$(curl --silent --fail "${BASE_URL}/v1/agents/${AGENT_ID}")
+RESTORED_AGENT=$(api_curl "${BASE_URL}/v1/agents/${AGENT_ID}")
 if [[ "$(echo "${RESTORED_AGENT}" | jq -r '.agent_id')" != "${AGENT_ID}" ]]; then
   echo "[e2e] FAIL: agent template lost across restart"
   exit 1
@@ -299,7 +313,7 @@ echo "[e2e] SSE smoke: curl -N stream -> ${STREAM_OUT}"
 
 # Start the stream in the background. Note: no --fail — we want curl to keep
 # writing whatever bytes it gets even if the connection is later torn down.
-curl --silent --no-buffer \
+curl --silent --no-buffer "${AUTH_HEADER_ARGS[@]}" \
   "${BASE_URL}/v1/sessions/${SESSION_ID}/events?stream=true" \
   > "${STREAM_OUT}" 2>&1 &
 STREAM_PID=$!
@@ -351,7 +365,7 @@ rm -f "${STREAM_OUT}"
 # to share state with the main dragonfruit session.
 
 echo "[e2e] control test: creating dedicated session for cancel"
-CANCEL_SESSION=$(curl --silent --fail \
+CANCEL_SESSION=$(api_curl \
   -X POST "${BASE_URL}/v1/sessions" \
   -H 'Content-Type: application/json' \
   -d "{\"agentId\": \"${AGENT_ID}\"}" | jq -r '.session_id')
@@ -367,7 +381,7 @@ post_event "${CANCEL_SESSION}" \
 sleep 2
 
 echo "[e2e] cancel: issuing POST /cancel"
-CANCEL_RESPONSE=$(curl --silent --fail \
+CANCEL_RESPONSE=$(api_curl \
   -X POST "${BASE_URL}/v1/sessions/${CANCEL_SESSION}/cancel")
 echo "[e2e] cancel response: ${CANCEL_RESPONSE}"
 CANCEL_OK=$(echo "${CANCEL_RESPONSE}" | jq -r '.cancelled')
@@ -389,14 +403,14 @@ echo "[e2e] cancel test PASSED"
 # the JSONL event log.
 
 echo "[e2e] control test: creating dedicated session for queue"
-QUEUE_SESSION=$(curl --silent --fail \
+QUEUE_SESSION=$(api_curl \
   -X POST "${BASE_URL}/v1/sessions" \
   -H 'Content-Type: application/json' \
   -d "{\"agentId\": \"${AGENT_ID}\"}" | jq -r '.session_id')
 echo "[e2e] queue session: ${QUEUE_SESSION}"
 
 echo "[e2e] queue: posting event A"
-EVENT_A=$(curl --silent --fail \
+EVENT_A=$(api_curl \
   -X POST "${BASE_URL}/v1/sessions/${QUEUE_SESSION}/events" \
   -H 'Content-Type: application/json' \
   -d '{"type":"user.message","content":"Reply with exactly one word: alpha"}')
@@ -408,7 +422,7 @@ if [[ "${A_QUEUED}" != "false" ]]; then
 fi
 
 echo "[e2e] queue: posting event B (should queue)"
-EVENT_B=$(curl --silent --fail \
+EVENT_B=$(api_curl \
   -X POST "${BASE_URL}/v1/sessions/${QUEUE_SESSION}/events" \
   -H 'Content-Type: application/json' \
   -d '{"type":"user.message","content":"Reply with exactly one word: bravo"}')
@@ -423,7 +437,7 @@ echo "[e2e] queue: B was queued as expected"
 echo "[e2e] queue: waiting for both runs to drain"
 poll_session "${QUEUE_SESSION}" "queue-drain" >/dev/null || exit 1
 
-QUEUE_EVENTS=$(curl --silent --fail "${BASE_URL}/v1/sessions/${QUEUE_SESSION}/events")
+QUEUE_EVENTS=$(api_curl "${BASE_URL}/v1/sessions/${QUEUE_SESSION}/events")
 QUEUE_USER_COUNT=$(echo "${QUEUE_EVENTS}" | jq -r '[.events[] | select(.type=="user.message")] | length')
 QUEUE_AGENT_COUNT=$(echo "${QUEUE_EVENTS}" | jq -r '[.events[] | select(.type=="agent.message")] | length')
 echo "[e2e] queue results: ${QUEUE_USER_COUNT} user.message, ${QUEUE_AGENT_COUNT} agent.message"
@@ -449,7 +463,7 @@ echo "[e2e] queue test PASSED (alpha then bravo, in order)"
 # returns an OpenAI-style { session_id, status: "running" } for legacy callers.
 
 echo "[e2e] backwards-compat: POST /v1/agents/${AGENT_ID}/run"
-ADAPTER_RUN=$(curl --silent --fail \
+ADAPTER_RUN=$(api_curl \
   -X POST "${BASE_URL}/v1/agents/${AGENT_ID}/run" \
   -H 'Content-Type: application/json' \
   -d '{"task": "Reply with exactly one word: ready"}')
@@ -474,7 +488,7 @@ echo "[e2e] backwards-compat /run adapter still works"
 echo "[e2e] openai compat: multi-turn memory via sticky session key"
 CHAT_KEY="chat-smoke-$(date +%s)"
 
-CHAT_TURN1=$(curl --silent --fail \
+CHAT_TURN1=$(api_curl \
   -X POST "${BASE_URL}/v1/chat/completions" \
   -H 'Content-Type: application/json' \
   -H "x-openclaw-agent-id: ${AGENT_ID}" \
@@ -503,7 +517,7 @@ if ! echo "${CHAT_TURN1_ID}" | grep -q '^chatcmpl-'; then
 fi
 echo "[e2e] openai compat turn 1 shape OK"
 
-CHAT_TURN2=$(curl --silent --fail \
+CHAT_TURN2=$(api_curl \
   -X POST "${BASE_URL}/v1/chat/completions" \
   -H 'Content-Type: application/json' \
   -H "x-openclaw-agent-id: ${AGENT_ID}" \
@@ -528,7 +542,7 @@ fi
 
 echo "[e2e] openai compat: stream=true smoke"
 CHAT_STREAM_OUT=$(mktemp /tmp/openclaw-chat-stream.XXXXXX)
-curl --silent --no-buffer --max-time 180 \
+curl --silent --no-buffer "${AUTH_HEADER_ARGS[@]}" --max-time 180 \
   -X POST "${BASE_URL}/v1/chat/completions" \
   -H 'Content-Type: application/json' \
   -H "x-openclaw-agent-id: ${AGENT_ID}" \
@@ -582,7 +596,7 @@ RACE_KEY="race-$(date +%s)"
 
 # Warm the race session via chat.completions so it exists in the store.
 # Non-ephemeral because we passed a key.
-curl --silent --fail --max-time 180 \
+api_curl --max-time 180 \
   -X POST "${BASE_URL}/v1/chat/completions" \
   -H 'Content-Type: application/json' \
   -H "x-openclaw-agent-id: ${AGENT_ID}" \
@@ -593,7 +607,7 @@ curl --silent --fail --max-time 180 \
   }')" >/dev/null
 
 echo "[e2e] race: posting native long-running event"
-curl --silent --fail \
+api_curl \
   -X POST "${BASE_URL}/v1/sessions/${RACE_KEY}/events" \
   -H 'Content-Type: application/json' \
   -d '{"type":"user.message","content":"Please write a detailed multi-paragraph essay about volcanoes, at least 5 paragraphs long."}' \
@@ -605,7 +619,7 @@ NATIVE_PID=$!
 sleep 2
 
 echo "[e2e] race: posting chat.completions on same session key (should queue)"
-RACE_RESPONSE=$(curl --silent --fail --max-time 300 \
+RACE_RESPONSE=$(api_curl --max-time 300 \
   -X POST "${BASE_URL}/v1/chat/completions" \
   -H 'Content-Type: application/json' \
   -H "x-openclaw-agent-id: ${AGENT_ID}" \
@@ -640,7 +654,7 @@ fi
 #   6. Verify that the caller's final reply contains the subagent's answer
 
 echo "[e2e] delegated subagents: creating worker agent"
-WORKER_AGENT=$(curl --silent --fail \
+WORKER_AGENT=$(api_curl \
   -X POST "${BASE_URL}/v1/agents" \
   -H 'Content-Type: application/json' \
   -d '{
@@ -654,7 +668,7 @@ WORKER_AGENT=$(curl --silent --fail \
 echo "[e2e] worker agent: ${WORKER_AGENT}"
 
 echo "[e2e] delegated subagents: creating caller agent with callableAgents"
-CALLER_AGENT=$(curl --silent --fail \
+CALLER_AGENT=$(api_curl \
   -X POST "${BASE_URL}/v1/agents" \
   -H 'Content-Type: application/json' \
   -d '{
@@ -668,7 +682,7 @@ CALLER_AGENT=$(curl --silent --fail \
 echo "[e2e] caller agent: ${CALLER_AGENT}"
 
 echo "[e2e] delegated subagents: creating caller session"
-CALLER_SESSION=$(curl --silent --fail \
+CALLER_SESSION=$(api_curl \
   -X POST "${BASE_URL}/v1/sessions" \
   -H 'Content-Type: application/json' \
   -d "{\"agentId\": \"${CALLER_AGENT}\"}" | jq -r '.session_id')
@@ -680,7 +694,7 @@ post_event "${CALLER_SESSION}" \
 poll_session "${CALLER_SESSION}" "subagent-delegate" >/dev/null || {
   # Dump the caller's event log on failure so we can see what happened.
   echo "[e2e] dumping caller events on failure:"
-  curl --silent --fail "${BASE_URL}/v1/sessions/${CALLER_SESSION}/events" | jq '.events | map({type, content: (.content | .[0:200])})' >&2
+  api_curl "${BASE_URL}/v1/sessions/${CALLER_SESSION}/events" | jq '.events | map({type, content: (.content | .[0:200])})' >&2
   exit 1
 }
 
@@ -688,11 +702,11 @@ CALLER_OUTPUT=$(latest_agent_message "${CALLER_SESSION}")
 echo "[e2e] caller final output: ${CALLER_OUTPUT}"
 
 # Verify: a new session was created under the worker agent.
-SUBAGENT_SESSION_ID=$(curl --silent --fail "${BASE_URL}/v1/sessions" \
+SUBAGENT_SESSION_ID=$(api_curl "${BASE_URL}/v1/sessions" \
   | jq -r --arg wa "${WORKER_AGENT}" '[.sessions[] | select(.agent_id==$wa)] | .[0].session_id // ""')
 if [[ -z "${SUBAGENT_SESSION_ID}" || "${SUBAGENT_SESSION_ID}" == "null" ]]; then
   echo "[e2e] FAIL: no subagent session was created under worker agent"
-  curl --silent --fail "${BASE_URL}/v1/sessions" | jq '.sessions | map({session_id, agent_id, status})' >&2
+  api_curl "${BASE_URL}/v1/sessions" | jq '.sessions | map({session_id, agent_id, status})' >&2
   exit 1
 fi
 echo "[e2e] subagent session: ${SUBAGENT_SESSION_ID}"
@@ -701,7 +715,7 @@ echo "[e2e] subagent session: ${SUBAGENT_SESSION_ID}"
 # This is the "first-class inspectable child sessions" differentiator —
 # every delegated run is a normal Session, observable via the same
 # endpoints any external client uses.
-SUBAGENT_EVENTS=$(curl --silent --fail "${BASE_URL}/v1/sessions/${SUBAGENT_SESSION_ID}/events")
+SUBAGENT_EVENTS=$(api_curl "${BASE_URL}/v1/sessions/${SUBAGENT_SESSION_ID}/events")
 SUBAGENT_EVENT_COUNT=$(echo "${SUBAGENT_EVENTS}" | jq -r '.count')
 SUBAGENT_REPLY=$(echo "${SUBAGENT_EVENTS}" | jq -r '[.events[] | select(.type=="agent.message")] | last | .content // ""')
 echo "[e2e] subagent events: ${SUBAGENT_EVENT_COUNT} entries; reply: ${SUBAGENT_REPLY}"
@@ -731,7 +745,7 @@ echo "[e2e] delegated subagents PASSED (child is a first-class inspectable sessi
 # event list alongside the existing user.message and agent.message events.
 
 echo "[e2e] rich events: checking caller session for tool events"
-CALLER_EVENTS=$(curl --silent --fail "${BASE_URL}/v1/sessions/${CALLER_SESSION}/events")
+CALLER_EVENTS=$(api_curl "${BASE_URL}/v1/sessions/${CALLER_SESSION}/events")
 TOOL_USE_COUNT=$(echo "${CALLER_EVENTS}" | jq '[.events[] | select(.type=="agent.tool_use")] | length')
 TOOL_RESULT_COUNT=$(echo "${CALLER_EVENTS}" | jq '[.events[] | select(.type=="agent.tool_result")] | length')
 echo "[e2e] rich events: ${TOOL_USE_COUNT} tool_use, ${TOOL_RESULT_COUNT} tool_result"
@@ -763,7 +777,7 @@ echo "[e2e] rich event stream PASSED"
 # exact recovery behavior is agent-specific and depends on model.
 
 echo "[e2e] allowlist rejection: creating locked-down caller"
-LOCKED_CALLER=$(curl --silent --fail \
+LOCKED_CALLER=$(api_curl \
   -X POST "${BASE_URL}/v1/agents" \
   -H 'Content-Type: application/json' \
   -d '{
@@ -775,7 +789,7 @@ LOCKED_CALLER=$(curl --silent --fail \
     "maxSubagentDepth": 0
   }' | jq -r '.agent_id')
 
-LOCKED_SESSION=$(curl --silent --fail \
+LOCKED_SESSION=$(api_curl \
   -X POST "${BASE_URL}/v1/sessions" \
   -H 'Content-Type: application/json' \
   -d "{\"agentId\": \"${LOCKED_CALLER}\"}" | jq -r '.session_id')
@@ -797,7 +811,7 @@ echo "[e2e] allowlist rejection PASSED (locked-down caller stays single-agent)"
 # ---- Agent versioning (Item 17) ----------------------------------------------
 
 echo "[e2e] versioning: creating agent v1"
-V_AGENT=$(curl --silent --fail \
+V_AGENT=$(api_curl \
   -X POST "${BASE_URL}/v1/agents" \
   -H 'Content-Type: application/json' \
   -d "{\"model\": \"${MODEL}\", \"tools\": [], \"instructions\": \"Version 1 instructions.\"}")
@@ -810,7 +824,7 @@ fi
 echo "[e2e] versioning: agent created v1 (${V_AGENT_ID})"
 
 echo "[e2e] versioning: updating agent to v2 (new instructions)"
-V2_AGENT=$(curl --silent --fail \
+V2_AGENT=$(api_curl \
   -X PATCH "${BASE_URL}/v1/agents/${V_AGENT_ID}" \
   -H 'Content-Type: application/json' \
   -d '{"version": 1, "instructions": "Version 2 instructions."}')
@@ -827,7 +841,7 @@ fi
 echo "[e2e] versioning: updated to v2"
 
 echo "[e2e] versioning: no-op update should not bump version"
-V2_NOOP=$(curl --silent --fail \
+V2_NOOP=$(api_curl \
   -X PATCH "${BASE_URL}/v1/agents/${V_AGENT_ID}" \
   -H 'Content-Type: application/json' \
   -d '{"version": 2, "instructions": "Version 2 instructions."}')
@@ -839,7 +853,7 @@ fi
 echo "[e2e] versioning: no-op detected correctly"
 
 echo "[e2e] versioning: wrong version should fail with 409"
-V_CONFLICT=$(curl --silent -w "%{http_code}" -o /dev/null \
+V_CONFLICT=$(curl --silent "${AUTH_HEADER_ARGS[@]}" -w "%{http_code}" -o /dev/null \
   -X PATCH "${BASE_URL}/v1/agents/${V_AGENT_ID}" \
   -H 'Content-Type: application/json' \
   -d '{"version": 1, "instructions": "Should fail."}')
@@ -850,7 +864,7 @@ fi
 echo "[e2e] versioning: optimistic concurrency works (409 on stale version)"
 
 echo "[e2e] versioning: list versions"
-V_VERSIONS=$(curl --silent --fail "${BASE_URL}/v1/agents/${V_AGENT_ID}/versions")
+V_VERSIONS=$(api_curl "${BASE_URL}/v1/agents/${V_AGENT_ID}/versions")
 V_COUNT=$(echo "${V_VERSIONS}" | jq -r '.count')
 if [[ "${V_COUNT}" != "2" ]]; then
   echo "[e2e] FAIL: expected 2 versions, got ${V_COUNT}"
@@ -859,7 +873,7 @@ fi
 echo "[e2e] versioning: list-versions OK (count=${V_COUNT})"
 
 echo "[e2e] versioning: archive agent"
-V_ARCHIVED=$(curl --silent --fail \
+V_ARCHIVED=$(api_curl \
   -X POST "${BASE_URL}/v1/agents/${V_AGENT_ID}/archive")
 V_ARCHIVED_AT=$(echo "${V_ARCHIVED}" | jq -r '.archived_at')
 if [[ "${V_ARCHIVED_AT}" == "null" ]]; then
@@ -869,7 +883,7 @@ fi
 echo "[e2e] versioning: archived (archived_at=${V_ARCHIVED_AT})"
 
 echo "[e2e] versioning: new session on archived agent should fail"
-V_ARCHIVE_STATUS=$(curl --silent -w "%{http_code}" -o /dev/null \
+V_ARCHIVE_STATUS=$(curl --silent "${AUTH_HEADER_ARGS[@]}" -w "%{http_code}" -o /dev/null \
   -X POST "${BASE_URL}/v1/sessions" \
   -H 'Content-Type: application/json' \
   -d "{\"agentId\": \"${V_AGENT_ID}\"}")
@@ -880,7 +894,7 @@ fi
 echo "[e2e] versioning: archived agent blocks new sessions (409)"
 
 echo "[e2e] versioning: GET includes callable_agents + max_subagent_depth"
-V_GET=$(curl --silent --fail "${BASE_URL}/v1/agents/${V_AGENT_ID}")
+V_GET=$(api_curl "${BASE_URL}/v1/agents/${V_AGENT_ID}")
 V_GET_CA=$(echo "${V_GET}" | jq -r '.callable_agents | type')
 V_GET_MSD=$(echo "${V_GET}" | jq -r '.max_subagent_depth | type')
 if [[ "${V_GET_CA}" != "array" || "${V_GET_MSD}" != "number" ]]; then
@@ -894,7 +908,7 @@ echo "[e2e] agent versioning PASSED"
 # ---- Environment abstraction (Item 15) --------------------------------------
 
 echo "[e2e] environment: creating environment with packages"
-ENV_RESPONSE=$(curl --silent --fail \
+ENV_RESPONSE=$(api_curl \
   -X POST "${BASE_URL}/v1/environments" \
   -H 'Content-Type: application/json' \
   -d '{
@@ -910,7 +924,7 @@ fi
 echo "[e2e] created environment: ${ENV_ID}"
 
 echo "[e2e] environment: verifying GET returns the environment"
-ENV_GET=$(curl --silent --fail "${BASE_URL}/v1/environments/${ENV_ID}")
+ENV_GET=$(api_curl "${BASE_URL}/v1/environments/${ENV_ID}")
 ENV_NAME=$(echo "${ENV_GET}" | jq -r '.name')
 ENV_NPM=$(echo "${ENV_GET}" | jq -r '.packages.npm[0]')
 if [[ "${ENV_NAME}" != "e2e-test-env" || "${ENV_NPM}" != "cowsay" ]]; then
@@ -920,7 +934,7 @@ fi
 echo "[e2e] environment GET OK"
 
 echo "[e2e] environment: verifying LIST includes the environment"
-ENV_LIST_COUNT=$(curl --silent --fail "${BASE_URL}/v1/environments" | jq -r '.count')
+ENV_LIST_COUNT=$(api_curl "${BASE_URL}/v1/environments" | jq -r '.count')
 if [[ "${ENV_LIST_COUNT}" -lt 1 ]]; then
   echo "[e2e] FAIL: environment LIST count is ${ENV_LIST_COUNT}, expected >= 1"
   exit 1
@@ -928,7 +942,7 @@ fi
 echo "[e2e] environment LIST OK (count=${ENV_LIST_COUNT})"
 
 echo "[e2e] environment: creating session with environmentId"
-ENV_SESSION_RESPONSE=$(curl --silent --fail \
+ENV_SESSION_RESPONSE=$(api_curl \
   -X POST "${BASE_URL}/v1/sessions" \
   -H 'Content-Type: application/json' \
   -d "{\"agentId\": \"${AGENT_ID}\", \"environmentId\": \"${ENV_ID}\"}")
@@ -956,7 +970,7 @@ fi
 echo "[e2e] environment session OK (agent responded correctly)"
 
 echo "[e2e] environment: verifying deletion rejected while session references it"
-DELETE_RESULT=$(curl --silent -w "%{http_code}" -o /tmp/env-delete-body.json \
+DELETE_RESULT=$(curl --silent "${AUTH_HEADER_ARGS[@]}" -w "%{http_code}" -o /tmp/env-delete-body.json \
   -X DELETE "${BASE_URL}/v1/environments/${ENV_ID}")
 if [[ "${DELETE_RESULT}" != "409" ]]; then
   echo "[e2e] FAIL: expected 409 on environment delete with referencing session, got ${DELETE_RESULT}"
@@ -965,8 +979,8 @@ fi
 echo "[e2e] environment deletion correctly rejected with 409"
 
 echo "[e2e] environment: cleaning up session then deleting environment"
-curl --silent --fail -X DELETE "${BASE_URL}/v1/sessions/${ENV_SESSION_ID}" >/dev/null
-DELETE_AFTER=$(curl --silent -w "%{http_code}" -o /dev/null \
+api_curl -X DELETE "${BASE_URL}/v1/sessions/${ENV_SESSION_ID}" >/dev/null
+DELETE_AFTER=$(curl --silent "${AUTH_HEADER_ARGS[@]}" -w "%{http_code}" -o /dev/null \
   -X DELETE "${BASE_URL}/v1/environments/${ENV_ID}")
 if [[ "${DELETE_AFTER}" != "200" ]]; then
   echo "[e2e] FAIL: environment delete after session cleanup returned ${DELETE_AFTER}"
@@ -975,7 +989,7 @@ fi
 echo "[e2e] environment cleanup OK (deleted after session removed)"
 
 echo "[e2e] environment: verifying session without environmentId still works (backward compat)"
-COMPAT_SESSION=$(curl --silent --fail \
+COMPAT_SESSION=$(api_curl \
   -X POST "${BASE_URL}/v1/sessions" \
   -H 'Content-Type: application/json' \
   -d "{\"agentId\": \"${AGENT_ID}\"}" | jq -r '.environment_id')
@@ -994,7 +1008,7 @@ echo "[e2e] environment abstraction PASSED"
 
 echo "[e2e] SSE status events: starting stream and posting an event"
 STATUS_SSE_OUT=$(mktemp /tmp/openclaw-status-sse.XXXXXX)
-curl --silent --no-buffer \
+curl --silent --no-buffer "${AUTH_HEADER_ARGS[@]}" \
   "${BASE_URL}/v1/sessions/${SESSION_ID}/events?stream=true" \
   > "${STATUS_SSE_OUT}" 2>&1 &
 STATUS_SSE_PID=$!
@@ -1034,7 +1048,7 @@ rm -f "${STATUS_SSE_OUT}"
 # NO FALLBACK. NO ESCAPE. If any step fails, the test fails.
 
 echo "[e2e] always_ask: creating agent with always_ask policy on bash"
-ASK_AGENT=$(curl --silent --fail \
+ASK_AGENT=$(api_curl \
   -X POST "${BASE_URL}/v1/agents" \
   -H 'Content-Type: application/json' \
   -d '{
@@ -1045,7 +1059,7 @@ ASK_AGENT=$(curl --silent --fail \
   }' | jq -r '.agent_id')
 echo "[e2e] always_ask agent: ${ASK_AGENT}"
 
-ASK_SESSION=$(curl --silent --fail \
+ASK_SESSION=$(api_curl \
   -X POST "${BASE_URL}/v1/sessions" \
   -H 'Content-Type: application/json' \
   -d "{\"agentId\": \"${ASK_AGENT}\"}" | jq -r '.session_id')
@@ -1053,7 +1067,7 @@ echo "[e2e] always_ask session: ${ASK_SESSION}"
 
 # Start SSE stream in background to catch the confirmation request.
 ASK_SSE_OUT=$(mktemp /tmp/openclaw-ask-sse.XXXXXX)
-curl --silent --no-buffer \
+curl --silent --no-buffer "${AUTH_HEADER_ARGS[@]}" \
   "${BASE_URL}/v1/sessions/${ASK_SESSION}/events?stream=true" \
   > "${ASK_SSE_OUT}" 2>&1 &
 ASK_SSE_PID=$!
@@ -1088,7 +1102,7 @@ if [[ -z "${ASK_APPROVAL_ID}" || "${ASK_APPROVAL_ID}" == "null" ]]; then
   echo "[e2e] SSE output (first 2048 bytes):"
   head -c 2048 "${ASK_SSE_OUT}"
   echo "[e2e] Session status:"
-  curl --silent "${BASE_URL}/v1/sessions/${ASK_SESSION}" | jq .
+  curl --silent "${AUTH_HEADER_ARGS[@]}" "${BASE_URL}/v1/sessions/${ASK_SESSION}" | jq .
   echo "[e2e] Orchestrator logs (last 20 lines):"
   docker logs open-managed-agents-orchestrator 2>&1 | tail -20
   kill "${ASK_SSE_PID}" 2>/dev/null || true
@@ -1099,7 +1113,7 @@ echo "[e2e] always_ask: received confirmation request (approval_id=${ASK_APPROVA
 
 # Send tool confirmation: allow the bash command.
 echo "[e2e] always_ask: confirming tool execution (allow)"
-CONFIRM_RESPONSE=$(curl --silent --fail \
+CONFIRM_RESPONSE=$(api_curl \
   -X POST "${BASE_URL}/v1/sessions/${ASK_SESSION}/events" \
   -H 'Content-Type: application/json' \
   -d "$(jq -n --arg id "${ASK_APPROVAL_ID}" '{
