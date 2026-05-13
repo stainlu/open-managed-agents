@@ -4,9 +4,9 @@
 #
 # This complements test/e2e-harnesses.sh:
 #   - e2e-harnesses proves two-turn managed-session recall.
-#   - this script proves harness runtime modes and capability catalog entries
-#     are exposed/enforced by the managed API and that supported live paths
-#     still work through real providers.
+#   - this script proves harness runtime modes, capability catalog entries, and
+#     the managed runtime profile are exposed/enforced by the managed API and
+#     that supported live paths still work through real providers.
 #
 # Prerequisites when a harness is enabled:
 #   - docker compose up -d (orchestrator on localhost:8080 by default)
@@ -213,6 +213,76 @@ expect_runtime_mode_present() {
       die "${harness}: runtime_mode missing or invalid in /v1/harnesses: ${mode}"
       ;;
   esac
+}
+
+assert_runtime_profile() {
+  local profile="$1"
+  local platform stack mode default_harness leaked_key
+
+  platform="$(echo "${profile}" | jq -r '.runtime.platform // ""')"
+  stack="$(echo "${profile}" | jq -r '.runtime.stack // ""')"
+  mode="$(echo "${profile}" | jq -r '.runtime.mode // ""')"
+  default_harness="$(echo "${profile}" | jq -r '.runtime.default_harness // ""')"
+
+  [[ -n "${platform}" && "${platform}" != "unknown" ]] \
+    || die "/v1/runtime returned no concrete runtime.platform: ${profile}"
+  [[ -n "${stack}" ]] \
+    || die "/v1/runtime missing runtime.stack: ${profile}"
+  case "${mode}" in
+    container|native) ;;
+    *) die "/v1/runtime runtime.mode missing or invalid: ${mode}" ;;
+  esac
+  [[ -n "${default_harness}" ]] \
+    || die "/v1/runtime missing runtime.default_harness: ${profile}"
+
+  echo "${profile}" | jq -e '.runtime.bindings | type == "object"' >/dev/null \
+    || die "/v1/runtime missing runtime.bindings object: ${profile}"
+  echo "${profile}" | jq -e '.runtime.features | type == "object"' >/dev/null \
+    || die "/v1/runtime missing runtime.features object: ${profile}"
+
+  leaked_key="$(echo "${profile}" | jq -r '
+    [
+      paths
+      | map(tostring)
+      | join(".")
+      | select(test("(account_id|zone_id|durable_object_id|workflow_id|d1_database_id|r2_bucket_id)"; "i"))
+    ][0] // ""
+  ')"
+  [[ -z "${leaked_key}" ]] \
+    || die "/v1/runtime leaked platform identifier key ${leaked_key}: ${profile}"
+
+  case "${platform}:${mode}" in
+    self-hosted:container)
+      [[ "${stack}" == container-* ]] \
+        || die "/v1/runtime self-hosted stack should identify its container backend: ${profile}"
+      echo "${profile}" | jq -e '.runtime.bindings.container_runtime == true' >/dev/null \
+        || die "/v1/runtime self-hosted profile must expose container_runtime binding: ${profile}"
+      echo "${profile}" | jq -e '.runtime.bindings.workspace == true' >/dev/null \
+        || die "/v1/runtime self-hosted profile must expose workspace binding: ${profile}"
+      ;;
+    cloudflare:native)
+      echo "${profile}" | jq -e '.runtime.bindings.metadata == true' >/dev/null \
+        || die "/v1/runtime cloudflare profile must expose metadata binding: ${profile}"
+      echo "${profile}" | jq -e '.runtime.bindings.workspace == true' >/dev/null \
+        || die "/v1/runtime cloudflare profile must expose workspace binding: ${profile}"
+      ;;
+    *)
+      say "runtime profile uses non-standard substrate ${platform}:${mode}; checking generic contract only"
+      ;;
+  esac
+
+  say "runtime profile: platform=${platform} stack=${stack} mode=${mode} default_harness=${default_harness}"
+}
+
+assert_runtime_profile_matches_catalog() {
+  local profile="$1"
+  local catalog="$2"
+  local default_harness
+
+  default_harness="$(echo "${profile}" | jq -r '.runtime.default_harness // ""')"
+  echo "${catalog}" \
+    | jq -e --arg h "${default_harness}" '.harnesses[]? | select(.harness_id == $h)' >/dev/null \
+    || die "/v1/runtime default_harness ${default_harness} is not registered by /v1/harnesses"
 }
 
 poll_session() {
@@ -988,7 +1058,11 @@ say "checking orchestrator health at ${BASE_URL}/healthz"
 wait_for_health \
   || die "orchestrator is not healthy; run docker compose up -d first"
 
+RUNTIME_PROFILE="$(curl_json GET /v1/runtime)"
+assert_runtime_profile "${RUNTIME_PROFILE}"
+
 CATALOG="$(curl_json GET /v1/harnesses)"
+assert_runtime_profile_matches_catalog "${RUNTIME_PROFILE}" "${CATALOG}"
 for harness in "${RUNNABLE[@]}"; do
   assert_harness_registered "${CATALOG}" "${harness}"
 done
