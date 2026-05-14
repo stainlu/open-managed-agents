@@ -423,7 +423,7 @@ class InMemoryManagedRunStore implements ManagedRunStore {
   listBySession(sessionId: string): ManagedRun[] {
     return Array.from(this.runs.values())
       .filter((run) => run.sessionId === sessionId)
-      .sort((a, b) => a.createdAt - b.createdAt || a.runId.localeCompare(b.runId))
+      .sort((a, b) => a.createdAt - b.createdAt)
       .map((run) => ({ ...run }));
   }
 

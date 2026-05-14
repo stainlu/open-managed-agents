@@ -287,9 +287,9 @@ function turnRequest(sessionId, harnessId, turn) {
   };
 }
 
-function streamTurnRequest(sessionId, harnessId) {
+function streamTurnRequest(sessionId, harnessId, turn = {}) {
   return turnRequest(sessionId, harnessId, {
-    content: `stream-conformance-${harnessId}`,
+    content: turn.content ?? `stream-conformance-${harnessId}`,
     stream: true,
   });
 }
@@ -414,6 +414,53 @@ async function assertStreamingTurn(baseUrl, token, sessionId, harnessId) {
   assert(completed[0].result.events.length > 0, `${route} turn.completed result must include managed events`);
 }
 
+async function assertConcurrentStreamingTurnConflict(baseUrl, token, sessionId, harnessId) {
+  const busySessionId = `${sessionId}_stream_busy`;
+  const slowMarker = `slow-conformance-${harnessId}`;
+  const route = `POST /sessions/${busySessionId}/turns stream`;
+  const res = await fetch(`${baseUrl}/sessions/${encodeURIComponent(busySessionId)}/turns`, {
+    method: "POST",
+    headers: {
+      ...headers(token),
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify(streamTurnRequest(busySessionId, harnessId, { content: slowMarker })),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    assert(false, `${route} returned HTTP ${res.status}: ${text.slice(0, 500)}`);
+  }
+
+  try {
+    await sleep(100);
+    const second = await requestJson(
+      baseUrl,
+      "POST",
+      `/sessions/${encodeURIComponent(busySessionId)}/turns`,
+      token,
+      turnRequest(busySessionId, harnessId, {
+        content: `second-stream-conformance-${harnessId}`,
+        stream: false,
+      }),
+    );
+    assertErrorEnvelope(second, "turn_failed");
+    assert(second.status === 409, `${route} concurrent turn should return 409, got ${second.status}`);
+
+    const frames = await readSseFramesUntilCompleted(res, route);
+    for (const frame of frames) assertStreamFrame(frame, route, busySessionId);
+    const completed = frames.filter((frame) => frame.type === "turn.completed");
+    assert(completed.length === 1, `${route} must emit exactly one turn.completed frame`);
+    assert(
+      completed[0].result.output === slowMarker,
+      `${route} slow output mismatch: expected ${slowMarker}, got ${completed[0].result.output}`,
+    );
+  } catch (error) {
+    await res.body?.cancel().catch(() => {});
+    throw error;
+  }
+}
+
 function assertOutcomeResponse(response, route) {
   assertProtocolEnvelope(response, route);
   assert(["idle", "starting", "running", "failed"].includes(response.data.status), `${route} invalid status ${response.data.status}`);
@@ -426,6 +473,10 @@ function assertOutcomeResponse(response, route) {
 function assertLogsResponse(response, route) {
   assertProtocolEnvelope(response, route);
   assert(typeof response.data.logs === "string", `${route} logs must be string`);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function assertNonStreamingTurn(baseUrl, token, sessionId, harnessId) {
@@ -467,6 +518,46 @@ async function assertNonStreamingTurn(baseUrl, token, sessionId, harnessId) {
   assertOutcomeResponse(outcome, "GET /outcome after turn");
   assert(outcome.data.status === "idle", `GET /outcome after turn status should be idle, got ${outcome.data.status}`);
   assert(outcome.data.output === marker, `GET /outcome after turn output mismatch: expected ${marker}, got ${outcome.data.output}`);
+}
+
+async function assertConcurrentTurnConflict(baseUrl, token, sessionId, harnessId) {
+  const busySessionId = `${sessionId}_busy`;
+  const slowMarker = `slow-conformance-${harnessId}`;
+  const route = `POST /sessions/${busySessionId}/turns`;
+  const slowPromise = requestJson(
+    baseUrl,
+    "POST",
+    `/sessions/${encodeURIComponent(busySessionId)}/turns`,
+    token,
+    turnRequest(busySessionId, harnessId, {
+      content: slowMarker,
+      stream: false,
+    }),
+  );
+
+  try {
+    await sleep(100);
+    const second = await requestJson(
+      baseUrl,
+      "POST",
+      `/sessions/${encodeURIComponent(busySessionId)}/turns`,
+      token,
+      turnRequest(busySessionId, harnessId, {
+        content: `second-conformance-${harnessId}`,
+        stream: false,
+      }),
+    );
+    assertErrorEnvelope(second, "turn_failed");
+    assert(second.status === 409, `${route} concurrent turn should return 409, got ${second.status}`);
+
+    const slow = await slowPromise;
+    assertProtocolEnvelope(slow, route);
+    assertTurnResult(slow.data, route, busySessionId);
+    assert(slow.data.output === slowMarker, `${route} slow output mismatch: expected ${slowMarker}, got ${slow.data.output}`);
+  } catch (error) {
+    await slowPromise.catch(() => {});
+    throw error;
+  }
 }
 
 async function waitForReady(baseUrl, processState) {
@@ -553,9 +644,11 @@ async function runChecks({ baseUrl, harnessId, token, readyResponse }) {
   );
 
   await assertNonStreamingTurn(baseUrl, token, sessionId, harnessId);
+  await assertConcurrentTurnConflict(baseUrl, token, sessionId, harnessId);
 
   if (ready.data.capabilities.streaming === true) {
     await assertStreamingTurn(baseUrl, token, `${sessionId}_stream`, harnessId);
+    await assertConcurrentStreamingTurnConflict(baseUrl, token, sessionId, harnessId);
   }
 
   const controlBody = {

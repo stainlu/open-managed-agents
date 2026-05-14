@@ -46,6 +46,13 @@ def _is_conformance_turn(request: dict[str, Any]) -> bool:
     return model == "conformance/model"
 
 
+def _conformance_delay_seconds(request: dict[str, Any]) -> float:
+    content = str((request.get("turn") or {}).get("content") or "")
+    if content.startswith("slow-conformance-"):
+        return 0.75
+    return 0.0
+
+
 def _codex_child_env() -> dict[str, str]:
     env = {
         "CODEX_HOME": _env("CODEX_HOME", _env("OMA_CODEX_HOME", "/workspace/.codex")),
@@ -510,6 +517,7 @@ class CodexAdapterRuntime:
 
     def start_turn(self, session_id: str, request: dict[str, Any]) -> dict[str, Any]:
         state = self.get_session(session_id, request)
+        current_thread = threading.current_thread()
         with state.lock:
             if state.active_thread and state.active_thread.is_alive():
                 status, payload = _error_payload(
@@ -519,30 +527,22 @@ class CodexAdapterRuntime:
                     retryable=True,
                 )
                 raise AdapterHttpError(status, payload)
+            state.active_thread = current_thread
             state.active_events = []
             state.usage = None
             self._append_event(state, "user.message", request["turn"]["content"])
 
-        output = self._run_turn(state, request)
-        return self._result_payload(state, output)
+        try:
+            output = self._run_turn(state, request)
+            return self._result_payload(state, output)
+        finally:
+            with state.lock:
+                if state.active_thread is current_thread:
+                    state.active_thread = None
 
     def stream_turn(self, session_id: str, request: dict[str, Any]) -> queue.Queue:
         state = self.get_session(session_id, request)
         out: queue.Queue = queue.Queue()
-
-        with state.lock:
-            if state.active_thread and state.active_thread.is_alive():
-                status, payload = _error_payload(
-                    "turn_failed",
-                    "session already has an active turn",
-                    HTTPStatus.CONFLICT,
-                    retryable=True,
-                )
-                raise AdapterHttpError(status, payload)
-            state.active_events = []
-            state.usage = None
-            event = self._append_event(state, "user.message", request["turn"]["content"])
-            out.put({"type": "event", "event": event})
 
         def runner() -> None:
             try:
@@ -552,10 +552,27 @@ class CodexAdapterRuntime:
                 self.logger.error("stream turn failed: %s", exc, exc_info=True)
                 out.put({"type": "state", "state": "error", "error_message": str(exc)})
             finally:
+                with state.lock:
+                    if state.active_thread is threading.current_thread():
+                        state.active_thread = None
                 out.put(None)
 
         thread = threading.Thread(target=runner, name=f"oma-codex-{session_id}", daemon=True)
-        state.active_thread = thread
+        with state.lock:
+            if state.active_thread and state.active_thread.is_alive():
+                status, payload = _error_payload(
+                    "turn_failed",
+                    "session already has an active turn",
+                    HTTPStatus.CONFLICT,
+                    retryable=True,
+                )
+                raise AdapterHttpError(status, payload)
+            state.active_thread = thread
+            state.active_events = []
+            state.usage = None
+            event = self._append_event(state, "user.message", request["turn"]["content"])
+            out.put({"type": "event", "event": event})
+
         thread.start()
         return out
 
@@ -653,6 +670,9 @@ class CodexAdapterRuntime:
         request: dict[str, Any],
         stream_queue: queue.Queue | None,
     ) -> str:
+        delay = _conformance_delay_seconds(request)
+        if delay > 0:
+            time.sleep(delay)
         output = _stringify(request["turn"]["content"])
         state.model = "conformance/model"
         state.usage = {"tokens_in": 1, "tokens_out": 1}

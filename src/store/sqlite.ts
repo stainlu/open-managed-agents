@@ -1493,7 +1493,7 @@ class SqliteManagedRunStore implements ManagedRunStore {
       `SELECT * FROM managed_runs WHERE session_id = ? AND run_id = ?`,
     );
     this.listBySessionStmt = db.prepare(
-      `SELECT * FROM managed_runs WHERE session_id = ? ORDER BY created_at ASC, run_id ASC`,
+      `SELECT * FROM managed_runs WHERE session_id = ? ORDER BY created_at ASC, rowid ASC`,
     );
     this.updateStmt = db.prepare(
       `UPDATE managed_runs

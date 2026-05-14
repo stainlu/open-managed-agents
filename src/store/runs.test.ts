@@ -120,6 +120,34 @@ function sharedRunSuite(label: string, build: () => Store) {
       expect(runs.listBySession("ses_a")).toHaveLength(1);
     });
 
+    it("keeps admission order when run timestamps collide", () => {
+      const store = build();
+      seedSessions(store);
+      const runs = store.runs;
+
+      runs.create({
+        runId: "run_z",
+        sessionId: "ses_a",
+        agentId: "agt_1",
+        status: "running",
+        queued: false,
+        createdAt: 100,
+      });
+      runs.create({
+        runId: "run_a",
+        sessionId: "ses_a",
+        agentId: "agt_1",
+        status: "queued",
+        queued: true,
+        createdAt: 100,
+      });
+
+      expect(runs.listBySession("ses_a").map((run) => run.runId)).toEqual([
+        "run_z",
+        "run_a",
+      ]);
+    });
+
     it("does not rewrite terminal runs on duplicate delivery paths", () => {
       const store = build();
       seedSessions(store);

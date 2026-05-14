@@ -24,6 +24,15 @@ function isConformanceTurn(request) {
   return model === "conformance/model";
 }
 
+function conformanceDelayMs(request) {
+  const content = String(request?.turn?.content || "");
+  return content.startsWith("slow-conformance-") ? 750 : 0;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function nowMs() {
   return Date.now();
 }
@@ -570,7 +579,7 @@ class ClaudeAgentSdkAdapterRuntime {
     };
     try {
       if (isConformanceTurn(request)) {
-        return this._runConformanceTurn(state, request, writeFrame);
+        return await this._runConformanceTurn(state, request, writeFrame);
       }
       const options = this._buildOptions(state, request, writeFrame);
       const prompt = String(request.turn?.content ?? "");
@@ -605,7 +614,9 @@ class ClaudeAgentSdkAdapterRuntime {
     }
   }
 
-  _runConformanceTurn(state, request, writeFrame) {
+  async _runConformanceTurn(state, request, writeFrame) {
+    const delay = conformanceDelayMs(request);
+    if (delay > 0) await sleep(delay);
     const output = stringify(request.turn?.content ?? "");
     state.model = "conformance/model";
     state.usage = { tokens_in: 1, tokens_out: 1 };
